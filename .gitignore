@@ -1,0 +1,6 @@
+.idea
+*.log
+bin
+gamecenter.linux
+publish.zip
+
