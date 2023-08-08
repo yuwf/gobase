@@ -6,7 +6,7 @@ import (
 	"gobase/redis"
 )
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 // 服务配置
 type ServiceConfig struct {

@@ -35,6 +35,10 @@
 ---
 ### gnetserver
 - 对gnet的包装，外层实现EventHandler
+
+---
+### goredis
+- goRedis的包装
   
 ---
 ### httprequest
@@ -58,7 +62,7 @@
 
 ---
 ### redis
-- Redis的包装
+- Redis的包装，建议使用goredis
 
 ---
 ### tcp

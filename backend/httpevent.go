@@ -6,7 +6,7 @@ import (
 	"gobase/redis"
 )
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 type HttpEvent[T any] interface {
 	// consul服务器配置过滤器，返回符合条件的服务器

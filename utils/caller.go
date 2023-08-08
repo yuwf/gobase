@@ -1,6 +1,6 @@
 package utils
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 import (
 	"runtime"

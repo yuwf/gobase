@@ -1,6 +1,6 @@
 package consul
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 import (
 	"sort"

@@ -1,6 +1,6 @@
 package backend
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 import (
 	"strings"

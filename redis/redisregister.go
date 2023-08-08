@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 // 使用Redis做服务器注册和发现使用
 

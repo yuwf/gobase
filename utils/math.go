@@ -1,6 +1,6 @@
 package utils
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 // 下面几种约束 参考https://cs.opensource.google/go/x/exp
 type Signed interface {

@@ -1,6 +1,6 @@
 package loader
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 // ConfLoader 配置接口
 type Loader interface {

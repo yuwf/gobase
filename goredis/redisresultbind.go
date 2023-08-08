@@ -1,6 +1,6 @@
 package goredis
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 // Redis结果绑定，用这种方式认为不需要太关心Redis执行结果真的正确与否
 type RedisResultBind interface {

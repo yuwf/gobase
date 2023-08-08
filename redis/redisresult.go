@@ -1,6 +1,6 @@
 package redis
 
-// https://github.com/yuwf
+// https://github.com/yuwf/gobase
 
 import (
 	"encoding/json"
