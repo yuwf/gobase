@@ -13,6 +13,9 @@ import (
 
 // 注册各种组件的hook，实现统计
 
+// 指标名前缀，需要Reg之前设置
+var MetricsNamePrefix = ""
+
 // Redis统计
 func RegRedis(redis *redis.Redis) {
 	if redis != nil {

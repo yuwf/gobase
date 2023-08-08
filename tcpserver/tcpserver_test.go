@@ -102,7 +102,7 @@ func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestMsg, tc *TCP
 }
 
 func BenchmarkTCPServer(b *testing.B) {
-	server := NewTCPServer[int, ClientInfo](1236, NewHandler())
+	server, _ := NewTCPServer[int, ClientInfo](1236, NewHandler())
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -148,7 +148,7 @@ func BenchmarkTCPServer(b *testing.B) {
 }
 
 func BenchmarkTCPServerRegRedis(b *testing.B) {
-	server := NewTCPServer[int, ClientInfo](1237, NewHandler())
+	server, _ := NewTCPServer[int, ClientInfo](1237, NewHandler())
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -185,7 +185,7 @@ func BenchmarkTCPServerRegRedis(b *testing.B) {
 }
 
 func BenchmarkTCPServerRegGoRedis(b *testing.B) {
-	server := NewTCPServer[int, ClientInfo](1237, NewHandler())
+	server, _ := NewTCPServer[int, ClientInfo](1237, NewHandler())
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -216,7 +216,7 @@ func BenchmarkTCPServerRegGoRedis(b *testing.B) {
 }
 
 func BenchmarkTCPServerWS(b *testing.B) {
-	server := NewTCPServerWithWS[int, ClientInfo](1237, NewHandler())
+	server, _ := NewTCPServerWithWS[int, ClientInfo](1237, NewHandler(), "ca.crt", "ca.key")
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听

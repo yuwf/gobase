@@ -45,6 +45,21 @@ func NewTCPListener(address string, event TCPListenerEvent) (*TCPListener, error
 	return tl, nil
 }
 
+func NewTCPListenerTLSConfig(address string, event TCPListenerEvent, config *tls.Config) (*TCPListener, error) {
+	// 检查下地址格式合法性
+	tcpAddr, err := net.ResolveTCPAddr("tcp", address)
+	if err != nil {
+		return nil, err
+	}
+
+	tl := &TCPListener{
+		ListenAddr: *tcpAddr,
+		event:      event,
+		TLSConfig:  config,
+	}
+	return tl, nil
+}
+
 func (tl *TCPListener) Start(reuse bool) error {
 	if !atomic.CompareAndSwapInt32(&tl.state, 0, 1) {
 		return nil
@@ -89,7 +104,7 @@ func (tl *TCPListener) loop() {
 			if atomic.LoadInt32(&tl.state) == 0 {
 				break
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {

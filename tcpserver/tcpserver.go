@@ -4,6 +4,7 @@ package tcpserver
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -73,7 +74,7 @@ type tClient[ClientId any, ClientInfo any] struct {
 }
 
 // 创建服务器
-func NewTCPServer[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo]) *TCPServer[ClientId, ClientInfo] {
+func NewTCPServer[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo]) (*TCPServer[ClientId, ClientInfo], error) {
 	s := &TCPServer[ClientId, ClientInfo]{
 		TCPConnEvenHandle: new(tcp.TCPConnEvenHandle),
 		Address:           fmt.Sprintf(":%d", port),
@@ -84,13 +85,18 @@ func NewTCPServer[ClientId any, ClientInfo any](port int, event TCPEvent[ClientI
 		quit:              make(chan int),
 	}
 
-	s.listener, _ = tcp.NewTCPListener(s.Address, s)
+	var err error
+	s.listener, err = tcp.NewTCPListener(s.Address, s)
+	if err != nil {
+		log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServer error")
+		return nil, err
+	}
 	// 开启tick协程
 	go s.loopTick()
-	return s
+	return s, nil
 }
 
-func NewTCPServerWithWS[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo]) *TCPServer[ClientId, ClientInfo] {
+func NewTCPServerWithWS[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo], certFile, keyFile string) (*TCPServer[ClientId, ClientInfo], error) {
 	s := &TCPServer[ClientId, ClientInfo]{
 		TCPConnEvenHandle: new(tcp.TCPConnEvenHandle),
 		Address:           fmt.Sprintf(":%d", port),
@@ -102,15 +108,74 @@ func NewTCPServerWithWS[ClientId any, ClientInfo any](port int, event TCPEvent[C
 		quit:              make(chan int),
 	}
 
-	s.listener, _ = tcp.NewTCPListener(s.Address, s)
+	if certFile != "" || keyFile != "" {
+		var err error
+		config := &tls.Config{}
+		config.Certificates = make([]tls.Certificate, 1)
+		config.Certificates[0], err = tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServerWithWS error")
+			return nil, err
+		}
+		s.listener, err = tcp.NewTCPListenerTLSConfig(s.Address, s, config)
+		if err != nil {
+			log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServerWithWS error")
+			return nil, err
+		}
+	} else {
+		var err error
+		s.listener, err = tcp.NewTCPListener(s.Address, s)
+		if err != nil {
+			log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServerWithWS error")
+			return nil, err
+		}
+	}
 	// 开启tick协程
 	go s.loopTick()
-	return s
+	return s, nil
+}
+
+func NewTCPServerWithWS2[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo], certPEMBlock, keyPEMBlock []byte) (*TCPServer[ClientId, ClientInfo], error) {
+	s := &TCPServer[ClientId, ClientInfo]{
+		TCPConnEvenHandle: new(tcp.TCPConnEvenHandle),
+		Address:           fmt.Sprintf(":%d", port),
+		Scheme:            "ws",
+		event:             event,
+		state:             0,
+		connMap:           new(sync.Map),
+		clientMap:         new(sync.Map),
+		quit:              make(chan int),
+	}
+
+	if len(certPEMBlock) > 0 || len(keyPEMBlock) > 0 {
+		var err error
+		config := &tls.Config{}
+		config.Certificates = make([]tls.Certificate, 1)
+		config.Certificates[0], err = tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+		if err != nil {
+			log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServerWithWS2 error")
+			return nil, err
+		}
+		s.listener, err = tcp.NewTCPListenerTLSConfig(s.Address, s, config)
+		if err != nil {
+			log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServerWithWS error")
+			return nil, err
+		}
+	} else {
+		var err error
+		s.listener, err = tcp.NewTCPListener(s.Address, s)
+		if err != nil {
+			log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServerWithWS error")
+			return nil, err
+		}
+	}
+	// 开启tick协程
+	go s.loopTick()
+	return s, nil
 }
 
 // 开启监听
 func (s *TCPServer[ClientId, ClientInfo]) Start(reusePort bool) error {
-
 	if s.listener == nil {
 		err := errors.New("listener is nil")
 		log.Error().Err(err).Str("Addr", s.Address).Msg("TCPServer Start error")

@@ -4,6 +4,7 @@ package tcp
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -104,9 +105,12 @@ func NewTCPConned(conn net.Conn, event TCPConnEvent) (*TCPConn, error) {
 	if conn == nil {
 		return nil, errors.New("conn is nil")
 	}
-	_, ok := conn.(*net.TCPConn)
-	if !ok {
-		return nil, errors.New("conn is not *net.TCPConn")
+
+	switch conn.(type) {
+	case *net.TCPConn:
+	case *tls.Conn:
+	default:
+		return nil, fmt.Errorf("conn type not support %T", conn)
 	}
 	t := &TCPConn{
 		dialMode:   false,
