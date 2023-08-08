@@ -9,11 +9,12 @@ import (
 	"net"
 	"reflect"
 
+	"gobase/utils"
+
 	"github.com/gobwas/ws/wsutil"
 	"github.com/panjf2000/gnet"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 type ClientNamer interface {

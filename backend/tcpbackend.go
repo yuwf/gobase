@@ -7,8 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"gobase/loader"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
 )
 
 // 参数配置

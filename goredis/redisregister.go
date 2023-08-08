@@ -11,9 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gobase/utils"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 // 使用Redis做服务器注册和发现使用

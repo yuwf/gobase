@@ -5,9 +5,10 @@ package goredis
 import (
 	"context"
 
+	"gobase/utils"
+
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 // 支持绑定的管道

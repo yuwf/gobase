@@ -10,9 +10,10 @@ import (
 	"time"
 	"unsafe"
 
+	"gobase/utils"
+
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 type Config struct {

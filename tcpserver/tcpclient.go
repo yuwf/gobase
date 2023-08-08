@@ -12,11 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"gobase/tcp"
+	"gobase/utils"
+
 	"github.com/gobwas/ws/wsutil"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/tcp"
-	"github.com/yuwf/gobase/utils"
 )
 
 type ClientNamer interface {

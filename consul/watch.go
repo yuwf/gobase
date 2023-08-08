@@ -6,9 +6,10 @@ import (
 	"sort"
 	"time"
 
+	"gobase/loader"
+
 	"github.com/hashicorp/consul/api"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
 )
 
 // WatchKV 监控key配置 immediately是否先同步获取一次配置

@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"gobase/loader"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
 )
 
 type ConfTest struct {

@@ -7,8 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gobase/tcp"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/tcp"
 )
 
 // T是和业务相关的客户端信息结构

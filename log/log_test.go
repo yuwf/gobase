@@ -116,8 +116,8 @@ func TestFileSplit(t *testing.T) {
 	SplitFileReg := regexp.MustCompile(s)
 
 	t.Log(SplitFileReg.ReplaceAllString(`/f/Work/live-gamelogic/pkg/util/exit.go`, "$1"))
-	t.Log(SplitFileReg.ReplaceAllString(`C:/Users/wanghl/go/pkg/mod/github.com/yuwf/gobase@v0.0.1/log/log.go:41`, "$1"))
-	t.Log(SplitFileReg.ReplaceAllString(`/C:/Users/wanghl/go/pkg/mod/github.com/yuwf/gobase@v0.0.0-20230403032714-4a34cacf95c2/log/log.go:41`, "$1"))
+	t.Log(SplitFileReg.ReplaceAllString(`C:/Users/wanghl/go/pkg/mod/gobase@v0.0.1/log/log.go:41`, "$1"))
+	t.Log(SplitFileReg.ReplaceAllString(`/C:/Users/wanghl/go/pkg/mod/gobase@v0.0.0-20230403032714-4a34cacf95c2/log/log.go:41`, "$1"))
 
 	time.Sleep(3 * time.Second)
 }

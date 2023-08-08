@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
+	_ "gobase/log"
+
 	"github.com/rs/zerolog/log"
-	_ "github.com/yuwf/gobase/log"
 )
 
 var cfg = &Config{

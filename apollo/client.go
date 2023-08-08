@@ -5,10 +5,11 @@ package apollo
 import (
 	"errors"
 
+	"gobase/loader"
+
 	"github.com/apolloconfig/agollo/v4"
 	"github.com/apolloconfig/agollo/v4/env/config"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
 )
 
 type Config struct {

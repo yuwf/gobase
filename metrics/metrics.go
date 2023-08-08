@@ -1,14 +1,14 @@
 package metrics
 
 import (
-	"github.com/yuwf/gobase/backend"
-	"github.com/yuwf/gobase/ginserver"
-	"github.com/yuwf/gobase/gnetserver"
-	"github.com/yuwf/gobase/goredis"
-	"github.com/yuwf/gobase/httprequest"
-	"github.com/yuwf/gobase/mysql"
-	"github.com/yuwf/gobase/redis"
-	"github.com/yuwf/gobase/tcpserver"
+	"gobase/backend"
+	"gobase/ginserver"
+	"gobase/gnetserver"
+	"gobase/goredis"
+	"gobase/httprequest"
+	"gobase/mysql"
+	"gobase/redis"
+	"gobase/tcpserver"
 )
 
 // 注册各种组件的hook，实现统计

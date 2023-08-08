@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yuwf/gobase/utils"
+	"gobase/utils"
 )
 
 func BenchmarkAlert(b *testing.B) {

@@ -14,8 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"gobase/httprequest"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/httprequest"
 )
 
 // 使用飞书报警 飞书的机器人webhook

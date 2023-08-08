@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"gobase/consul"
+	"gobase/goredis"
+	_ "gobase/log"
+	"gobase/redis"
+	"gobase/utils"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/consul"
-	"github.com/yuwf/gobase/goredis"
-	_ "github.com/yuwf/gobase/log"
-	"github.com/yuwf/gobase/redis"
-	"github.com/yuwf/gobase/utils"
 )
 
 // 服务器端信息

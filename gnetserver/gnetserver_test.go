@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"gobase/consul"
+	_ "gobase/log"
+	"gobase/utils"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/consul"
-	_ "github.com/yuwf/gobase/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 // 客户端信息

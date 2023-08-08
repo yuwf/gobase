@@ -9,8 +9,9 @@ import (
 	"strconv"
 	"time"
 
+	"gobase/utils"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 var deleteLockKeyScript = NewScript(`

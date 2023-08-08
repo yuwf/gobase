@@ -12,9 +12,10 @@ import (
 	"net/url"
 	"time"
 
+	"gobase/loader"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
 )
 
 const CtxKey_nolog = "nolog" // 不打印掉应该能日志，错误日志还会打印 值：不受限制 一般写1

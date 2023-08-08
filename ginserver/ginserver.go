@@ -11,10 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gobase/loader"
+	"gobase/utils"
+
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
-	"github.com/yuwf/gobase/utils"
 )
 
 // 参数配置

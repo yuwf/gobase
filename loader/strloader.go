@@ -8,8 +8,9 @@ import (
 	"reflect"
 	"sync"
 
+	"gobase/utils"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 // StrLoader

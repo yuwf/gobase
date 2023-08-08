@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yuwf/gobase/loader"
-	"github.com/yuwf/gobase/tcp"
-	"github.com/yuwf/gobase/utils"
+	"gobase/loader"
+	"gobase/tcp"
+	"gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )

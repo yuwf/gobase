@@ -6,9 +6,10 @@ import (
 	"os"
 	"testing"
 
+	_ "gobase/log"
+	"gobase/utils"
+
 	"github.com/gin-gonic/gin"
-	_ "github.com/yuwf/gobase/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 type getNameReq struct {

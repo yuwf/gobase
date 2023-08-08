@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"gobase/utils"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 const CtxKey_nolog = "nolog" // 不打印掉应该能日志，错误日志还会打印 值：不受限制 一般写1

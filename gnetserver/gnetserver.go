@@ -11,9 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gobase/loader"
+	"gobase/utils"
+
 	"github.com/panjf2000/gnet"
-	"github.com/yuwf/gobase/loader"
-	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )

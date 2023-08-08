@@ -9,17 +9,18 @@ import (
 	"sync"
 	"time"
 
+	"gobase/backend"
+	"gobase/gnetserver"
+	"gobase/goredis"
+	"gobase/httprequest"
+	"gobase/mysql"
+	"gobase/redis"
+	"gobase/tcpserver"
+
 	"github.com/dlclark/regexp2"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/yuwf/gobase/backend"
-	"github.com/yuwf/gobase/gnetserver"
-	"github.com/yuwf/gobase/goredis"
-	"github.com/yuwf/gobase/httprequest"
-	"github.com/yuwf/gobase/mysql"
-	"github.com/yuwf/gobase/redis"
-	"github.com/yuwf/gobase/tcpserver"
 )
 
 var (

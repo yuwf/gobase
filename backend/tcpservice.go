@@ -12,10 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gobase/tcp"
+	"gobase/utils"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/tcp"
-	"github.com/yuwf/gobase/utils"
 )
 
 // 后端连接对象 协程安全对象

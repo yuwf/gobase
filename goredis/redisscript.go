@@ -5,8 +5,9 @@ package goredis
 import (
 	"context"
 
+	"gobase/utils"
+
 	"github.com/redis/go-redis/v9"
-	"github.com/yuwf/gobase/utils"
 )
 
 type RedisScript struct {

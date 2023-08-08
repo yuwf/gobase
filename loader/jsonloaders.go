@@ -7,8 +7,9 @@ import (
 	"reflect"
 	"sync"
 
+	"gobase/utils"
+
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 // JsonLoaders json配置加载对象 协程安全

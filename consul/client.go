@@ -5,9 +5,10 @@ package consul
 import (
 	"errors"
 
+	"gobase/loader"
+
 	"github.com/hashicorp/consul/api"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/loader"
 )
 
 var defaultClient *Client
