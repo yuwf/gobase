@@ -152,8 +152,8 @@ var readRegisterScirpt = NewScript(`
 
 // 读取一次服务器列表
 func (r *Redis) ReadServices(ctx context.Context, key string, serverNames []string) ([]*RegistryInfo, error) {
-	ctx = context.WithValue(ctx, "cmddesc", "WatchServices")
-	ctx = context.WithValue(ctx, "caller", utils.GetCallerDesc(1))
+	ctx = context.WithValue(ctx, CtxKey_cmddesc, "WatchServices")
+	ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(1))
 	result, err := r.DoScript(ctx, readRegisterScirpt, []string{key}, RegExprieTime*1000).StringSlice()
 	if err != nil {
 		// 错误了 在来一次
@@ -212,8 +212,8 @@ func (r *Redis) loopCheckServicesChange(ctx context.Context, key string) {
 // 检查也是抢占时，谁抢到了，谁来负责检查和删除过期的服务器
 // 返回值表示是否抢占到了
 func (r *Redis) checkServicesChange(ctx context.Context, key string, uuid string) bool {
-	ctx = context.WithValue(ctx, "cmddesc", "CheckServices")
-	ctx = context.WithValue(ctx, "caller", utils.GetCallerDesc(0))
+	ctx = context.WithValue(ctx, CtxKey_cmddesc, "CheckServices")
+	ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(0))
 	// 先抢占下
 	lockKey := fmt.Sprintf(regCheckLockerFmt, key) // 抢占锁
 	listKey := fmt.Sprintf(regListFmt, key)        // 服务器列表

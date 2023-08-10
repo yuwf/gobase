@@ -25,28 +25,28 @@ import (
 
 var (
 	// Redis
-	redisOnce      sync.Once
-	redisCnt       *prometheus.CounterVec
+	redisOnce sync.Once
+	//redisCnt       *prometheus.CounterVec
 	redisCntError  *prometheus.CounterVec
 	redisLatency   *prometheus.HistogramVec
 	redisKeyRegexp *regexp2.Regexp
 
 	// MySQL
-	mysqlOnce     sync.Once
-	mysqlCnt      *prometheus.CounterVec
+	mysqlOnce sync.Once
+	//mysqlCnt      *prometheus.CounterVec
 	mysqlCntError *prometheus.CounterVec
 	mysqlLatency  *prometheus.HistogramVec
 
 	// http
-	httpOnce       sync.Once
-	httpCnt        *prometheus.CounterVec
+	httpOnce sync.Once
+	//httpCnt        *prometheus.CounterVec
 	httpCntError   *prometheus.CounterVec
 	httpLatency    *prometheus.HistogramVec
 	httpPathRegexp *regexp2.Regexp
 
 	// gin
-	ginOnce       sync.Once
-	ginCnt        *prometheus.CounterVec
+	ginOnce sync.Once
+	//ginCnt        *prometheus.CounterVec
 	ginCntError   *prometheus.CounterVec
 	ginLatency    *prometheus.HistogramVec
 	ginPathRegexp *regexp2.Regexp
@@ -109,10 +109,10 @@ func init() {
 
 func redisHook(ctx context.Context, cmd *redis.RedisCommond) {
 	redisOnce.Do(func() {
-		redisCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "redis_count"}, []string{"cmd", "key", "caller"})
+		//redisCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "redis_count"}, []string{"cmd", "key", "caller"})
 		redisCntError = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "redis_error"}, []string{"cmd", "key", "caller"})
 		redisLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: MetricsNamePrefix + "redis_latency",
-			Buckets: []float64{1, 2, 4, 8, 16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}},
+			Buckets: []float64{1, 2, 4, 16, 64, 256, 1024, 2048, 4096, 16384, 65392, 261568, 1046272, 2092544, 4185088, 16740352}},
 			[]string{"cmd", "key", "caller"},
 		)
 	})
@@ -125,19 +125,19 @@ func redisHook(ctx context.Context, cmd *redis.RedisCommond) {
 			key = k
 		}
 	}
-	redisCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
+	//redisCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
 	if cmd.Err != nil {
 		redisCntError.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
 	}
-	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed / time.Millisecond))
+	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Millisecond))
 }
 
 func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 	redisOnce.Do(func() {
-		redisCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "redis_count"}, []string{"cmd", "key", "caller"})
+		//redisCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "redis_count"}, []string{"cmd", "key", "caller"})
 		redisCntError = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "redis_error"}, []string{"cmd", "key", "caller"})
 		redisLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: MetricsNamePrefix + "redis_latency",
-			Buckets: []float64{1, 2, 4, 8, 16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}},
+			Buckets: []float64{1, 2, 4, 16, 64, 256, 1024, 2048, 4096, 16384, 65392, 261568, 1046272, 2092544, 4185088, 16740352}},
 			[]string{"cmd", "key", "caller"},
 		)
 	})
@@ -147,43 +147,43 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 		var key string
 		pos := goredis.GetFirstKeyPos(cmd.Cmd)
 		if pos < len(cmd.Cmd.Args()) {
-			for i := 1; i < pos; i++ {
-				cmdName += fmt.Sprint(cmd.Cmd.Args()[i])
-			}
+			//for i := 1; i < pos; i++ {
+			//	cmdName += fmt.Sprint(cmd.Cmd.Args()[i])
+			//}
 			key = fmt.Sprint(cmd.Cmd.Args()[pos])
 			key, _ = redisKeyRegexp.Replace(key, "*", 0, -1)
 		}
 
-		redisCnt.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()
+		//redisCnt.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()
 		if cmd.Cmd.Err() != nil && !goredis.IsNilError(cmd.Cmd.Err()) {
 			redisCntError.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()
 		}
-		redisLatency.WithLabelValues(cmdName, key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed / time.Millisecond))
+		redisLatency.WithLabelValues(cmdName, key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Millisecond))
 	}
 }
 
 func mysqlHook(ctx context.Context, cmd *mysql.MySQLCommond) {
 	mysqlOnce.Do(func() {
-		mysqlCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "mysql_count"}, []string{"cmd", "caller"})
+		//mysqlCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "mysql_count"}, []string{"cmd", "caller"})
 		mysqlCntError = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "mysql_error"}, []string{"cmd", "caller"})
 		mysqlLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: MetricsNamePrefix + "mysql_latency",
-			Buckets: []float64{1, 2, 4, 8, 16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}},
+			Buckets: []float64{1, 2, 4, 16, 64, 256, 1024, 2048, 4096, 16384, 65392, 261568, 1046272, 2092544, 4185088, 16740352}},
 			[]string{"cmd", "caller"},
 		)
 	})
-	mysqlCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Inc()
+	//mysqlCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Inc()
 	if cmd.Err != nil {
 		mysqlCntError.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Inc()
 	}
-	mysqlLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Observe(float64(cmd.Elapsed / time.Millisecond))
+	mysqlLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Millisecond))
 }
 
 func httpHook(ctx context.Context, request *httprequest.HttpRequest) {
 	httpOnce.Do(func() {
-		httpCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "http_count"}, []string{"host", "path"})
-		httpCntError = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "http_error"}, []string{"host", "path"})
+		//httpCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "http_count"}, []string{"host", "path"})
+		httpCntError = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "http_error"}, []string{"host", "path", "error"})
 		httpLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: MetricsNamePrefix + "http_latency",
-			Buckets: []float64{1, 2, 4, 8, 16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}},
+			Buckets: []float64{1, 2, 4, 16, 64, 256, 1024, 2048, 4096, 16384, 65392, 261568, 1046272, 2092544, 4185088, 16740352}},
 			[]string{"host", "path"},
 		)
 	})
@@ -196,19 +196,19 @@ func httpHook(ctx context.Context, request *httprequest.HttpRequest) {
 			path = k
 		}
 	}
-	httpCnt.WithLabelValues(host, path).Inc()
+	//httpCnt.WithLabelValues(host, path).Inc()
 	if request.Err != nil {
-		httpCntError.WithLabelValues(host, path).Inc()
+		httpCntError.WithLabelValues(host, path, request.Err.Error()).Inc()
 	}
-	httpLatency.WithLabelValues(host, path).Observe(float64(request.Elapsed / time.Millisecond))
+	httpLatency.WithLabelValues(host, path).Observe(float64(request.Elapsed) / float64(time.Millisecond))
 }
 
 func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 	ginOnce.Do(func() {
-		ginCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gin_count"}, []string{"method", "path"})
+		//ginCnt = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gin_count"}, []string{"method", "path"})
 		ginCntError = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gin_error"}, []string{"method", "path", "error"})
 		ginLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: MetricsNamePrefix + "gin_latency",
-			Buckets: []float64{1, 2, 4, 8, 16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384}},
+			Buckets: []float64{1, 2, 4, 16, 64, 256, 1024, 2048, 4096, 16384, 65392, 261568, 1046272, 2092544, 4185088, 16740352}},
 			[]string{"method", "path"},
 		)
 	})
@@ -220,11 +220,11 @@ func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 	if err == nil {
 		path = k
 	}
-	ginCnt.WithLabelValues(strings.ToUpper(c.Request.Method), path).Inc()
+	//ginCnt.WithLabelValues(strings.ToUpper(c.Request.Method), path).Inc()
 	if c.Writer.Status() != http.StatusOK {
 		ginCntError.WithLabelValues(strings.ToUpper(c.Request.Method), path, strconv.Itoa(c.Writer.Status())).Inc()
 	}
-	ginLatency.WithLabelValues(strings.ToUpper(c.Request.Method), path).Observe(float64(elapsed / time.Millisecond))
+	ginLatency.WithLabelValues(strings.ToUpper(c.Request.Method), path).Observe(float64(elapsed) / float64(time.Millisecond))
 }
 
 type ConnCount interface {

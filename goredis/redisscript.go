@@ -32,6 +32,9 @@ func NewScriptWithName(name, src string) *RedisScript {
 
 func (r *Redis) DoScript(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *redis.Cmd {
 	ctx = context.WithValue(ctx, CtxKey_noscript, 1) // 屏蔽NOSCRIPT的错误日志
+	if caller := ctx.Value(CtxKey_caller); caller == nil {
+		ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	return script.script.Run(ctx, r.UniversalClient, keys, args...)
 }
 

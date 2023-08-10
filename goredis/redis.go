@@ -156,7 +156,7 @@ func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Tim
 		redisCmd.Caller = caller
 	}
 	if redisCmd.Caller == nil {
-		redisCmd.Caller = utils.GetCallerDesc(5)
+		redisCmd.Caller = utils.GetCallerDesc(5) // 有些命令不准确
 	}
 
 	// 填充cmddesc 优先使用ctx中的
