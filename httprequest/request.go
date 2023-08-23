@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -234,19 +233,6 @@ func (h *HttpRequest) call(ctx context.Context) {
 
 	// 请求
 	client := http.Client{
-		Transport: &http.Transport{
-			Dial: func(network, addr string) (net.Conn, error) {
-				c, err := net.DialTimeout(network, addr, time.Second*3)
-				if err != nil {
-					return nil, err
-				}
-				return c, nil
-			},
-			MaxIdleConnsPerHost:   128,
-			MaxIdleConns:          2048,
-			IdleConnTimeout:       time.Second * 90,
-			ExpectContinueTimeout: time.Second * 15,
-		},
 		Timeout: time.Second * 8,
 	}
 	h.Resp, h.Err = client.Do(request)

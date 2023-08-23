@@ -46,7 +46,7 @@ func (f *filewrite) Write(p []byte) (n int, err error) {
 		f.console.Write(p)
 	}
 
-	if f.file == nil || time.Since(f.morningTime) >= time.Hour*24 || !f.fileExist() {
+	if f.file == nil || time.Since(f.morningTime) >= time.Hour*24 {
 		f.createFile()
 	}
 	if f.file != nil {
@@ -86,9 +86,4 @@ func (f *filewrite) createFile() {
 
 func (f *filewrite) fileName() string {
 	return fmt.Sprintf("%s%s_%s.log", f.path, time.Now().Format("2006-01-02"), f.prefix)
-}
-
-func (f *filewrite) fileExist() bool {
-	_, err := os.Stat(f.fileName())
-	return err == nil || os.IsExist(err)
 }

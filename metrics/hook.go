@@ -129,7 +129,7 @@ func redisHook(ctx context.Context, cmd *redis.RedisCommond) {
 	if cmd.Err != nil {
 		redisCntError.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
 	}
-	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Millisecond))
+	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
 }
 
 func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
@@ -158,7 +158,7 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 		if cmd.Cmd.Err() != nil && !goredis.IsNilError(cmd.Cmd.Err()) {
 			redisCntError.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()
 		}
-		redisLatency.WithLabelValues(cmdName, key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Millisecond))
+		redisLatency.WithLabelValues(cmdName, key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
 	}
 }
 
@@ -175,7 +175,7 @@ func mysqlHook(ctx context.Context, cmd *mysql.MySQLCommond) {
 	if cmd.Err != nil {
 		mysqlCntError.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Inc()
 	}
-	mysqlLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Millisecond))
+	mysqlLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
 }
 
 func httpHook(ctx context.Context, request *httprequest.HttpRequest) {
@@ -200,7 +200,7 @@ func httpHook(ctx context.Context, request *httprequest.HttpRequest) {
 	if request.Err != nil {
 		httpCntError.WithLabelValues(host, path, request.Err.Error()).Inc()
 	}
-	httpLatency.WithLabelValues(host, path).Observe(float64(request.Elapsed) / float64(time.Millisecond))
+	httpLatency.WithLabelValues(host, path).Observe(float64(request.Elapsed) / float64(time.Microsecond))
 }
 
 func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
@@ -224,7 +224,7 @@ func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 	if c.Writer.Status() != http.StatusOK {
 		ginCntError.WithLabelValues(strings.ToUpper(c.Request.Method), path, strconv.Itoa(c.Writer.Status())).Inc()
 	}
-	ginLatency.WithLabelValues(strings.ToUpper(c.Request.Method), path).Observe(float64(elapsed) / float64(time.Millisecond))
+	ginLatency.WithLabelValues(strings.ToUpper(c.Request.Method), path).Observe(float64(elapsed) / float64(time.Microsecond))
 }
 
 type ConnCount interface {

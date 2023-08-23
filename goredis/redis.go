@@ -199,7 +199,7 @@ func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Tim
 				Str("pos", redisCmd.Caller.Pos()).
 				Msg("Redis NOSCRIPT")
 		}
-	} else if cmd.Err() != nil {
+	} else if cmd.Err() != nil && cmd.Err() != redis.Nil {
 		log.Error().Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("pos", redisCmd.Caller.Pos()).
