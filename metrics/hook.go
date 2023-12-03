@@ -212,7 +212,7 @@ func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 			[]string{"method", "path"},
 		)
 	})
-	if c.Writer.Status() == http.StatusNotFound {
+	if c.Writer.Status() == http.StatusNotFound || c.Writer.Status() == http.StatusBadGateway {
 		return
 	}
 	var path string
@@ -221,7 +221,9 @@ func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 		path = k
 	}
 	//ginCnt.WithLabelValues(strings.ToUpper(c.Request.Method), path).Inc()
-	if c.Writer.Status() != http.StatusOK {
+	if len(c.Errors) > 0 {
+		ginCntError.WithLabelValues(strings.ToUpper(c.Request.Method), path, c.Errors[0].Error()).Inc()
+	} else if c.Writer.Status() != http.StatusOK {
 		ginCntError.WithLabelValues(strings.ToUpper(c.Request.Method), path, strconv.Itoa(c.Writer.Status())).Inc()
 	}
 	ginLatency.WithLabelValues(strings.ToUpper(c.Request.Method), path).Observe(float64(elapsed) / float64(time.Microsecond))

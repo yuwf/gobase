@@ -1,12 +1,12 @@
 package consul
 
 import (
-	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"gobase/loader"
+	_ "gobase/log"
 
 	"github.com/rs/zerolog/log"
 )
@@ -63,15 +63,16 @@ func BenchmarkRegister(b *testing.B) {
 	}
 	hostname, _ := os.Hostname()
 	conf := &RegistryConfig{
-		RegistryName: "live-gate",
-		RegistryID:   "serverId-serverName-nodeId",
+		RegistryName: "test-name",
+		RegistryID:   "test-id",
 		RegistryAddr: "localhost",
 		RegistryPort: 9500,
-		RegistryTag:  []string{"prometheus"},
+		RegistryTag:  []string{"test-tag"},
 		RegistryMeta: map[string]string{
-			"hostname":    hostname,
-			"metricsPath": "/metrics",
-			"metricsPort": "9100",
+			"hostname":          hostname,
+			"metricsPath":       "/metrics",
+			"metricsPort":       "9100",
+			"healthListenReuse": "yes",
 		},
 		HealthPort:     9502, //consul内部自己开启监听
 		HealthPath:     "/health",
@@ -81,57 +82,76 @@ func BenchmarkRegister(b *testing.B) {
 	}
 	reg, err := DefaultClient().CreateRegister(conf)
 	if err == nil {
-		err = reg.Reg()
-		if err != nil {
-			return
+		for {
+			log.Info().Msg("")
+			err = reg.Reg()
+			if err != nil {
+				continue
+			}
+			time.Sleep(time.Second * 10)
+			reg.DeReg()
 		}
-		time.Sleep(time.Minute)
 	}
-	reg.DeReg()
-	time.Sleep(time.Minute)
 }
 
-func BenchmarkWatcherService(b *testing.B) {
+func BenchmarkWatcherServices(b *testing.B) {
 	_, err := InitDefaultClient("127.0.0.1:8500", "http")
 	if err != nil {
 		return
 	}
-	hostname, _ := os.Hostname()
-	conf := &RegistryConfig{
-		RegistryName: "test-serviceName",
-		RegistryID:   "test-serviceId-nodeId22",
-		RegistryAddr: "localhost",
-		RegistryPort: 9500,
-		RegistryTag:  []string{"gate"},
-		RegistryMeta: map[string]string{
-			"hostname":    hostname,
-			"metricsPath": "/metrics",
-			"metricsPort": "9100",
-		},
-		HealthPort:     9502, //consul内部自己开启监听
-		HealthPath:     "/health",
-		HealthInterval: 4,
-		HealthTimeout:  4,
-		DeregisterTime: 4,
-	}
-	DefaultClient().WatchServices("gate", func(services []*RegistryInfo) {
-		fmt.Println("service change")
-		for _, r := range services {
-			fmt.Printf("%v\n", *r)
+	DefaultClient().WatchServices("test-tag", func(infos []*RegistryInfo) {
+		log.Info().Msg("service change")
+		for i, r := range infos {
+			log.Info().Interface("service", r).Msgf("infos %d", i)
 		}
-		fmt.Println("")
 	})
-	reg, err := DefaultClient().CreateRegister(conf)
-	reg.Reg()
-	time.Sleep(time.Second * 10)
-	conf.RegistryID = "test-serviceId-nodeId23"
-	conf.HealthPort = 9503
-	reg, err = DefaultClient().CreateRegister(conf)
-	reg.Reg()
-	for {
-		time.Sleep(time.Second * 10)
-		reg.DeReg()
-		time.Sleep(time.Second * 10)
-		reg.Reg()
+	select {}
+}
+
+func BenchmarkWatcherServices2(b *testing.B) {
+	_, err := InitDefaultClient("127.0.0.1:8500", "http")
+	if err != nil {
+		return
 	}
+	DefaultClient().WatchServices2("test-tag", func(addInfos, delInfos []*RegistryInfo) {
+		log.Info().Msg("service change")
+		for i, r := range addInfos {
+			log.Info().Interface("service", r).Msgf("addInfos %d", i)
+		}
+		for i, r := range delInfos {
+			log.Info().Interface("service", r).Msgf("delInfos %d", i)
+		}
+	})
+	select {}
+}
+
+func BenchmarkWatcherServiceServices(b *testing.B) {
+	_, err := InitDefaultClient("127.0.0.1:8500", "http")
+	if err != nil {
+		return
+	}
+	DefaultClient().WatchServiceServices("test-name", "test-tag", func(infos []*RegistryInfo) {
+		log.Info().Msg("service change")
+		for i, r := range infos {
+			log.Info().Interface("service", r).Msgf("infos %d", i)
+		}
+	})
+	select {}
+}
+
+func BenchmarkWatcherServiceServices2(b *testing.B) {
+	_, err := InitDefaultClient("127.0.0.1:8500", "http")
+	if err != nil {
+		return
+	}
+	DefaultClient().WatchServiceServices2("test-name", "test-tag", func(addInfos, delInfos []*RegistryInfo) {
+		log.Info().Msg("service change")
+		for i, r := range addInfos {
+			log.Info().Interface("service", r).Msgf("addInfos %d", i)
+		}
+		for i, r := range delInfos {
+			log.Info().Interface("service", r).Msgf("delInfos %d", i)
+		}
+	})
+	select {}
 }

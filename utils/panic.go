@@ -19,6 +19,18 @@ func HandlePanic() {
 	}
 }
 
+func HandlePanic2(callback func()) {
+	if r := recover(); r != nil {
+		buf := make([]byte, 2048)
+		l := runtime.Stack(buf, false)
+		err := fmt.Errorf("%v: %s", r, buf[:l])
+		log.Error().Err(err).Msg("Panic")
+		if callback != nil {
+			callback()
+		}
+	}
+}
+
 func HandlePanicWithCaller(caller *CallerDesc) {
 	if r := recover(); r != nil {
 		buf := make([]byte, 2048)

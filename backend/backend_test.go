@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gobase/consul"
+	"gobase/dispatch"
 	"gobase/goredis"
 	_ "gobase/log"
 	"gobase/redis"
@@ -38,12 +39,13 @@ func (c *TcpServiceInfo) LastHeart() time.Time {
 }
 
 type TcpHandler struct {
-	utils.TestMsgRegister[TcpService[TcpServiceInfo]]
+	dispatch.MsgDispatch[utils.TestMsg, TcpService[TcpServiceInfo]]
 }
 
 func NewTcpHandler() *TcpHandler {
 	h := &TcpHandler{}
-	h.RegMsgHandler(utils.TestHeatBeatRespMsg.Msgid, h.onHeatBeatResp)
+	h.RegMsgID = utils.TestRegMsgID
+	h.RegMsg(h.onHeatBeatResp)
 	return h
 }
 
@@ -61,8 +63,7 @@ func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig
 			continue
 		}
 		nodeId, ok := conf.RegistryMeta["nodeId"]
-		nodeId = strings.ToLower(nodeId)
-		nodeId = strings.TrimSpace(nodeId)
+		nodeId = strings.TrimSpace(strings.ToLower(nodeId))
 		if !ok || len(nodeId) == 0 {
 			log.Error().Str("RegistryName", conf.RegistryName).Str("ID", conf.RegistryID).Msg("TcpService Filter nodeId error is nil")
 			continue
@@ -135,7 +136,7 @@ func (h *TcpHandler) Encode(data []byte, ts *TcpService[TcpServiceInfo], msgLog 
 
 func (h *TcpHandler) EncodeMsg(msg interface{}, ts *TcpService[TcpServiceInfo], msgLog *zerolog.Event) ([]byte, error) {
 	m, _ := msg.(*utils.TestMsg)
-	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Str("data", string(m.Data))
+	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Interface("data", m.BodyMsg)
 	return utils.TestEncodeMsg(msg)
 }
 
@@ -152,7 +153,8 @@ func (h *TcpHandler) CheckRPCResp(msg interface{}) interface{} {
 }
 
 func (h *TcpHandler) OnMsg(ctx context.Context, msg interface{}, ts *TcpService[TcpServiceInfo]) {
-	if h.TestMsgRegister.OnMsg(ctx, msg, ts) {
+	m, _ := msg.(*utils.TestMsg)
+	if h.Dispatch(ctx, m, ts) {
 		return
 	}
 	log.Error().Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("msg not handle")
@@ -176,7 +178,7 @@ func (h *TcpHandler) OnTick(ctx context.Context, ts *TcpService[TcpServiceInfo])
 	}
 }
 
-func (h *TcpHandler) onHeatBeatResp(ctx context.Context, msg *utils.TestMsg, ts *TcpService[TcpServiceInfo]) {
+func (h *TcpHandler) onHeatBeatResp(ctx context.Context, msg *utils.TestHeatBeatResp, ts *TcpService[TcpServiceInfo]) {
 
 }
 

@@ -16,6 +16,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const CtxKey_nonilerr = "nonilerr"      // 命令移除空错误 值：不受限制 一般写1
+const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
+
+const CtxKey_rediscmd = "rediscmd"     // 值：RedisCommand对象 一般情况内部使用
+const CtxKey_caller = "caller"         // 值：CallerDesc对象 一般情况内部使用
+const CtxKey_cmddesc = "cmddesc"       // 值：字符串 命令描述 一般情况内部使用
+const CtxKey_noscript = "noscript"     // 屏蔽NOSCRIPT的错误提示(在使用Reids.Run命令时建议使用)， 值：不受限制 一般情况内部使用
+const CtxKey_scriptname = "scriptname" // 值：字符串 优化日志输出 一般情况内部使用
+
 type Config struct {
 	Master string   `json:"master,omitempty"` // 不为空就创建哨兵模式的连接
 	Addrs  []string `json:"addrs,omitempty"`  // host:port 地址数<=1 创建单节点连接 否则创建多节点

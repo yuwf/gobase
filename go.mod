@@ -3,6 +3,7 @@ module gobase
 go 1.18
 
 require (
+	github.com/afex/hystrix-go v0.0.0-20180502004556-fa1af6a1f4f5
 	github.com/apolloconfig/agollo/v4 v4.3.0
 	github.com/dlclark/regexp2 v1.9.0
 	github.com/gin-gonic/gin v1.9.0

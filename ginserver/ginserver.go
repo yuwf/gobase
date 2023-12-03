@@ -3,6 +3,7 @@ package ginserver
 // https://github.com/yuwf/gobase
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -11,22 +12,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobase/loader"
 	"gobase/utils"
 
+	"github.com/afex/hystrix-go/hystrix"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
-// 参数配置
-type ParamConfig struct {
-	IgnorePath []string `json:"ignorepath,omitempty"` // handle函数日志忽略Path
-}
-
-var ParamConf loader.JsonLoader[ParamConfig]
-
-// 请求参数绑定错误的回复，外部也可以定义定
-var JsonParamBindError = map[string]interface{}{"errCode": 1, "errDesc": "Param Error"}
+// 外部可赋值重定义
+var (
+	// 请求参数绑定错误 回复状态：http.StatusBadRequest
+	JsonParamBindError = map[string]interface{}{"errCode": 1, "errDesc": "Param Error"}
+	// 处理逻辑Panic了 回复状态：http.StatusBadRequest
+	PanicError = map[string]interface{}{"errCode": 500, "errDesc": "Server Error"}
+)
 
 type GinServer struct {
 	engine *gin.Engine
@@ -48,7 +47,8 @@ func NewGinServer(port int) *GinServer {
 	}
 
 	gs.engine.Use(
-		gs.cors,
+		cors,
+		gs.hystrix,
 		gs.handle,
 	)
 	return gs
@@ -121,6 +121,7 @@ func (gs *GinServer) Stop() error {
 // 注册回调，需要fun调用回复
 // method为空表示注册所有方法
 // fun的参数支持以下写法
+// (c *gin.Context)
 // (ctx context.Context, c *gin.Context)
 // optionsHandlers会先执行 再执行fun调用
 func (gs *GinServer) RegHandler(method, path string, fun interface{}, optionsHandlers ...gin.HandlerFunc) {
@@ -136,33 +137,39 @@ func (gs *GinServer) RegHandler(method, path string, fun interface{}, optionsHan
 		log.Error().Msg("GinServer RegHandler, param must be function")
 		return
 	}
-	// 必须有两个参数
-	if funType.NumIn() != 2 {
+	// 必须有一个或者两个参数
+	if funType.NumIn() != 1 && funType.NumIn() != 2 {
 		log.Error().Int("num", funType.NumIn()).Msg("GinServer RegHandler, fun param num must be 2")
 		return
 	}
-	// 第一个参数必须是context.Context
-	if funType.In(0).String() != "context.Context" {
-		log.Error().Str("type", funType.In(0).String()).Msg("GinServer RegHandler, frist param num must be *context.Context")
-		return
+	if funType.NumIn() == 1 {
+		// 第二个参数必须是*gin.Context
+		if funType.In(0).String() != "*gin.Context" {
+			log.Error().Str("type", funType.In(1).String()).Msg("GinServer RegHandler, frist param num must be *gin.Context")
+			return
+		}
+	} else {
+		// 第一个参数必须是context.Context
+		if funType.In(0).String() != "context.Context" {
+			log.Error().Str("type", funType.In(0).String()).Msg("GinServer RegHandler, frist param num must be *context.Context")
+			return
+		}
+		// 第二个参数必须是*gin.Context
+		if funType.In(1).String() != "*gin.Context" {
+			log.Error().Str("type", funType.In(1).String()).Msg("GinServer RegHandler, second param num must be *gin.Context")
+			return
+		}
 	}
-	// 第二个参数必须是*gin.Context
-	if funType.In(1).String() != "*gin.Context" {
-		log.Error().Str("type", funType.In(1).String()).Msg("GinServer RegHandler, second param num must be *gin.Context")
-		return
-	}
-
 	ginFun := func(c *gin.Context) {
-		var ctx context.Context
-		ctxv, ok := c.Get("ctx")
-		if ok {
-			ctx, _ = ctxv.(context.Context)
+		if funType.NumIn() == 1 {
+			// 注册函数调用
+			funValue.Call([]reflect.Value{reflect.ValueOf(c)})
+		} else {
+			ctxv, _ := c.Get("ctx")
+			ctx, _ := ctxv.(context.Context)
+			// 注册函数调用
+			funValue.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(c)})
 		}
-		if ctx == nil {
-			ctx = context.TODO()
-		}
-		// 注册函数调用
-		funValue.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(c)})
 	}
 
 	// 将函数加到最后
@@ -224,14 +231,8 @@ func (gs *GinServer) RegJsonHandler(method, path string, fun interface{}, option
 	}
 
 	ginFun := func(c *gin.Context) {
-		var ctx context.Context
-		ctxv, ok := c.Get("ctx")
-		if ok {
-			ctx, _ = ctxv.(context.Context)
-		}
-		if ctx == nil {
-			ctx = context.TODO()
-		}
+		ctxv, _ := c.Get("ctx")
+		ctx, _ := ctxv.(context.Context)
 		if funType.NumIn() == 4 {
 			// 先解析传入的参数
 			reqVal := reflect.New(funType.In(2).Elem())
@@ -240,9 +241,13 @@ func (gs *GinServer) RegJsonHandler(method, path string, fun interface{}, option
 			if funType.In(2).Elem().NumField() > 0 {
 				err := c.ShouldBind(reqVal.Interface())
 				if err != nil {
-					c.JSON(http.StatusOK, JsonParamBindError)
 					c.Set("err", err)
-					c.Set("resp", JsonParamBindError) // 日志使用
+					if JsonParamBindError != nil {
+						c.Set("resp", JsonParamBindError) // 日志使用
+						c.JSON(http.StatusBadRequest, JsonParamBindError)
+					} else {
+						c.AbortWithStatus(http.StatusBadRequest)
+					}
 					return
 				}
 			}
@@ -303,14 +308,8 @@ func (gs *GinServer) RegNoRouteHandler(fun interface{}, optionsHandlers ...gin.H
 	}
 
 	ginFun := func(c *gin.Context) {
-		var ctx context.Context
-		ctxv, ok := c.Get("ctx")
-		if ok {
-			ctx, _ = ctxv.(context.Context)
-		}
-		if ctx == nil {
-			ctx = context.TODO()
-		}
+		ctxv, _ := c.Get("ctx")
+		ctx, _ := ctxv.(context.Context)
 		// 注册函数调用
 		funValue.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(c)})
 	}
@@ -323,89 +322,117 @@ func (gs *GinServer) RegHook(f func(ctx context.Context, c *gin.Context, elapsed
 	gs.hook = append(gs.hook, f)
 }
 
+// 回复体桥接下，便于获取回复的内容
+type responseWriterWrapper struct {
+	gin.ResponseWriter
+	Body *bytes.Buffer // 缓存
+}
+
+func (w responseWriterWrapper) Write(b []byte) (int, error) {
+	w.Body.Write(b)
+	return w.ResponseWriter.Write(b)
+}
+
+func (w responseWriterWrapper) WriteString(s string) (int, error) {
+	w.Body.WriteString(s)
+	return w.ResponseWriter.WriteString(s)
+}
+
+func (gs *GinServer) hystrix(c *gin.Context) {
+	ctx := context.TODO()
+	c.Set("ctx", ctx)
+
+	// 熔断
+	if name, ok := ParamConf.Get().IsHystrixPath(c.Request.URL.Path); ok {
+		hystrix.DoC(ctx, name, func(ctx context.Context) error {
+			c.Next()
+			return nil
+		}, func(ctx context.Context, err error) error {
+			// 出现了熔断
+			c.String(http.StatusServiceUnavailable, err.Error())
+			c.Error(err)
+			c.Abort()
+			// 熔断也会调用回调
+			gs.callhook(ctx, c, 0)
+			return err
+		})
+	}
+}
+
 func (gs *GinServer) handle(c *gin.Context) {
-	defer utils.HandlePanic()
+	ctxv, _ := c.Get("ctx")
+	ctx, _ := ctxv.(context.Context)
 
 	// 忽略的路径
-	blog := true
-	path := c.Request.URL.Path
-	for _, v := range ParamConf.Get().IgnorePath {
-		if path == v {
-			blog = false
-		}
+	logOut := !ParamConf.Get().IsIgnoreIP(c.ClientIP())
+	if logOut {
+		logOut = !ParamConf.Get().IsIgnorePath(c.Request.URL.Path)
 	}
+	var blw *responseWriterWrapper
+	if logOut {
+		blw = &responseWriterWrapper{ResponseWriter: c.Writer, Body: bytes.NewBufferString("")}
+		c.Writer = blw
+	}
+
 	entry := time.Now()
-	// 日志 使用defer 保证崩溃了也能输出来
-	logFun := func(elapsed time.Duration) {
-		blog = false // 标记不用在输出了
+	// 调用外部的逻辑
+	gs.handleNext(c)
+	elapsed := time.Since(entry)
+
+	if logOut {
 		l := log.Info().Str("clientIP", c.ClientIP()).
 			Str("method", c.Request.Method).
-			Str("path", path).
-			Interface("head", c.Request.Header)
+			Str("path", c.Request.URL.Path).
+			Interface("header", c.Request.Header)
 		err, ok := c.Get("err")
 		if ok {
 			l = l.Interface("err", err)
 		}
 		req, ok := c.Get("req")
 		if ok {
-			l = l.Interface("body", req)
+			l = utils.LogFmtHttpBody2(l, "req", c.Request.Header, req, ParamConf.Get().BodyLogLimit)
 		} else if len(c.Request.URL.RawQuery) > 0 {
-			l = l.Str("body", c.Request.URL.RawQuery)
+			l = l.Str("req", c.Request.URL.RawQuery)
 		} else {
 			data, _ := c.GetRawData()
 			if len(data) > 0 {
-				l = l.Bytes("body", data)
+				l = utils.LogFmtHttpBody(l, "req", c.Request.Header, data, ParamConf.Get().BodyLogLimit)
 			}
 		}
 		l = l.Int("status", c.Writer.Status()).Int("elapsed", int(elapsed/time.Millisecond))
+		l = l.Interface("respheader", c.Writer.Header())
 		resp, ok := c.Get("resp")
 		if ok {
-			l = l.Interface("resp", resp)
+			l = utils.LogFmtHttpBody2(l, "resp", c.Request.Header, resp, ParamConf.Get().BodyLogLimit)
 		} else {
-			l = l.Int("respsize", c.Writer.Size())
+			if blw.Body.Len() > 0 {
+				l = utils.LogFmtHttpBody(l, "resp", c.Writer.Header(), blw.Body.Bytes(), ParamConf.Get().BodyLogLimit)
+			}
 		}
 		l.Msg("GinServer handle")
 	}
-	defer func() {
-		if blog { // 说明日志还没有调用 应该是蹦了
-			logFun(time.Since(entry))
-		}
-	}()
 
-	ctx := context.TODO()
-	c.Set("ctx", ctx)
+	gs.callhook(ctx, c, elapsed)
+}
+
+func (gs *GinServer) handleNext(c *gin.Context) {
+	// 外层部分的panic
+	defer utils.HandlePanic2(func() {
+		if PanicError != nil {
+			c.Set("resp", PanicError) // 日志使用
+			c.JSON(http.StatusInternalServerError, PanicError)
+		} else {
+			c.AbortWithStatus(http.StatusInternalServerError)
+		}
+	})
 
 	c.Next()
+}
 
-	elapsed := time.Since(entry)
-	if blog {
-		logFun(elapsed)
-	}
-
+func (gs *GinServer) callhook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
+	defer utils.HandlePanic()
 	// 回调
 	for _, f := range gs.hook {
 		f(ctx, c, elapsed)
-	}
-}
-
-// CORS 跨域处理
-// 官方提供了一个cors库 参考说明 https://mp.weixin.qq.com/s/GFX3sAgZqrxsGamJT-s4-g
-func (gs *GinServer) cors(c *gin.Context) {
-	c.Header("Access-Control-Allow-Origin", "*")
-	if c.Request.Method == "OPTIONS" {
-		//服务器支持的所有跨域请求的方法,为了避免浏览次请求的多次'预检'请求
-		c.Header("Access-Control-Allow-Methods", "POST,GET,OPTIONS,PUT,DELETE,UPDATE")
-		// header的类型
-		allowHeaders := "content-type,x-qp-appid,x-qp-appversion,x-qp-clienttype,x-qp-gid,x-qp-nonce,x-qp-os,x-qp-osversion,x-qp-resversion,x-qp-signature,x-qp-timestamp,x-qp-token"
-		reqHeader := c.Request.Header.Get("Access-Control-Request-Headers")
-		if len(reqHeader) > 0 {
-			allowHeaders = reqHeader
-		}
-		c.Header("Access-Control-Allow-Headers", allowHeaders)
-		// 缓存请求信息 单位为秒
-		c.Header("Access-Control-Max-Age", "86400")
-
-		c.AbortWithStatus(http.StatusNoContent)
-		return
 	}
 }

@@ -8,34 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"gobase/loader"
 	"gobase/tcp"
 	"gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )
-
-const CtxKey_WS = "ws"     // 表示ws连接 值：不受限制 一般写1
-const CtxKey_Text = "text" // 数据为text格式，否则为二进制格式 值：不受限制 一般写1
-
-// 参数配置
-type ParamConfig struct {
-	IgnoreIp      []string            `json:"ignoreip,omitempty"`      // log输出忽略的ip 如网关测试IP
-	ActiveTimeout int                 `json:"activetimeout,omitempty"` // 连接活跃超时时间 单位秒 <=0表示不检查活跃
-	MsgSeq        bool                `json:"msgseq,omitempty"`        // 消息顺序执行
-	WSHeader      map[string][]string `json:"wsheader,omitempty"`      // websocket握手时 回复的头
-}
-
-func (c *ParamConfig) Create() {
-	//c.MsgSeq = true
-}
-
-var ParamConf loader.JsonLoader[ParamConfig]
 
 // TCPServer
 // ClientId客户端ID类型
@@ -331,12 +312,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnShutdown() {
 }
 
 func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
-	logOut := true
-	for _, ip := range ParamConf.Get().IgnoreIp {
-		if strings.Contains(c.RemoteAddr().String(), ip) {
-			logOut = false
-		}
-	}
+	logOut := !ParamConf.Get().IsIgnoreIp(c.RemoteAddr().String())
 	if logOut {
 		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Msg("OnAccept")
 	}
@@ -376,12 +352,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn
 	client, ok := s.connMap.Load(c)
 	if ok {
 		tc := client.(*tClient[ClientId, ClientInfo]).tc
-		logOut := true
-		for _, ip := range ParamConf.Get().IgnoreIp {
-			if strings.Contains(tc.removeAddr.String(), ip) {
-				logOut = false
-			}
-		}
+		logOut := !ParamConf.Get().IsIgnoreIp(tc.removeAddr.String())
 		if logOut {
 			if tc.closeReason != nil {
 				err = tc.closeReason
@@ -407,12 +378,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnClose(c *tcp.TCPConn) {
 	client, ok := s.connMap.Load(c)
 	if ok {
 		tc := client.(*tClient[ClientId, ClientInfo]).tc
-		logOut := true
-		for _, ip := range ParamConf.Get().IgnoreIp {
-			if strings.Contains(tc.removeAddr.String(), ip) {
-				logOut = false
-			}
-		}
+		logOut := !ParamConf.Get().IsIgnoreIp(tc.removeAddr.String())
 		if logOut {
 			log.Info().Err(tc.closeReason).Str("Name", tc.ConnName()).Str("RemoveAddr", tc.removeAddr.String()).Msg("OnClosed")
 		}

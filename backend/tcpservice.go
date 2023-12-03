@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -61,7 +60,11 @@ func NewTcpService[T any](conf *ServiceConfig, g *TcpGroup[T]) (*TcpService[T], 
 	}
 	conn, err := tcp.NewTCPConn(ts.address, ts)
 	if err != nil {
-		log.Error().Str("ServiceName", conf.ServiceName).Str("ServiceId", conf.ServiceId).Err(err).Str("addr", ts.address).Msg("NewTcpService")
+		log.Error().Str("ServiceName", conf.ServiceName).
+			Str("ServiceId", conf.ServiceId).Err(err).
+			Str("RoutingTag", conf.RoutingTag).
+			Str("addr", ts.address).
+			Msg("NewTcpService")
 		return nil, err
 	}
 	ts.conn = conn
@@ -71,11 +74,15 @@ func NewTcpService[T any](conf *ServiceConfig, g *TcpGroup[T]) (*TcpService[T], 
 }
 
 // 重连或者关闭连接时调用
-func (tc *TcpService[T]) clear() {
+func (ts *TcpService[T]) clear() {
 	// 清空下rpc
-	tc.rpc.Range(func(key, value interface{}) bool {
-		ch := value.(chan interface{})
-		ch <- nil // 写一个空的
+	ts.rpc.Range(func(key, value interface{}) bool {
+		rpc, ok := ts.rpc.LoadAndDelete(key)
+		if ok {
+			ch := rpc.(chan interface{})
+			ch <- nil // 写一个空的
+			close(ch) // 删除的地方负责关闭
+		}
 		return true
 	})
 }
@@ -158,18 +165,29 @@ func (ts *TcpService[T]) SendMsg(msg interface{}) error {
 
 func (ts *TcpService[T]) SendRPCMsg(rpcId interface{}, msg interface{}, timeout time.Duration) (interface{}, error) {
 	if ts.g.tb.event != nil {
-		_, ok := ts.rpc.Load(rpcId)
-		if ok {
-			err := errors.New("rpcId exist")
-			log.Error().Str("Name", ts.ConnName()).Err(err).Interface("rpcID", rpcId).Interface("Msg", msg).Msg("SendRPCMsg error")
-			return nil, err
-		}
 		msgLog := zerolog.Dict()
 		buf, err := ts.g.tb.event.EncodeMsg(msg, ts, msgLog)
 		if err != nil {
 			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendRPCMsg error")
 			return nil, err
 		}
+		// rpc检查
+		_, ok := ts.rpc.Load(rpcId)
+		if ok {
+			err := errors.New("rpcId exist")
+			log.Error().Str("Name", ts.ConnName()).Err(err).Interface("rpcID", rpcId).Interface("Msg", msg).Msg("SendRPCMsg error")
+			return nil, err
+		}
+		// 先添加一个记录，防止Send还没出来就收到了回复
+		ch := make(chan interface{})
+		ts.rpc.Store(rpcId, ch)
+		defer func() {
+			_, ok = ts.rpc.LoadAndDelete(rpcId)
+			if ok {
+				close(ch) // 删除的地方负责关闭
+			}
+		}()
+		// 发送
 		err = ts.conn.Send(buf)
 		if err != nil {
 			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendRPCMsg error")
@@ -180,10 +198,7 @@ func (ts *TcpService[T]) SendRPCMsg(rpcId interface{}, msg interface{}, timeout 
 		if len(logBuf.Bytes()) > 1 {
 			log.Debug().Str("Name", ts.ConnName()).Dict("Msg", msgLog).Msg("SendRPCMsg")
 		}
-		ch := make(chan interface{})
-		ts.rpc.Store(rpcId, ch)
-		// 协程让出，等待消息回复或超时
-		runtime.Gosched()
+		// 等待rpc回复
 		timer := time.NewTimer(timeout)
 		var resp interface{}
 		select {
@@ -197,8 +212,6 @@ func (ts *TcpService[T]) SendRPCMsg(rpcId interface{}, msg interface{}, timeout 
 		case <-timer.C:
 			err = errors.New("timeout")
 		}
-		ts.rpc.Delete(rpcId)
-		close(ch)
 		if resp == nil && err == nil { // clear函数的调用会触发此情况
 			err = errors.New("close")
 		}
@@ -246,7 +259,7 @@ func (ts *TcpService[T]) loopTick() {
 
 func (ts *TcpService[T]) close() {
 	// 先从哈希环中移除
-	ts.g.hashring.Remove(ts.conf.ServiceId)
+	ts.g.removeHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
 	// 关闭网络
 	ts.conn.Close(true)
 	// 退出循环
@@ -274,7 +287,7 @@ func (ts *TcpService[T]) OnDialSuccess(t *tcp.TCPConn) {
 	log.Info().Str("Name", ts.ConnName()).Str("RemoteAddr", t.RemoteAddr().String()).Str("LocalAddr", t.LocalAddr().String()).Msg("Connect success")
 
 	// 添加到哈希环中
-	ts.g.hashring.Add(ts.conf.ServiceId)
+	ts.g.addHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
 
 	if ts.g.tb.event != nil {
 		ctx := context.TODO()
@@ -288,9 +301,16 @@ func (ts *TcpService[T]) OnDialSuccess(t *tcp.TCPConn) {
 }
 
 func (ts *TcpService[T]) OnDisConnect(err error, t *tcp.TCPConn) error {
-	log.Error().Str("Name", ts.ConnName()).Err(err).Str("Addr", ts.address).Int32("ConfDestroy", atomic.LoadInt32(&ts.confDestroy)).Msg("Disconnect")
+	log.Error().Str("Name", ts.ConnName()).
+		Str("ServiceId", ts.conf.ServiceId).
+		Err(err).
+		Str("Addr", ts.address).
+		Str("RoutingTag", ts.conf.RoutingTag).
+		Int32("ConfDestroy", atomic.LoadInt32(&ts.confDestroy)).
+		Msg("Disconnect")
+
 	// 从哈希环中移除
-	ts.g.hashring.Remove(ts.conf.ServiceId)
+	ts.g.removeHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
 
 	ts.clear()
 
@@ -368,10 +388,11 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 		rpcId := ts.g.tb.event.CheckRPCResp(msg)
 		if rpcId != nil {
 			// rpc
-			rpc, ok := ts.rpc.Load(rpcId)
+			rpc, ok := ts.rpc.LoadAndDelete(rpcId)
 			if ok {
 				ch := rpc.(chan interface{})
 				ch <- msg
+				close(ch) // 删除的地方负责关闭
 			} else {
 				// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
 				if ts.seq != nil {

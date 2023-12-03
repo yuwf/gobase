@@ -9,10 +9,10 @@ import (
 
 // T是和业务相关的客户端信息结构 透传给HttpService
 type HttpBackend[T any] struct {
-	sync.RWMutex
-	group   map[string]*HttpGroup[T] // 服务器组map对象
-	event   HttpEvent[T]             // 事件处理
-	watcher interface{}              // 服务器发现相关的对象 consul或者redis对象
+	sync.RWMutex                          // 注意只保护group的变化 不要保护group内的操作
+	group        map[string]*HttpGroup[T] // 服务器组map对象
+	event        HttpEvent[T]             // 事件处理
+	watcher      interface{}              // 服务器发现相关的对象 consul或者redis对象
 	// 请求处理完后回调 不使用锁，默认要求提前注册好
 	hook []HttpHook[T]
 }
@@ -23,8 +23,7 @@ func (hb *HttpBackend[T]) RegHook(h HttpHook[T]) {
 }
 
 func (hb *HttpBackend[T]) GetGroup(serviceName string) *HttpGroup[T] {
-	serviceName = strings.ToLower(serviceName)
-	serviceName = strings.TrimSpace(serviceName)
+	serviceName = strings.TrimSpace(strings.ToLower(serviceName))
 	hb.RLock()
 	defer hb.RUnlock()
 	group, ok := hb.group[serviceName]
@@ -32,6 +31,16 @@ func (hb *HttpBackend[T]) GetGroup(serviceName string) *HttpGroup[T] {
 		return group
 	}
 	return nil
+}
+
+func (hb *HttpBackend[T]) GetGroups() map[string]*HttpGroup[T] {
+	hb.RLock()
+	defer hb.RUnlock()
+	gs := map[string]*HttpGroup[T]{}
+	for serviceName, group := range hb.group {
+		gs[serviceName] = group
+	}
+	return gs
 }
 
 func (hb *HttpBackend[T]) GetService(serviceName, serviceId string) *HttpService[T] {
@@ -51,8 +60,24 @@ func (hb *HttpBackend[T]) GetServiceByHash(serviceName, hash string) *HttpServic
 	return nil
 }
 
+// 根据哈希环获取,哈希环行记录的都是状态测试健康的
+func (hb *HttpBackend[T]) GetServiceByTagAndHash(serviceName, tag, hash string) *HttpService[T] {
+	group := hb.GetGroup(serviceName)
+	if group != nil {
+		return group.GetServiceByTagAndHash(tag, hash)
+	}
+	return nil
+}
+
 // 服务器发现 更新逻辑
 func (hb *HttpBackend[T]) updateServices(confs []*ServiceConfig) {
+	// 转化成去空格的小写
+	for _, conf := range confs {
+		conf.ServiceName = strings.TrimSpace(strings.ToLower(conf.ServiceName))
+		conf.ServiceId = strings.TrimSpace(strings.ToLower(conf.ServiceId))
+		conf.RoutingTag = strings.TrimSpace(strings.ToLower(conf.RoutingTag))
+	}
+
 	// 组织成Map结构
 	confsMap := ServiceNameConfMap{}
 	for _, conf := range confs {

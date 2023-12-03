@@ -19,7 +19,7 @@ var (
 	hook logHook
 
 	errorLogPrefixLock sync.RWMutex
-	// 报警日志 Msg前缀部分 默认没有锁，需要添加好
+	// 报警日志 Msg前缀部分
 	errorLogPrefix = map[string]interface{}{
 		"Panic":                nil,
 		"Consul":               nil,
@@ -28,10 +28,16 @@ var (
 		"RandParamErr":         nil,
 		"GinServer RegHandler": nil,
 	}
-	// 多节点唯一性报警 【待完善】  默认没有锁，需要添加好
+	// 报警日志 Msg前缀部分
+	// 一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点
+	// 外部可重新 LogAlertCheck 函数
 	errorLogPrefix2 = map[string]interface{}{
 		"JsonLoader": nil,
 		"StrLoader":  nil,
+	}
+	// 检查报警函数，外部可赋值重定义
+	LogAlertCheck = func(prefix string) bool {
+		return true
 	}
 )
 
@@ -87,27 +93,30 @@ func RemoveErrorLogPrefix2(prefix string) {
 	delete(errorLogPrefix2, prefix)
 }
 
-// 0:报警 1：多节点唯一性报警 2：正常报警
-func checkSendAlert(msg string) int {
+func checkSendAlert(msg string) bool {
 	errorLogPrefixLock.RLock()
 	defer errorLogPrefixLock.RUnlock()
 
-	sendAlert := 0
+	alert := false
 	for k, _ := range errorLogPrefix2 {
 		l := len(k)
 		if len(msg) >= l && msg[0:l] == k {
-			sendAlert = 1
+			if LogAlertCheck != nil && LogAlertCheck(k) {
+				alert = true
+			}
+			break
 		}
 	}
-	if sendAlert == 0 {
+	if !alert {
 		for k, _ := range errorLogPrefix {
 			l := len(k)
 			if len(msg) >= l && msg[0:l] == k {
-				sendAlert = 2
+				alert = true
+				break
 			}
 		}
 	}
-	return sendAlert
+	return alert
 }
 
 // 监控所有的Fatal日志
@@ -148,9 +157,7 @@ func (h *logHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 		buf := vo.FieldByName("buf")
 		SendFeiShuAlert2("%s\n%s}", msg, string(buf.Bytes()))
 	} else if level == zerolog.ErrorLevel {
-		sendAlert := checkSendAlert(msg)
-
-		if sendAlert != 0 {
+		if checkSendAlert(msg) {
 			h.addAlertLog(e, &msg)
 		}
 

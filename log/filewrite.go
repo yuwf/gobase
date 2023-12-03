@@ -23,8 +23,10 @@ var logwrite = &filewrite{}
 
 func init() {
 	logwrite.path = os.Getenv("LOG_PATH")
-	if logwrite.path == "" {
+	if len(logwrite.path) == 0 {
 		logwrite.path = "./"
+	} else if logwrite.path[len(logwrite.path)-1] != '/' {
+		logwrite.path += "/"
 	}
 }
 

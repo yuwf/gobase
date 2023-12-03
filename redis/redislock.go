@@ -37,14 +37,14 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 
 	logOut := true
 	if ctx != nil {
-		nolog := ctx.Value("nolog")
+		nolog := ctx.Value(CtxKey_nolog)
 		if nolog != nil {
 			logOut = false
 		} else {
-			ctx = context.WithValue(ctx, "nolog", 1) // 命令传递下去不需要日志了
+			ctx = context.WithValue(ctx, CtxKey_nolog, 1) // 命令传递下去不需要日志了
 		}
 	} else {
-		ctx = context.WithValue(context.TODO(), "nolog", 1)
+		ctx = context.WithValue(context.TODO(), CtxKey_nolog, 1)
 	}
 
 	r.docmd(ctx, redisCmd)
@@ -105,14 +105,14 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 
 	logOut := true
 	if ctx != nil {
-		nolog := ctx.Value("nolog")
+		nolog := ctx.Value(CtxKey_nolog)
 		if nolog != nil {
 			logOut = false
 		} else {
-			ctx = context.WithValue(ctx, "nolog", 1) // 命令传递下去不需要日志了
+			ctx = context.WithValue(ctx, CtxKey_nolog, 1) // 命令传递下去不需要日志了
 		}
 	} else {
-		ctx = context.WithValue(context.TODO(), "nolog", 1)
+		ctx = context.WithValue(context.TODO(), CtxKey_nolog, 1)
 	}
 
 	entry := time.Now()

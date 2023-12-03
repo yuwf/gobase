@@ -70,7 +70,7 @@ func (r *Redis) WatchServices(key string, serverNames []string, fun func(infos [
 // WatchService 监控服务器变化，通知变化，增加或者删除
 // key 表示服务器发现的key
 // serverName 表示监听哪些服务器 为空表示监听全部的服务器
-func (r *Redis) WatchServices2(key string, serverNames []string, fun func(addItems, delItems []*RegistryInfo)) {
+func (r *Redis) WatchServices2(key string, serverNames []string, fun func(addInfos, delInfos []*RegistryInfo)) {
 	log.Info().Str("key", key).Msg("Redis WatchService")
 	ctx := context.WithValue(context.TODO(), CtxKey_nolog, 1)
 	go func() {
@@ -81,9 +81,9 @@ func (r *Redis) WatchServices2(key string, serverNames []string, fun func(addIte
 			// 先读一次
 			rst, err := r.ReadServices(ctx, key, serverNames)
 			if err == nil {
-				addItems, delItems := diff(last, rst)
-				if len(addItems) != 0 || len(delItems) != 0 {
-					fun(addItems, delItems)
+				addInfos, delInfos := diff(last, rst)
+				if len(addInfos) != 0 || len(delInfos) != 0 {
+					fun(addInfos, delInfos)
 					last = rst
 				}
 			}
@@ -247,6 +247,36 @@ func isSame(last, new []*RegistryInfo) bool {
 	return true
 }
 
+//比较新旧列表，返回：new相比last，增加列表，删除的列表
+func diff(last, new []*RegistryInfo) ([]*RegistryInfo, []*RegistryInfo) {
+	addInfos, delInfos := make([]*RegistryInfo, 0), make([]*RegistryInfo, 0)
+	for i := range new {
+		addFlag := true
+		for j := range last {
+			if equal(new[i], last[j]) {
+				addFlag = false
+				break
+			}
+		}
+		if addFlag {
+			addInfos = append(addInfos, new[i])
+		}
+	}
+	for i := range last {
+		delFlag := true
+		for j := range new {
+			if equal(new[j], last[i]) {
+				delFlag = false
+				break
+			}
+		}
+		if delFlag {
+			delInfos = append(delInfos, last[i])
+		}
+	}
+	return addInfos, delInfos
+}
+
 func equal(last, new *RegistryInfo) bool {
 	if last.RegistryName != new.RegistryName {
 		return false
@@ -261,34 +291,4 @@ func equal(last, new *RegistryInfo) bool {
 		return false
 	}
 	return true
-}
-
-//比较新旧列表，返回：new相比last，增加列表，删除的列表
-func diff(last, new []*RegistryInfo) ([]*RegistryInfo, []*RegistryInfo) {
-	addItems, delItems := make([]*RegistryInfo, 0), make([]*RegistryInfo, 0)
-	for i := range new {
-		addFlag := true
-		for j := range last {
-			if equal(new[i], last[j]) {
-				addFlag = false
-				break
-			}
-		}
-		if addFlag {
-			addItems = append(addItems, new[i])
-		}
-	}
-	for i := range last {
-		delFlag := true
-		for j := range new {
-			if equal(new[i], last[j]) {
-				delFlag = false
-				break
-			}
-		}
-		if delFlag {
-			delItems = append(delItems, last[i])
-		}
-	}
-	return addItems, delItems
 }

@@ -90,7 +90,7 @@ func (c *Client) CreateRegister(cfg *RegistryConfig) (*Register, error) {
 		state:              0,
 		quit:               make(chan int),
 	}
-	log.Info().Msg("Consul CreateRegister success")
+	log.Info().Str("RegistryName", cfg.RegistryName).Str("RegistryID", cfg.RegistryID).Msg("Consul CreateRegister success")
 	return register, nil
 }
 
@@ -129,8 +129,9 @@ func (r *Register) Reg() error {
 			mux.HandleFunc(r.cfg.HealthPath, func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
-			http.Serve(healthListener, mux)
-			log.Info().Msg("Consul health check service start")
+			log.Info().Str("addr", healthAddr).Msg("Consul health check service start")
+			err := http.Serve(healthListener, mux)
+			log.Info().Err(err).Msg("Consul health check service end")
 		}()
 	}
 

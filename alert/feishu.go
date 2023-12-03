@@ -57,7 +57,6 @@ func SendFeiShuAlert(format string, a ...interface{}) {
 		defer feishuConf.RUnlock()
 		addr = feishuConf.alertAddr
 		if len(addr) == 0 {
-
 			return
 		}
 		hostname, _ := os.Hostname()

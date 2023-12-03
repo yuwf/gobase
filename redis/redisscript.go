@@ -79,7 +79,7 @@ func (r *Redis) doScriptCmd(ctx context.Context, script *RedisScript, redisCmd *
 	} else {
 		logOut := true
 		if ctx != nil {
-			nolog := ctx.Value("nolog")
+			nolog := ctx.Value(CtxKey_nolog)
 			if nolog != nil {
 				logOut = false
 			}

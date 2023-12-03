@@ -150,8 +150,20 @@ func (c *Client) GetHealthState(state string, waitIndex uint64) (api.HealthCheck
 	q := &api.QueryOptions{RequireConsistent: true, WaitIndex: waitIndex}
 	resp, meta, err := c.consulCli.Health().State(state, q)
 	if err != nil {
-		log.Error().Err(err).Msg("Consul Catalog Services error")
+		log.Error().Err(err).Msg("Consul Health State error")
 		return nil, 0, err
 	}
 	return resp, meta.LastIndex, nil
+}
+
+// GetHealthService 获取某个服务的所有的服务节点
+func (c *Client) GetHealthService(service, tag string, passingOnly bool, waitIndex uint64) ([]*api.ServiceEntry, uint64, error) {
+	q := &api.QueryOptions{RequireConsistent: true, WaitIndex: waitIndex}
+	// 获取所有passing状态的service
+	entrys, meta, err := c.consulCli.Health().Service(service, tag, passingOnly, q)
+	if err != nil {
+		log.Error().Err(err).Msg("Consul Health Service error")
+		return nil, 0, err
+	}
+	return entrys, meta.LastIndex, nil
 }

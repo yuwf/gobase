@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gobase/consul"
+	"gobase/dispatch"
 	_ "gobase/log"
 	"gobase/utils"
 
@@ -35,12 +36,13 @@ func (c *ClientInfo) LastHeart() time.Time {
 }
 
 type Handler struct {
-	utils.TestMsgRegister[GNetClient[ClientInfo]]
+	dispatch.MsgDispatch[utils.TestMsg, GNetClient[ClientInfo]]
 }
 
 func NewHandler() *Handler {
 	h := &Handler{}
-	h.RegMsgHandler(utils.TestHeatBeatReqMsg.Msgid, h.onHeatBeatReq)
+	h.RegMsgID = utils.TestRegMsgID
+	h.RegMsg(h.onHeatBeatReq)
 	return h
 }
 
@@ -57,7 +59,7 @@ func (h *Handler) Encode(data []byte, gc *GNetClient[ClientInfo], msgLog *zerolo
 
 func (h *Handler) EncodeMsg(msg interface{}, gc *GNetClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
 	m, _ := msg.(*utils.TestMsg)
-	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Str("data", string(m.Data))
+	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Interface("data", m.BodyMsg)
 	return utils.TestEncodeMsg(msg)
 }
 
@@ -80,7 +82,8 @@ func (h *Handler) OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[Cli
 		gc.SendText(msg.([]byte)) // 原路返回
 		return
 	}
-	if h.TestMsgRegister.OnMsg(ctx, msg, gc) {
+	m, _ := msg.(*utils.TestMsg)
+	if h.Dispatch(ctx, m, gc) {
 		return
 	}
 	log.Error().Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("msg not handle")
@@ -90,12 +93,22 @@ func (h *Handler) OnTick(ctx context.Context, gc *GNetClient[ClientInfo]) {
 
 }
 
-func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestMsg, gc *GNetClient[ClientInfo]) {
+func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestHeatBeatReq, gc *GNetClient[ClientInfo]) {
 	gc.SendMsg(utils.TestHeatBeatRespMsg)
 	gc.info.SetLastHeart(time.Now())
 }
 
 func BenchmarkGNetServer(b *testing.B) {
+	server := NewGNetServer[int, ClientInfo](1236, NewHandler(), "")
+	server.Start()
+	utils.RegExit(func(s os.Signal) {
+		server.Stop() // 退出服务监听
+	})
+
+	utils.ExitWait()
+}
+
+func BenchmarkGNetServerConsul(b *testing.B) {
 	server := NewGNetServer[int, ClientInfo](1236, NewHandler(), "")
 	server.Start()
 	utils.RegExit(func(s os.Signal) {

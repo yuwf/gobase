@@ -1,6 +1,5 @@
 .idea
+.vscode
 *.log
 bin
-gamecenter.linux
-publish.zip
-
+__debug_bin.exe

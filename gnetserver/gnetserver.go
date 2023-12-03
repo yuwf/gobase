@@ -6,35 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"gobase/loader"
 	"gobase/utils"
 
 	"github.com/panjf2000/gnet"
 
 	"github.com/rs/zerolog/log"
 )
-
-const CtxKey_WS = "ws"     // 表示ws连接 值：不受限制 一般写1
-const CtxKey_Text = "text" // 数据为text格式，否则为二进制格式 值：不受限制 一般写1
-
-// 参数配置
-type ParamConfig struct {
-	IgnoreIp      []string            `json:"ignoreip,omitempty"`      // log输出忽略的ip 如网关测试IP
-	ActiveTimeout int                 `json:"activetimeout,omitempty"` // 连接活跃超时时间 单位秒 <=0表示不检查活跃
-	MsgSeq        bool                `json:"msgseq,omitempty"`        // 消息顺序执行
-	WSHeader      map[string][]string `json:"wsheader,omitempty"`      // websocket握手时 回复的头
-}
-
-func (c *ParamConfig) Create() {
-	c.MsgSeq = true // 默认为按顺序执行
-}
-
-var ParamConf loader.JsonLoader[ParamConfig]
 
 // GNetServer
 // ClientId客户端ID类型
@@ -277,12 +258,7 @@ func (s *GNetServer[ClientId, ClientInfo]) OnShutdown(server gnet.Server) {
 }
 
 func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
-	logOut := true
-	for _, ip := range ParamConf.Get().IgnoreIp {
-		if strings.Contains(c.RemoteAddr().String(), ip) {
-			logOut = false
-		}
-	}
+	logOut := !ParamConf.Get().IsIgnoreIp(c.RemoteAddr().String())
 	if logOut {
 		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Msg("OnOpened")
 	}
@@ -321,12 +297,7 @@ func (s *GNetServer[ClientId, ClientInfo]) OnClosed(c gnet.Conn, err error) (act
 	client, ok := s.connMap.Load(c)
 	if ok {
 		gc := client.(*gClient[ClientId, ClientInfo]).gc
-		logOut := true
-		for _, ip := range ParamConf.Get().IgnoreIp {
-			if strings.Contains(gc.removeAddr.String(), ip) {
-				logOut = false
-			}
-		}
+		logOut := !ParamConf.Get().IsIgnoreIp(gc.removeAddr.String())
 		if logOut {
 			if gc.closeReason != nil {
 				err = gc.closeReason

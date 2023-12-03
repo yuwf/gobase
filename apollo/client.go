@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Addr      string   `json:"addr"` // 要求 http:// 开头
 	AppID     string   `json:"appId"`
+	Cluster   string   `json:"cluster"`
 	NameSpace []string `json:"namespace,omitempty"`
 	Secret    string   `json:"secret"`
 }
@@ -41,11 +42,14 @@ func InitDefaultClient(conf *Config) (*Client, error) {
 func CreateClient(conf *Config) (*Client, error) {
 	appconf := &config.AppConfig{
 		AppID:         conf.AppID,
-		Cluster:       "dev",
+		Cluster:       conf.Cluster,
 		NamespaceName: "",
 		IP:            conf.Addr,
 		Secret:        conf.Secret,
 		MustStart:     false,
+	}
+	if appconf.Cluster == "" {
+		appconf.Cluster = "dev"
 	}
 	for i, k := range conf.NameSpace {
 		if i > 0 {

@@ -1,20 +1,21 @@
 package backend
 
+// https://github.com/yuwf/gobase
+
 import (
 	"gobase/consul"
 	"gobase/goredis"
 	"gobase/redis"
 )
 
-// https://github.com/yuwf/gobase
-
 // 服务配置
 type ServiceConfig struct {
 	// 要求字符串类型的字段小写且去掉前后空格
-	ServiceName string `json:"servicename,omitempty"` // 服务器类型名，用来分组
-	ServiceId   string `json:"serviceid,omitempty"`   // 服务器唯一ID
+	ServiceName string `json:"servicename,omitempty"` // 服务器类型名，用来分组【内部会转化成去空格的小写】
+	ServiceId   string `json:"serviceid,omitempty"`   // 服务器唯一ID【内部会转化成去空格的小写】
 	ServiceAddr string `json:"serviceaddr,omitempty"` // 服务器对外暴露的地址
 	ServicePort int    `json:"serviceport,omitempty"` // 服务器对外暴露的端口
+	RoutingTag  string `json:"routertag,omitempty"`   // 支持路由tag group内再次进行分组【内部会转化成去空格的小写】
 }
 type ServiceIdConfMap = map[string]*ServiceConfig
 type ServiceNameConfMap = map[string]ServiceIdConfMap

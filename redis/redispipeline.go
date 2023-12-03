@@ -92,7 +92,7 @@ func (p *RedisPipeline) do(ctx context.Context) error {
 	defer func() {
 		logOut := true
 		if ctx != nil {
-			nolog := ctx.Value("nolog")
+			nolog := ctx.Value(CtxKey_nolog)
 			if nolog != nil {
 				logOut = false
 			}

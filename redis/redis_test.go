@@ -67,7 +67,7 @@ func BenchmarkRedisScript(b *testing.B) {
 	`)
 	ok, err := redis.DoScript(context.TODO(), script, "__key123__", "12faskfjlkasjffffffffffffffffffffdddddddlksfjdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkdkd3", "fasfas", "asf", "1", "2", "3", "4", "5", "6")
 	println(ok, err)
-	ok, err = redis.DoScript(context.WithValue(context.TODO(), "nolog", 123), script, "__key123__", "456")
+	ok, err = redis.DoScript(context.WithValue(context.TODO(), CtxKey_nolog, 123), script, "__key123__", "456")
 	println(ok, err)
 	v, err := redis.DoCmdInt(context.TODO(), "GET", "__key123__")
 	println(v, err)

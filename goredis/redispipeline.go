@@ -46,6 +46,7 @@ func (p *RedisPipeline) HMGetObj(ctx context.Context, key string, v interface{})
 	args := []interface{}{"hmget", key}
 	args, elemts, structtype, err := hmgetObjArgs(args, v)
 	if err != nil {
+		log.Error().Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMGetObj Param error")
 		return err
 	}
 	redisCmd.hmgetCallback(elemts, structtype) // 管道里这个不会返回错误

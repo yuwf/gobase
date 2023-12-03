@@ -16,21 +16,23 @@ type HttpGroup[T any] struct {
 	sync.RWMutex
 	hb       *HttpBackend[T]            // 上层对象
 	services map[string]*HttpService[T] // 锁保护
-	hashring *consistent.Consistent     // 哈希环，填充serviceId, 交给HttpService来填充，他有健康检查和熔断机制
+	// 线程安全
+	hashring    *consistent.Consistent // 哈希环，填充serviceId, 交给HttpService来填充，他有健康检查和熔断机制
+	tagHashring *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
 }
 
 func NewHttpGroup[T any](hb *HttpBackend[T]) *HttpGroup[T] {
 	g := &HttpGroup[T]{
-		hb:       hb,
-		services: map[string]*HttpService[T]{},
-		hashring: consistent.New(),
+		hb:          hb,
+		services:    map[string]*HttpService[T]{},
+		hashring:    consistent.New(),
+		tagHashring: new(sync.Map),
 	}
 	return g
 }
 
 func (g *HttpGroup[T]) GetService(serviceId string) *HttpService[T] {
-	serviceId = strings.ToLower(serviceId)
-	serviceId = strings.TrimSpace(serviceId)
+	serviceId = strings.TrimSpace(strings.ToLower(serviceId))
 	g.RLock()
 	defer g.RUnlock()
 	service, ok := g.services[serviceId]
@@ -40,14 +42,44 @@ func (g *HttpGroup[T]) GetService(serviceId string) *HttpService[T] {
 	return nil
 }
 
-// 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
-func (g *HttpGroup[T]) GetServiceByHash(hash string) *HttpService[T] {
+func (g *HttpGroup[T]) GetServices() map[string]*HttpService[T] {
 	g.RLock()
 	defer g.RUnlock()
+	ss := map[string]*HttpService[T]{}
+	for serviceId, service := range g.services {
+		ss[serviceId] = service
+	}
+	return ss
+}
+
+// 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
+func (g *HttpGroup[T]) GetServiceByHash(hash string) *HttpService[T] {
 	serviceId, err := g.hashring.Get(hash)
 	if err != nil {
 		return nil
 	}
+	g.RLock()
+	defer g.RUnlock()
+	service, ok := g.services[serviceId]
+	if ok {
+		return service
+	}
+	return nil
+}
+
+// 根据tag和哈希环获取对象 hash可以用用户id或者其他稳定的数据
+func (g *HttpGroup[T]) GetServiceByTagAndHash(tag, hash string) *HttpService[T] {
+	tag = strings.TrimSpace(strings.ToLower(tag))
+	hasrhing, ok := g.tagHashring.Load(tag)
+	if !ok {
+		return nil
+	}
+	serviceId, err := hasrhing.(*consistent.Consistent).Get(hash)
+	if err != nil {
+		return nil
+	}
+	g.RLock()
+	defer g.RUnlock()
 	service, ok := g.services[serviceId]
 	if ok {
 		return service
@@ -69,6 +101,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 				Str("ServiceId", service.conf.ServiceId).
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
+				Str("RoutingTag", service.conf.RoutingTag).
 				Msg("HttpBackend Lost And Del")
 			service.close() // 关闭
 			delete(g.services, serviceId)
@@ -85,6 +118,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 					Str("ServiceId", service.conf.ServiceId).
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
+					Str("RoutingTag", service.conf.RoutingTag).
 					Msg("HttpBackend Change")
 
 				service.close() // 先关闭
@@ -102,6 +136,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 				Str("ServiceId", conf.ServiceId).
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).
+				Str("RoutingTag", conf.RoutingTag).
 				Msg("HttpBackend Add")
 			service, err := NewHttpService(conf, g)
 			if err != nil {
@@ -126,4 +161,31 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 		}
 	}
 	return len
+}
+
+// 添加到哈希环
+func (g *HttpGroup[T]) addHashring(serviceId, routingTag string) {
+	g.hashring.Add(serviceId)
+	if len(routingTag) > 0 {
+		hashring, ok := g.tagHashring.Load(routingTag)
+		if ok {
+			hashring.(*consistent.Consistent).Add(serviceId)
+		} else {
+			hashring := consistent.New()
+			hashring.Add(serviceId)
+			g.tagHashring.Store(routingTag, hashring)
+		}
+	}
+}
+
+// 从哈希环中移除
+func (g *HttpGroup[T]) removeHashring(serviceId, routingTag string) {
+	g.hashring.Remove(serviceId)
+	hashring, ok := g.tagHashring.Load(routingTag)
+	if ok {
+		hashring.(*consistent.Consistent).Remove(serviceId)
+		if len(hashring.(*consistent.Consistent).Members()) == 0 {
+			g.tagHashring.Delete(routingTag)
+		}
+	}
 }

@@ -6,26 +6,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io/ioutil"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
-	"gobase/loader"
+	"gobase/utils"
 
+	"github.com/afex/hystrix-go/hystrix"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
-
-const CtxKey_nolog = "nolog" // 不打印掉应该能日志，错误日志还会打印 值：不受限制 一般写1
-
-// 参数配置
-type ParamConfig struct {
-	IgnoreHost []string `json:"ignorehost,omitempty"` // 日志忽略Host
-	IgnorePath []string `json:"ignorepath,omitempty"` // 日志忽略Path
-}
-
-var ParamConf loader.JsonLoader[ParamConfig]
 
 type HttpRequest struct {
 	Method string // 请求方法 GET POST ..
@@ -213,12 +206,21 @@ func JsonRequest2[T any](ctx context.Context, method, addr string, body interfac
 }
 
 func (h *HttpRequest) call(ctx context.Context) {
-	_, h.Err = url.Parse(h.Addr)
-	if h.Err != nil {
-		h.errPos = "Parse Addr error"
-		return
+	// 熔断检查
+	if name, ok := ParamConf.Get().IsHystrixURL(h.Addr); ok {
+		hystrix.DoC(ctx, name, func(ctx context.Context) error {
+			h.call_(ctx)
+			return h.Err
+		}, func(ctx context.Context, err error) error {
+			// 出现了熔断
+			h.Err = err
+			return err
+		})
+	} else {
+		h.call_(ctx)
 	}
-
+}
+func (h *HttpRequest) call_(ctx context.Context) {
 	// 准备body和header
 	reqBody := bytes.NewBuffer(h.Data)
 	var request *http.Request
@@ -232,9 +234,7 @@ func (h *HttpRequest) call(ctx context.Context) {
 	}
 
 	// 请求
-	client := http.Client{
-		Timeout: time.Second * 8,
-	}
+	client := getHttpClient(request.URL.Host)
 	h.Resp, h.Err = client.Do(request)
 	if h.Err != nil {
 		h.errPos = "Request Do error"
@@ -242,12 +242,49 @@ func (h *HttpRequest) call(ctx context.Context) {
 	}
 
 	// 读取返回值
-	h.RespData, h.Err = ioutil.ReadAll(h.Resp.Body)
+	h.RespData, h.Err = io.ReadAll(h.Resp.Body)
 	defer h.Resp.Body.Close()
 	if h.Err != nil {
 		h.errPos = "Response ReadAll error"
 		return
 	}
+}
+
+//连接池
+var lock sync.RWMutex
+var httpPool map[string]*http.Client = make(map[string]*http.Client)
+
+func getHttpClient(host string) *http.Client {
+	lock.RLock()
+	if client, ok := httpPool[host]; ok {
+		lock.RUnlock()
+		return client
+	}
+	lock.RUnlock()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Dial: func(network, addr string) (net.Conn, error) {
+				c, err := net.DialTimeout(network, addr, time.Second*3)
+				if err != nil {
+					return nil, err
+				}
+				return c, nil
+			},
+			MaxIdleConnsPerHost:   128,
+			MaxIdleConns:          2048,
+			IdleConnTimeout:       time.Second * 90,
+			ExpectContinueTimeout: time.Second * 15,
+		},
+		Timeout: time.Second * 8,
+	}
+	lock.Lock()
+	//double check
+	if _, ok := httpPool[host]; !ok {
+		httpPool[host] = client
+	}
+	lock.Unlock()
+	return client
 }
 
 func (h *HttpRequest) done(ctx context.Context) {
@@ -261,17 +298,9 @@ func (h *HttpRequest) done(ctx context.Context) {
 
 	// 忽略的路径
 	if logOut && h.URL != nil {
-		for _, v := range ParamConf.Get().IgnoreHost {
-			if h.URL.Host == v {
-				logOut = false
-			}
-		}
+		logOut = !ParamConf.Get().IsIgnoreHost(h.URL.Host)
 		if logOut {
-			for _, v := range ParamConf.Get().IgnorePath {
-				if h.URL.Path == v {
-					logOut = false
-				}
-			}
+			logOut = !ParamConf.Get().IsIgnoreHost(h.URL.Path)
 		}
 	}
 
@@ -285,16 +314,17 @@ func (h *HttpRequest) done(ctx context.Context) {
 		}
 		l = l.Str("addr", h.Addr).Interface("header", h.Header)
 		if h.Body != nil {
-			l = l.Interface("body", h.Body)
+			l = utils.LogFmtHttpBody2(l, "req", h.Header, h.Body, ParamConf.Get().BodyLogLimit)
 		} else if len(h.Data) > 0 {
-			l = l.Bytes("body", h.Data)
+			l = utils.LogFmtHttpBody(l, "req", h.Header, h.Data, ParamConf.Get().BodyLogLimit)
 		}
 		if h.Resp != nil {
 			l.Int("status", h.Resp.StatusCode)
+			l.Interface("respheader", h.Resp.Header)
 			if h.RespBody != nil {
-				l = l.Interface("resp", h.RespBody)
+				l = utils.LogFmtHttpBody2(l, "resp", h.Header, h.RespBody, ParamConf.Get().BodyLogLimit)
 			} else if len(h.RespData) > 0 {
-				l = l.Bytes("resp", h.RespData)
+				l = utils.LogFmtHttpBody(l, "resp", h.Resp.Header, h.RespData, ParamConf.Get().BodyLogLimit)
 			}
 		}
 		if len(h.errPos) > 0 {

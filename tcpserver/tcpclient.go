@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"reflect"
-	"runtime"
 	"sync"
 	"time"
 
@@ -87,8 +86,12 @@ func newTCPClient[ClientInfo any](conn *tcp.TCPConn, event TCPEvent[ClientInfo])
 func (tc *TCPClient[ClientInfo]) clear() {
 	// 清空下rpc
 	tc.rpc.Range(func(key, value interface{}) bool {
-		ch := value.(chan interface{})
-		ch <- nil
+		rpc, ok := tc.rpc.LoadAndDelete(key)
+		if ok {
+			ch := rpc.(chan interface{})
+			ch <- nil // 写一个空的
+			close(ch) // 删除的地方负责关闭
+		}
 		return true
 	})
 }
@@ -200,18 +203,28 @@ func (tc *TCPClient[ClientInfo]) SendText(data []byte) error {
 // 成功返回解析后的消息
 func (tc *TCPClient[ClientInfo]) SendRPCMsg(rpcId interface{}, msg interface{}, timeout time.Duration) (interface{}, error) {
 	if tc.event != nil {
-		_, ok := tc.rpc.Load(rpcId)
-		if ok {
-			err := errors.New("rpcId exist")
-			log.Error().Str("Name", tc.ConnName()).Err(err).Interface("rpcID", rpcId).Interface("Msg", msg).Msg("SendRPCMsg error")
-			return nil, err
-		}
 		msgLog := zerolog.Dict()
 		buf, err := tc.event.EncodeMsg(msg, tc, msgLog)
 		if err != nil {
 			log.Error().Str("Name", tc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendRPCMsg error")
 			return nil, err
 		}
+		_, ok := tc.rpc.Load(rpcId)
+		if ok {
+			err := errors.New("rpcId exist")
+			log.Error().Str("Name", tc.ConnName()).Err(err).Interface("rpcID", rpcId).Interface("Msg", msg).Msg("SendRPCMsg error")
+			return nil, err
+		}
+		// 先添加一个记录，防止Send还没出来就收到了回复
+		ch := make(chan interface{})
+		tc.rpc.Store(rpcId, ch)
+		defer func() {
+			_, ok = tc.rpc.LoadAndDelete(rpcId)
+			if ok {
+				close(ch) // 删除的地方负责关闭
+			}
+		}()
+		// 发送
 		if tc.wsh != nil {
 			err = wsutil.WriteServerBinary(tc.wsh, buf)
 		} else {
@@ -226,10 +239,7 @@ func (tc *TCPClient[ClientInfo]) SendRPCMsg(rpcId interface{}, msg interface{}, 
 		if len(logBuf.Bytes()) > 1 {
 			log.Debug().Str("Name", tc.ConnName()).Dict("Msg", msgLog).Msg("SendRPCMsg")
 		}
-		ch := make(chan interface{})
-		tc.rpc.Store(rpcId, ch)
-		// 协程让出，等待消息回复或超时
-		runtime.Gosched()
+		// 等待rpc回复
 		timer := time.NewTimer(timeout)
 		var resp interface{}
 		select {
@@ -243,8 +253,6 @@ func (tc *TCPClient[ClientInfo]) SendRPCMsg(rpcId interface{}, msg interface{}, 
 		case <-timer.C:
 			err = errors.New("timeout")
 		}
-		tc.rpc.Delete(rpcId)
-		close(ch)
 		if resp == nil && err == nil { //clear函数的调用会触发此情况
 			err = errors.New("close")
 		}
@@ -297,10 +305,11 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 		rpcId := tc.event.CheckRPCResp(msg)
 		if rpcId != nil {
 			// rpc
-			rpc, ok := tc.rpc.Load(rpcId)
+			rpc, ok := tc.rpc.LoadAndDelete(rpcId)
 			if ok {
 				ch := rpc.(chan interface{})
 				ch <- msg
+				close(ch) // 删除的地方负责关闭
 			} else {
 				// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
 				// 消息放入协程池中

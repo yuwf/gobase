@@ -172,7 +172,6 @@ func Compact[T comparable](collection []T) []T {
 			result = append(result, item)
 		}
 	}
-
 	return result
 }
 
@@ -182,6 +181,31 @@ func IsSorted[T Ordered](collection []T) bool {
 			return false
 		}
 	}
-
 	return true
+}
+
+// 通配符匹配 支持?和*
+func IsMatch(pattern, str string) bool {
+	si, pi := 0, 0
+	sSi, pSi := -1, -1
+	for si < len(str) {
+		if pi < len(pattern) && (str[si] == pattern[pi] || pattern[pi] == '?') {
+			si++
+			pi++
+		} else if pi < len(pattern) && pattern[pi] == '*' {
+			sSi = si
+			pSi = pi
+			pi++
+		} else if pSi == -1 {
+			return false
+		} else {
+			sSi++
+			si = sSi
+			pi = pSi + 1
+		}
+	}
+	for pi < len(pattern) && pattern[pi] == '*' {
+		pi++
+	}
+	return pi == len(pattern)
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/gomodule/redigo/redis"
 )
 
+const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
+
 type Config struct {
 	Addr          string `json:"addr,omitempty"` //地址,host:port
 	Passwd        string `json:"passwd,omitempty"`
@@ -162,7 +164,7 @@ func (r *Redis) docmd(ctx context.Context, redisCmd *RedisCommond) {
 	} else {
 		logOut := true
 		if ctx != nil {
-			nolog := ctx.Value("nolog")
+			nolog := ctx.Value(CtxKey_nolog)
 			if nolog != nil {
 				logOut = false
 			}

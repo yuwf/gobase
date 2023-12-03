@@ -17,15 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const CtxKey_nonilerr = "nonilerr" // 命令移除空错误 值：不受限制 一般写1
-const CtxKey_nolog = "nolog"       // 不打印掉应该能日志，错误日志还会打印 值：不受限制 一般写1
-
-const CtxKey_rediscmd = "rediscmd"     // 值：RedisCommand对象 一般情况内部使用
-const CtxKey_caller = "caller"         // 值：CallerDesc对象 一般情况内部使用
-const CtxKey_cmddesc = "cmddesc"       // 值：字符串 命令描述 一般情况内部使用
-const CtxKey_noscript = "noscript"     // 屏蔽NOSCRIPT的错误提示(在使用Reids.Run命令时建议使用)， 值：不受限制 一般情况内部使用
-const CtxKey_scriptname = "scriptname" // 值：字符串 优化日志输出 一般情况内部使用
-
 const typeErrFmt = "%v(%v) not to %v"
 
 func IsNilError(err error) bool {

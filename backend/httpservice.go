@@ -84,9 +84,14 @@ func (hs *HttpService[T]) loopTick() {
 		if err == nil {
 			// 能连通
 			if !add {
-				log.Info().Str("ServiceName", hs.conf.ServiceName).Str("ServiceId", hs.conf.ServiceId).Err(err).Str("Addr", cheackAddr).Msg("HttpService connect success")
+				log.Info().Str("ServiceName", hs.conf.ServiceName).
+					Str("ServiceId", hs.conf.ServiceId).
+					Str("RoutingTag", hs.conf.RoutingTag).
+					Err(err).
+					Str("Addr", cheackAddr).
+					Msg("HttpService connect success")
 				add = true
-				hs.g.hashring.Add(hs.conf.ServiceId)
+				hs.g.addHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
 
 				// 回调
 				for _, h := range hs.g.hb.hook {
@@ -94,10 +99,15 @@ func (hs *HttpService[T]) loopTick() {
 				}
 			}
 		} else {
-			log.Error().Str("ServiceName", hs.conf.ServiceName).Str("ServiceId", hs.conf.ServiceId).Err(err).Str("Addr", cheackAddr).Msg("HttpService connect fail")
+			log.Error().Str("ServiceName", hs.conf.ServiceName).
+				Str("ServiceId", hs.conf.ServiceId).
+				Str("RoutingTag", hs.conf.RoutingTag).
+				Err(err).
+				Str("Addr", cheackAddr).
+				Msg("HttpService connect fail")
 			if add {
 				add = false
-				hs.g.hashring.Remove(hs.conf.ServiceId)
+				hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
 
 				// 回调
 				for _, h := range hs.g.hb.hook {
@@ -106,13 +116,13 @@ func (hs *HttpService[T]) loopTick() {
 			}
 		}
 	}
-	hs.g.hashring.Remove(hs.conf.ServiceId) // 保证移除掉
-	hs.quit <- 1                            // 反写让Close退出
+	hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag) // 保证移除掉
+	hs.quit <- 1                                               // 反写让Close退出
 }
 
 func (hs *HttpService[T]) close() {
 	// 先从哈希环中移除
-	hs.g.hashring.Remove(hs.conf.ServiceId)
+	hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
 	// 异步关闭
 	go func() {
 		if atomic.CompareAndSwapInt32(&hs.quitFlag, 0, 1) {

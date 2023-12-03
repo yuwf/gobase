@@ -192,7 +192,7 @@ func (r *Redis) CreateRegister(key string, cfg *RegistryInfo) *Register {
 		key:    key,
 		values: []string{},
 		state:  0,
-		ctx:    context.WithValue(context.TODO(), "nolog", 1),
+		ctx:    context.WithValue(context.TODO(), CtxKey_nolog, 1),
 		quit:   make(chan int),
 	}
 	// 生成注册的value
@@ -207,7 +207,7 @@ func (r *Redis) CreateRegisterEx(key string, cfgs []*RegistryInfo) *Register {
 		key:    key,
 		values: []string{},
 		state:  0,
-		ctx:    context.WithValue(context.TODO(), "nolog", 1),
+		ctx:    context.WithValue(context.TODO(), CtxKey_nolog, 1),
 		quit:   make(chan int),
 	}
 	// 生成注册的value

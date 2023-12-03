@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const CtxKey_nolog = "nolog" // 不打印掉应该能日志，错误日志还会打印 值：不受限制 一般写1
+const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
 
 type Config struct {
 	Source string `json:"source,omitempty"` //地址 username:password@tcp(ip:port)/database?charset=utf8

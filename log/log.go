@@ -30,7 +30,7 @@ func init() {
 
 	// 不初始化默认只有控制台输出
 	console := zerolog.ConsoleWriter{Out: os.Stderr, NoColor: false, TimeFormat: zerolog.TimeFieldFormat}
-	log.Logger = log.Output(console).With().Caller().Logger()
+	log.Logger = zerolog.New(console).With().Timestamp().Caller().Logger()
 }
 
 func InitLog(prefix string) error {
@@ -42,10 +42,10 @@ func InitLog(prefix string) error {
 	if os.Getenv("LOG_ASYNC") == "1" {
 		logwrite.locker = new(nulllock)
 		asyncWriteLog = diode.NewWriter(logwrite, 32*1024, 0, func(missed int) {})
-		log.Logger = log.Output(asyncWriteLog).With().Caller().Logger()
+		log.Logger = zerolog.New(asyncWriteLog).With().Timestamp().Caller().Logger()
 	} else {
 		logwrite.locker = new(sync.Mutex)
-		log.Logger = log.Output(logwrite).With().Caller().Logger()
+		log.Logger = zerolog.New(logwrite).With().Timestamp().Caller().Logger()
 	}
 	logwrite.prefix = prefix
 	logwrite.createFile()
