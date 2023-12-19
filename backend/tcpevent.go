@@ -6,9 +6,9 @@ import (
 	"context"
 	"errors"
 
-	"gobase/consul"
-	"gobase/goredis"
-	"gobase/redis"
+	"github.com/yuwf/gobase/consul"
+	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/redis"
 
 	"github.com/rs/zerolog"
 )

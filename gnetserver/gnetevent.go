@@ -23,7 +23,7 @@ type GNetEvent[ClientInfo any] interface {
 	// err     发生error，消息发送失败
 	Encode(data []byte, gc *GNetClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error)
 
-	// Encode 编码实现
+	// EncodeMsg 编码实现
 	// msgLog 外层不写日志，内部就也不输出日志
 	// 返回值为 data,err
 	// data    编码出的buf内容

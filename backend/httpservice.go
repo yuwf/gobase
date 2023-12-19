@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobase/tcp"
+	"github.com/yuwf/gobase/tcp"
 
 	"github.com/rs/zerolog/log"
 )

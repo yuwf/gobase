@@ -60,7 +60,7 @@ func LogFmtHttpBody(l *zerolog.Event, logkey string, header http.Header, data []
 	return l
 }
 
-func LogFmtHttpBody2(l *zerolog.Event, logkey string, header http.Header, body interface{}, limit int) *zerolog.Event {
+func LogFmtHttpInterface(l *zerolog.Event, logkey string, header http.Header, body interface{}, limit int) *zerolog.Event {
 	data, err := json.Marshal(body)
 	if err != nil {
 		l = l.Interface(logkey, body)
@@ -75,7 +75,7 @@ func LogFmtHttpBody2(l *zerolog.Event, logkey string, header http.Header, body i
 		b = append(b, data[len(data)-limit/2:])
 		l = l.Bytes(logkey, bytes.Join(b, []byte("")))
 	} else {
-		l = l.Bytes(logkey, data)
+		l = l.RawJSON(logkey, data)
 	}
 	return l
 }

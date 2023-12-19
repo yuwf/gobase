@@ -8,11 +8,10 @@ import (
 	sync "sync"
 	"time"
 
-	"gobase/alert"
-	"gobase/utils"
-
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/rs/zerolog/log"
+	"github.com/yuwf/gobase/alert"
+	"github.com/yuwf/gobase/utils"
 )
 
 func init() {
@@ -344,10 +343,12 @@ func (r *MsgDispatch[Mr, Cr]) handle(ctx context.Context, handler *msgHandler, m
 	// rpc回复
 	if respMsg != nil {
 		resp := mer.Resp(respMsg)
-		// 查找对象的SendMsg函数，发送回复消息
-		cer, ok := any(c).(Conner)
-		if ok {
-			cer.SendMsg(resp)
+		if resp != nil {
+			// 查找对象的SendMsg函数，发送回复消息
+			cer, ok := any(c).(Conner)
+			if ok {
+				cer.SendMsg(resp)
+			}
 		}
 	}
 }

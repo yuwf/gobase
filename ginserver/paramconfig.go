@@ -5,16 +5,18 @@ package ginserver
 import (
 	"strings"
 
-	"gobase/loader"
-	"gobase/utils"
-
 	"github.com/afex/hystrix-go/hystrix"
+	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 )
 
 // 参数配置
 type ParamConfig struct {
-	IgnoreIP     []string    `json:"ignoreip,omitempty"`   // 日志忽略的IP 支持?*通配符 不区分大小写
-	IgnorePath   []string    `json:"ignorepath,omitempty"` // 日志忽略的Path 支持?*通配符 不区分大小写
+	IgnoreIP       []string `json:"ignoreip,omitempty"`       // 日志忽略的IP 支持?*通配符 不区分大小写
+	IgnorePath     []string `json:"ignorepath,omitempty"`     // 日志忽略的Path 支持?*通配符 不区分大小写
+	IgnoreHeadIP   []string `json:"ignoreheadip,omitempty"`   // 日志中请求头和回复头忽略的IP 支持?*通配符 不区分大小写
+	IgnoreHeadPath []string `json:"ignoreheadpath,omitempty"` // 日志请求头和回复头忽略的Path 支持?*通配符 不区分大小写
+
 	Cors         *CorsConfig `json:"cors,omitempty"`
 	BodyLogLimit int         `json:"bodyloglimit,omitempty"` // body日志限制 <=0 表示不限制
 	// Timeout: 执行 command 的超时时间 单位为毫秒
@@ -39,6 +41,12 @@ func (c *ParamConfig) Normalize() {
 	for i := 0; i < len(c.IgnorePath); i++ {
 		c.IgnorePath[i] = strings.ToLower(c.IgnorePath[i])
 	}
+	for i := 0; i < len(c.IgnoreHeadIP); i++ {
+		c.IgnoreHeadIP[i] = strings.ToLower(c.IgnoreHeadIP[i])
+	}
+	for i := 0; i < len(c.IgnoreHeadPath); i++ {
+		c.IgnoreHeadPath[i] = strings.ToLower(c.IgnoreHeadPath[i])
+	}
 	for path, config := range c.Hystrix {
 		path = strings.ToLower(path)
 		c.Hystrix[path] = config
@@ -60,6 +68,26 @@ func (c *ParamConfig) IsIgnoreIP(ip string) bool {
 func (c *ParamConfig) IsIgnorePath(path string) bool {
 	v := strings.ToLower(path)
 	for _, o := range c.IgnorePath {
+		if utils.IsMatch(o, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *ParamConfig) IsIgnoreHeadIP(ip string) bool {
+	v := strings.ToLower(ip)
+	for _, o := range c.IgnoreHeadIP {
+		if utils.IsMatch(o, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *ParamConfig) IsIgnoreHeadPath(path string) bool {
+	v := strings.ToLower(path)
+	for _, o := range c.IgnoreHeadPath {
 		if utils.IsMatch(o, v) {
 			return true
 		}

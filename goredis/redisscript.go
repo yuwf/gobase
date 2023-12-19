@@ -5,7 +5,7 @@ package goredis
 import (
 	"context"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/redis/go-redis/v9"
 )

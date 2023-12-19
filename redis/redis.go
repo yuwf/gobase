@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 

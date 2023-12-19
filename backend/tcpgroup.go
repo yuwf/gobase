@@ -122,12 +122,12 @@ func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
 				Int("RegistryPort", service.conf.ServicePort).
 				Str("RoutingTag", service.conf.RoutingTag)
 			if TcpParamConf.Get().Immediately {
-				l.Msg("TcpBackend Lost And Del")
+				l.Msg("TcpBackend Update Lost And Del")
 				delete(g.services, serviceId) // 先删
 				service.close()               // 关闭
 				remove = append(remove, service)
 			} else {
-				l.Msg("TcpBackend Lost")
+				l.Msg("TcpBackend Update Lost")
 				atomic.StoreInt32(&service.confDestroy, 1)
 			}
 		}
@@ -143,7 +143,7 @@ func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
 					Str("RoutingTag", service.conf.RoutingTag).
-					Msg("TcpBackend Change")
+					Msg("TcpBackend Update Change")
 
 				service.close() // 先关闭
 				// 创建
@@ -159,7 +159,7 @@ func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
 					Str("RoutingTag", service.conf.RoutingTag).
-					Msg("TcpBackend Recover")
+					Msg("TcpBackend Update Recover")
 			}
 		} else {
 			// 新增
@@ -168,7 +168,7 @@ func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).
 				Str("RoutingTag", conf.RoutingTag).
-				Msg("TcpBackend Add")
+				Msg("TcpBackend Update Add")
 			service, err := NewTcpService(conf, g)
 			if err != nil {
 				continue
@@ -199,7 +199,7 @@ func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
 func (g *TcpGroup[T]) addHashring(serviceId, routingTag string) {
 	g.hashring.Add(serviceId)
 	if len(routingTag) > 0 {
-		hashring, ok := g.tagHashring.Load(serviceId)
+		hashring, ok := g.tagHashring.Load(routingTag)
 		if ok {
 			hashring.(*consistent.Consistent).Add(serviceId)
 		} else {
@@ -213,7 +213,7 @@ func (g *TcpGroup[T]) addHashring(serviceId, routingTag string) {
 // 从哈希环中移除
 func (g *TcpGroup[T]) removeHashring(serviceId, routingTag string) {
 	g.hashring.Remove(serviceId)
-	hashring, ok := g.tagHashring.Load(serviceId)
+	hashring, ok := g.tagHashring.Load(routingTag)
 	if ok {
 		hashring.(*consistent.Consistent).Remove(serviceId)
 		if len(hashring.(*consistent.Consistent).Members()) == 0 {

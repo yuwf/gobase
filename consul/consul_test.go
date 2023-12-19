@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"gobase/loader"
-	_ "gobase/log"
+	"github.com/yuwf/gobase/loader"
+	_ "github.com/yuwf/gobase/log"
 
 	"github.com/rs/zerolog/log"
 )

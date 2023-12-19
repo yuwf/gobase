@@ -5,8 +5,8 @@ package gnetserver
 import (
 	"strings"
 
-	"gobase/loader"
-	"gobase/utils"
+	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 )
 
 const CtxKey_WS = "ws"     // 表示ws连接 值：不受限制 一般写1

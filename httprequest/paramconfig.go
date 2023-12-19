@@ -5,19 +5,21 @@ package httprequest
 import (
 	"strings"
 
-	"gobase/loader"
-	"gobase/utils"
-
 	"github.com/afex/hystrix-go/hystrix"
+	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 )
 
 const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
 
 // 参数配置
 type ParamConfig struct {
-	IgnoreHost   []string `json:"ignorehost,omitempty"`   // 日志忽略的Host 支持?*通配符 不区分大小写
-	IgnorePath   []string `json:"ignorepath,omitempty"`   // 日志忽略的Path 支持?*通配符 不区分大小写
-	BodyLogLimit int      `json:"bodyloglimit,omitempty"` // body日志限制 <=0 表示不限制
+	IgnoreHost     []string `json:"ignorehost,omitempty"`     // 日志忽略的Host 支持?*通配符 不区分大小写
+	IgnorePath     []string `json:"ignorepath,omitempty"`     // 日志忽略的Path 支持?*通配符 不区分大小写
+	IgnoreHeadHost []string `json:"ignoreheadhost,omitempty"` // 日志中请求头和回复头忽略的IP 支持?*通配符 不区分大小写
+	IgnoreHeadPath []string `json:"ignoreheadpath,omitempty"` // 日志请求头和回复头忽略的Path 支持?*通配符 不区分大小写
+
+	BodyLogLimit int `json:"bodyloglimit,omitempty"` // body日志限制 <=0 表示不限制
 	// Timeout: 执行 command 的超时时间 单位为毫秒
 	// MaxConcurrentRequests: 最大并发量
 	// RequestVolumeThreshold: 一个统计窗口 10 秒内请求数量 达到这个请求数量后才去判断是否要开启熔断
@@ -39,6 +41,12 @@ func (c *ParamConfig) Normalize() {
 	for i := 0; i < len(c.IgnorePath); i++ {
 		c.IgnorePath[i] = strings.ToLower(c.IgnorePath[i])
 	}
+	for i := 0; i < len(c.IgnoreHeadHost); i++ {
+		c.IgnoreHeadHost[i] = strings.ToLower(c.IgnoreHeadHost[i])
+	}
+	for i := 0; i < len(c.IgnoreHeadPath); i++ {
+		c.IgnoreHeadPath[i] = strings.ToLower(c.IgnoreHeadPath[i])
+	}
 	for url, config := range c.Hystrix {
 		url = strings.ToLower(url)
 		c.Hystrix[url] = config
@@ -59,6 +67,26 @@ func (c *ParamConfig) IsIgnoreHost(host string) bool {
 func (c *ParamConfig) IsIgnorePath(path string) bool {
 	v := strings.ToLower(path)
 	for _, o := range c.IgnorePath {
+		if utils.IsMatch(o, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *ParamConfig) IsIgnoreHeadHost(host string) bool {
+	v := strings.ToLower(host)
+	for _, o := range c.IgnoreHeadHost {
+		if utils.IsMatch(o, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *ParamConfig) IsIgnoreHeadPath(path string) bool {
+	v := strings.ToLower(path)
+	for _, o := range c.IgnoreHeadPath {
 		if utils.IsMatch(o, v) {
 			return true
 		}

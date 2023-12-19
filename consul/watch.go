@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"gobase/loader"
+	"github.com/yuwf/gobase/loader"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/rs/zerolog/log"

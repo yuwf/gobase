@@ -4,11 +4,10 @@ import (
 	"testing"
 	"time"
 
-	_ "gobase/log"
-
 	"github.com/rs/zerolog/log"
+	_ "github.com/yuwf/gobase/log"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 )
 
 func BenchmarkAlert(b *testing.B) {

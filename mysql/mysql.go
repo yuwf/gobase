@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"

@@ -1,9 +1,9 @@
 package backend
 
 import (
-	"gobase/consul"
-	"gobase/goredis"
-	"gobase/redis"
+	"github.com/yuwf/gobase/consul"
+	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/redis"
 )
 
 // https://github.com/yuwf/gobase

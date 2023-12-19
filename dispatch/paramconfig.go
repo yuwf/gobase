@@ -3,16 +3,15 @@ package dispatch
 // https://github.com/yuwf/gobase
 
 import (
-	"gobase/loader"
-
 	"github.com/afex/hystrix-go/hystrix"
+	"github.com/yuwf/gobase/loader"
 )
 
 // 参数配置
 type ParamConfig struct {
-	IngoreMsg    []string               // 忽略的消息日志
-	ingoreMsg    map[string]interface{} // 根据IngoreMsg来生成，快速查找
-	TimeOutCheck int                    // 消息超时监控 单位秒 默认0不开启监控
+	IngoreMsg    []string               `json:"ignoremsg,omitempty"`    // 忽略的消息日志
+	ingoreMsg    map[string]interface{} `json:"-"`                      // 根据IngoreMsg来生成，快速查找
+	TimeOutCheck int                    `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
 	// Timeout: 执行 command 的超时时间 单位为毫秒
 	// MaxConcurrentRequests: 最大并发量
 	// RequestVolumeThreshold: 一个统计窗口 10 秒内请求数量 达到这个请求数量后才去判断是否要开启熔断

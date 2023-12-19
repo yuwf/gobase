@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"gobase/tcp"
-	"gobase/utils"
+	"github.com/yuwf/gobase/tcp"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/gobwas/ws/wsutil"
 	"github.com/rs/zerolog"
@@ -36,7 +36,7 @@ type TCPClient[ClientInfo any] struct {
 	removeAddr net.TCPAddr               // 拷贝出来 防止conn关闭时发生变化
 	localAddr  net.TCPAddr               //
 	event      TCPEvent[ClientInfo]      // 事件处理器
-	seq        *utils.Sequence           // 消息顺序处理工具 协程安全
+	seq        utils.Sequence            // 消息顺序处理工具 协程安全
 	info       *ClientInfo               // 客户端信息 内容修改需要外层加锁控制
 	connName   func() string             // // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
 	wsh        *tcpWSHandler[ClientInfo] // websocket处理
@@ -58,9 +58,6 @@ func newTCPClient[ClientInfo any](conn *tcp.TCPConn, event TCPEvent[ClientInfo])
 		info:       new(ClientInfo),
 		ctx:        context.TODO(),
 		rpc:        new(sync.Map),
-	}
-	if ParamConf.Get().MsgSeq {
-		tc.seq = &utils.Sequence{}
 	}
 
 	// 调用对象的ClientName和ClientCreate函数
@@ -313,7 +310,7 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 			} else {
 				// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
 				// 消息放入协程池中
-				if tc.seq != nil {
+				if ParamConf.Get().MsgSeq {
 					tc.seq.Submit(func() {
 						tc.event.OnMsg(ctx, msg, tc)
 					})
@@ -325,7 +322,7 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 			}
 		} else {
 			// 消息放入协程池中
-			if tc.seq != nil {
+			if ParamConf.Get().MsgSeq {
 				tc.seq.Submit(func() {
 					tc.event.OnMsg(ctx, msg, tc)
 				})

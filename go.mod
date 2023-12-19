@@ -1,4 +1,4 @@
-module gobase
+module github.com/yuwf/gobase
 
 go 1.18
 

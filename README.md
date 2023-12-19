@@ -1,8 +1,3 @@
-## mod中引入方式
-- 代码放到工程mod所在目录的上一级目录
-- require gobase v0.0.0-00000000000000-000000000000
-- replace gobase => ../gobase
-
 ## 目录结构
 ---
 ### alert
@@ -23,10 +18,6 @@
 - 实现consul监听服务器发现
 - 实现consul注册
 - 实现consul配置监听加载，外层用loader容器包配置即可
-
----
-### dispatch
-- 分发器，支持消息注册分发
 
 ---
 ### ginserver

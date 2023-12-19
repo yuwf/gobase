@@ -3,7 +3,7 @@ package apollo
 import (
 	"testing"
 
-	"gobase/loader"
+	"github.com/yuwf/gobase/loader"
 
 	"github.com/rs/zerolog/log"
 )

@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobase/tcp"
-	"gobase/utils"
+	"github.com/yuwf/gobase/tcp"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )
@@ -471,7 +471,7 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 				if timeout > 0 && time.Since(tclient.lastActiveTime) > time.Second*time.Duration(timeout) {
 					tc.Close(errors.New("activetimeout"))
 				} else {
-					if tc.seq != nil {
+					if ParamConf.Get().MsgSeq {
 						tc.seq.Submit(func() {
 							s.event.OnTick(tc.ctx, tc)
 						})

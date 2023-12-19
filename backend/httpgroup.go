@@ -102,7 +102,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
 				Str("RoutingTag", service.conf.RoutingTag).
-				Msg("HttpBackend Lost And Del")
+				Msg("HttpBackend Update Lost And Del")
 			service.close() // 关闭
 			delete(g.services, serviceId)
 			remove = append(remove, service)
@@ -119,7 +119,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
 					Str("RoutingTag", service.conf.RoutingTag).
-					Msg("HttpBackend Change")
+					Msg("HttpBackend Update Change")
 
 				service.close() // 先关闭
 				// 创建
@@ -137,7 +137,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).
 				Str("RoutingTag", conf.RoutingTag).
-				Msg("HttpBackend Add")
+				Msg("HttpBackend Update Add")
 			service, err := NewHttpService(conf, g)
 			if err != nil {
 				continue

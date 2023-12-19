@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobase/tcp"
-	"gobase/utils"
+	"github.com/yuwf/gobase/tcp"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -22,13 +22,13 @@ import (
 // T是和业务相关的客户端信息结构
 type TcpService[T any] struct {
 	// 不可修改
-	g           *TcpGroup[T]    // 上层对象
-	conf        *ServiceConfig  // 服务器发现的配置
-	confDestroy int32           // 表示将配置是否销毁了 原子操作
-	address     string          // 地址
-	seq         *utils.Sequence // 消息顺序处理工具 协程安全
-	info        *T              // 客户端信息，内容修改需要外层加锁控制
-	conn        *tcp.TCPConn    // 连接对象，协程安全
+	g           *TcpGroup[T]   // 上层对象
+	conf        *ServiceConfig // 服务器发现的配置
+	confDestroy int32          // 表示将配置是否销毁了 原子操作
+	address     string         // 地址
+	seq         utils.Sequence // 消息顺序处理工具 协程安全
+	info        *T             // 客户端信息，内容修改需要外层加锁控制
+	conn        *tcp.TCPConn   // 连接对象，协程安全
 
 	ctx context.Context // 本连接的上下文
 
@@ -54,9 +54,6 @@ func NewTcpService[T any](conf *ServiceConfig, g *TcpGroup[T]) (*TcpService[T], 
 		rpc:         new(sync.Map),
 		quit:        make(chan int),
 		quitFlag:    0,
-	}
-	if TcpParamConf.Get().MsgSeq {
-		ts.seq = &utils.Sequence{}
 	}
 	conn, err := tcp.NewTCPConn(ts.address, ts)
 	if err != nil {
@@ -243,7 +240,7 @@ func (ts *TcpService[T]) loopTick() {
 			break
 		}
 		if ts.g.tb.event != nil {
-			if ts.seq != nil {
+			if TcpParamConf.Get().MsgSeq {
 				ts.seq.Submit(func() {
 					ts.g.tb.event.OnTick(ts.ctx, ts)
 				})
@@ -395,7 +392,7 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 				close(ch) // 删除的地方负责关闭
 			} else {
 				// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
-				if ts.seq != nil {
+				if TcpParamConf.Get().MsgSeq {
 					ts.seq.Submit(func() {
 						ts.g.tb.event.OnMsg(ts.ctx, msg, ts)
 					})
@@ -407,7 +404,7 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 			}
 		} else {
 			// 消息放入协程池中
-			if ts.seq != nil {
+			if TcpParamConf.Get().MsgSeq {
 				ts.seq.Submit(func() {
 					ts.g.tb.event.OnMsg(ts.ctx, msg, ts)
 				})

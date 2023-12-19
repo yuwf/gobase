@@ -3,9 +3,9 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
-	"gobase/consul"
-	"gobase/goredis"
-	"gobase/redis"
+	"github.com/yuwf/gobase/consul"
+	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/redis"
 )
 
 // 服务配置

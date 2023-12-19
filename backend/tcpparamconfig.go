@@ -2,7 +2,7 @@ package backend
 
 // https://github.com/yuwf/gobase
 
-import "gobase/loader"
+import "github.com/yuwf/gobase/loader"
 
 // 参数配置
 type TcpParamConfig struct {
@@ -11,3 +11,7 @@ type TcpParamConfig struct {
 }
 
 var TcpParamConf loader.JsonLoader[TcpParamConfig]
+
+func (c *TcpParamConfig) Create() {
+	c.MsgSeq = true // 默认为按顺序执行
+}

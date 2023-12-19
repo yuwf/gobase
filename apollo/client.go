@@ -5,7 +5,7 @@ package apollo
 import (
 	"errors"
 
-	"gobase/loader"
+	"github.com/yuwf/gobase/loader"
 
 	"github.com/apolloconfig/agollo/v4"
 	"github.com/apolloconfig/agollo/v4/env/config"

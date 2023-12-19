@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/panjf2000/gnet"
 
@@ -376,7 +376,7 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 			if timeout > 0 && time.Since(gclient.lastActiveTime) > time.Second*time.Duration(timeout) {
 				gc.Close(errors.New("activetimeout"))
 			} else {
-				if gc.seq != nil {
+				if ParamConf.Get().MsgSeq {
 					gc.seq.Submit(func() {
 						s.event.OnTick(gc.ctx, gc)
 					})

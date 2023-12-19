@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"gobase/consul"
-	"gobase/dispatch"
-	"gobase/goredis"
-	_ "gobase/log"
-	"gobase/redis"
-	"gobase/utils"
+	"github.com/yuwf/gobase/consul"
+	"github.com/yuwf/gobase/dispatch"
+	"github.com/yuwf/gobase/goredis"
+	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/redis"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

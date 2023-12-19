@@ -5,8 +5,8 @@ package tcpserver
 import (
 	"strings"
 
-	"gobase/loader"
-	"gobase/utils"
+	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 )
 
 const CtxKey_WS = "ws"     // 表示ws连接 值：不受限制 一般写1
@@ -23,7 +23,7 @@ type ParamConfig struct {
 var ParamConf loader.JsonLoader[ParamConfig]
 
 func (c *ParamConfig) Create() {
-
+	c.MsgSeq = true // 默认为按顺序执行
 }
 
 func (c *ParamConfig) Normalize() {

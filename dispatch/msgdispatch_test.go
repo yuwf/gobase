@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"gobase/utils"
-
 	"github.com/rs/zerolog/log"
+	"github.com/yuwf/gobase/utils"
 )
 
 type Client[T any] struct {

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/rs/zerolog/log"

@@ -9,7 +9,7 @@ import (
 	"net"
 	"reflect"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/gobwas/ws/wsutil"
 	"github.com/panjf2000/gnet"
@@ -33,7 +33,7 @@ type GNetClient[ClientInfo any] struct {
 	removeAddr net.TCPAddr                // 拷贝出来 防止conn关闭时发生变化
 	localAddr  net.TCPAddr                //
 	event      GNetEvent[ClientInfo]      // 事件处理器
-	seq        *utils.Sequence            // 消息顺序处理工具 协程安全
+	seq        utils.Sequence             // 消息顺序处理工具 协程安全
 	info       *ClientInfo                // 客户端信息 内容修改需要外层加锁控制
 	connName   func() string              // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
 	wsh        *gnetWSHandler[ClientInfo] // websocket处理
@@ -51,9 +51,6 @@ func newGNetClient[ClientInfo any](conn gnet.Conn, event GNetEvent[ClientInfo]) 
 		event:      event,
 		info:       new(ClientInfo),
 		ctx:        context.TODO(),
-	}
-	if ParamConf.Get().MsgSeq {
-		gc.seq = &utils.Sequence{}
 	}
 	// 调用对象的ClientName函数
 	namer, ok := any(gc.info).(ClientNamer)
@@ -210,7 +207,7 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 			break
 		}
 		// 消息放入协程池中
-		if gc.seq != nil {
+		if ParamConf.Get().MsgSeq {
 			gc.seq.Submit(func() {
 				gc.event.OnMsg(ctx, msg, gc)
 			})

@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobase/utils"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/gin-gonic/gin"
@@ -380,17 +380,24 @@ func (gs *GinServer) handle(c *gin.Context) {
 	elapsed := time.Since(entry)
 
 	if logOut {
+		logHeadOut := !ParamConf.Get().IsIgnoreHeadIP(c.ClientIP())
+		if logHeadOut {
+			logHeadOut = !ParamConf.Get().IsIgnoreHeadPath(c.Request.URL.Path)
+		}
+
 		l := log.Info().Str("clientIP", c.ClientIP()).
 			Str("method", c.Request.Method).
-			Str("path", c.Request.URL.Path).
-			Interface("header", c.Request.Header)
+			Str("path", c.Request.URL.Path)
+		if logHeadOut {
+			l = l.Interface("reqheader", c.Request.Header)
+		}
 		err, ok := c.Get("err")
 		if ok {
 			l = l.Interface("err", err)
 		}
 		req, ok := c.Get("req")
 		if ok {
-			l = utils.LogFmtHttpBody2(l, "req", c.Request.Header, req, ParamConf.Get().BodyLogLimit)
+			l = utils.LogFmtHttpInterface(l, "req", c.Request.Header, req, ParamConf.Get().BodyLogLimit)
 		} else if len(c.Request.URL.RawQuery) > 0 {
 			l = l.Str("req", c.Request.URL.RawQuery)
 		} else {
@@ -400,10 +407,12 @@ func (gs *GinServer) handle(c *gin.Context) {
 			}
 		}
 		l = l.Int("status", c.Writer.Status()).Int("elapsed", int(elapsed/time.Millisecond))
-		l = l.Interface("respheader", c.Writer.Header())
+		if logHeadOut {
+			l = l.Interface("respheader", c.Writer.Header())
+		}
 		resp, ok := c.Get("resp")
 		if ok {
-			l = utils.LogFmtHttpBody2(l, "resp", c.Request.Header, resp, ParamConf.Get().BodyLogLimit)
+			l = utils.LogFmtHttpInterface(l, "resp", c.Request.Header, resp, ParamConf.Get().BodyLogLimit)
 		} else {
 			if blw.Body.Len() > 0 {
 				l = utils.LogFmtHttpBody(l, "resp", c.Writer.Header(), blw.Body.Bytes(), ParamConf.Get().BodyLogLimit)

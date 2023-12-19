@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"gobase/httprequest"
+	"github.com/yuwf/gobase/httprequest"
 
 	"github.com/rs/zerolog/log"
 )

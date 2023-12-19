@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"gobase/backend"
-	"gobase/gnetserver"
-	"gobase/goredis"
-	"gobase/httprequest"
-	"gobase/mysql"
-	"gobase/redis"
-	"gobase/tcpserver"
+	"github.com/yuwf/gobase/backend"
+	"github.com/yuwf/gobase/gnetserver"
+	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/httprequest"
+	"github.com/yuwf/gobase/mysql"
+	"github.com/yuwf/gobase/redis"
+	"github.com/yuwf/gobase/tcpserver"
 
 	"github.com/dlclark/regexp2"
 	"github.com/gin-gonic/gin"
@@ -29,7 +29,7 @@ var (
 	//redisCnt       *prometheus.CounterVec
 	redisCntError  *prometheus.CounterVec
 	redisLatency   *prometheus.HistogramVec
-	redisKeyRegexp *regexp2.Regexp
+	redisKeyRegexp []*regexp2.Regexp
 
 	// MySQL
 	mysqlOnce sync.Once
@@ -90,11 +90,21 @@ var (
 
 func init() {
 	var err error
-	// 分割 /\{}[]<>_-:.@#
-	redisKeyRegexp, err = regexp2.Compile(`(?<=[/\\\{:_\-\.@#])(\d+|[^/\\\{\}:_\-\.@#]{17,})(?=[/\\\{\}:_\-\.@#]|$)`, regexp2.None)
-	if err != nil {
-		panic(err.Error())
+	redisExpr := []string{
+		`(?<=[/\\\{:_\-\.@#])(\d+|[^/\\\{\}:_\-\.@#]{17,})(?=[/\\\{\}:_\-\.@#]|$)`, //分割 /\{}[]<>_-:.@#
+		`(?<=[/\\\{:_\.@#])(\d+|[^/\\\{\}:_\.@#]{17,})(?=[/\\\{\}:_\.@#]|$)`,       //分割 /\{}[]<>_:.@#
+		`(?<=[/\\\{_\-\.@#])(\d+|[^/\\\{\}_\-\.@#]{17,})(?=[/\\\{\}_\-\.@#]|$)`,    //分割 /\{}[]<>_-.@#
+		`(?<=[/\\\{:_\-@#])(\d+|[^/\\\{\}:_\-@#]{17,})(?=[/\\\{\}:_\-@#]|$)`,       //分割 /\{}[]<>_-:@#
 	}
+	redisKeyRegexp = make([]*regexp2.Regexp, len(redisExpr))
+	for i, s := range redisExpr {
+		// 分割
+		redisKeyRegexp[i], err = regexp2.Compile(s, regexp2.None)
+		if err != nil {
+			panic(err.Error())
+		}
+	}
+
 	// 分割 /
 	httpPathRegexp, err = regexp2.Compile(`(?<=[/])(\d+|[^/]{17,})(?=[/]|$)`, regexp2.None)
 	if err != nil {
@@ -120,9 +130,11 @@ func redisHook(ctx context.Context, cmd *redis.RedisCommond) {
 	var key string
 	if len(cmd.Args) >= 1 {
 		k := fmt.Sprintf("%v", cmd.Args[0])
-		k, err := redisKeyRegexp.Replace(k, "*", 0, -1)
-		if err == nil {
-			key = k
+		for _, exp := range redisKeyRegexp {
+			k, err := exp.Replace(k, "*", 0, -1)
+			if err == nil && (len(key) == 0 || len(k) < len(key)) {
+				key = k
+			}
 		}
 	}
 	//redisCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
@@ -150,8 +162,13 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 			//for i := 1; i < pos; i++ {
 			//	cmdName += fmt.Sprint(cmd.Cmd.Args()[i])
 			//}
-			key = fmt.Sprint(cmd.Cmd.Args()[pos])
-			key, _ = redisKeyRegexp.Replace(key, "*", 0, -1)
+			k := fmt.Sprint(cmd.Cmd.Args()[pos])
+			for _, exp := range redisKeyRegexp {
+				k, err := exp.Replace(k, "*", 0, -1)
+				if err == nil && (len(key) == 0 || len(k) < len(key)) {
+					key = k
+				}
+			}
 		}
 
 		//redisCnt.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()

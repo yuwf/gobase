@@ -13,11 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"gobase/utils"
-
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/yuwf/gobase/utils"
 )
 
 type HttpRequest struct {
@@ -234,7 +233,9 @@ func (h *HttpRequest) call_(ctx context.Context) {
 	}
 
 	// 请求
-	client := getHttpClient(request.URL.Host)
+	client := http.Client{
+		Timeout: time.Second * 8,
+	}
 	h.Resp, h.Err = client.Do(request)
 	if h.Err != nil {
 		h.errPos = "Request Do error"
@@ -275,6 +276,7 @@ func getHttpClient(host string) *http.Client {
 			MaxIdleConns:          2048,
 			IdleConnTimeout:       time.Second * 90,
 			ExpectContinueTimeout: time.Second * 15,
+			DisableKeepAlives:     true,
 		},
 		Timeout: time.Second * 8,
 	}
@@ -300,11 +302,19 @@ func (h *HttpRequest) done(ctx context.Context) {
 	if logOut && h.URL != nil {
 		logOut = !ParamConf.Get().IsIgnoreHost(h.URL.Host)
 		if logOut {
-			logOut = !ParamConf.Get().IsIgnoreHost(h.URL.Path)
+			logOut = !ParamConf.Get().IsIgnorePath(h.URL.Path)
 		}
 	}
 
 	if logOut {
+		logHeadOut := true
+		if h.URL != nil {
+			logHeadOut = !ParamConf.Get().IsIgnoreHeadHost(h.URL.Host)
+			if logHeadOut {
+				logHeadOut = !ParamConf.Get().IsIgnoreHeadPath(h.URL.Path)
+			}
+		}
+
 		// 日志输出
 		var l *zerolog.Event
 		if h.Err != nil {
@@ -312,17 +322,22 @@ func (h *HttpRequest) done(ctx context.Context) {
 		} else {
 			l = log.Info().Int32("elapsed", int32(h.Elapsed/time.Millisecond))
 		}
-		l = l.Str("addr", h.Addr).Interface("header", h.Header)
+		l = l.Str("addr", h.Addr)
+		if logHeadOut {
+			l = l.Interface("reqheader", h.Header)
+		}
 		if h.Body != nil {
-			l = utils.LogFmtHttpBody2(l, "req", h.Header, h.Body, ParamConf.Get().BodyLogLimit)
+			l = utils.LogFmtHttpInterface(l, "req", h.Header, h.Body, ParamConf.Get().BodyLogLimit)
 		} else if len(h.Data) > 0 {
 			l = utils.LogFmtHttpBody(l, "req", h.Header, h.Data, ParamConf.Get().BodyLogLimit)
 		}
 		if h.Resp != nil {
 			l.Int("status", h.Resp.StatusCode)
-			l.Interface("respheader", h.Resp.Header)
+			if logHeadOut {
+				l = l.Interface("respheader", h.Resp.Header)
+			}
 			if h.RespBody != nil {
-				l = utils.LogFmtHttpBody2(l, "resp", h.Header, h.RespBody, ParamConf.Get().BodyLogLimit)
+				l = utils.LogFmtHttpInterface(l, "resp", h.Header, h.RespBody, ParamConf.Get().BodyLogLimit)
 			} else if len(h.RespData) > 0 {
 				l = utils.LogFmtHttpBody(l, "resp", h.Resp.Header, h.RespData, ParamConf.Get().BodyLogLimit)
 			}
