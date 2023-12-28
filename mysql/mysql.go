@@ -1,5 +1,7 @@
 package mysql
 
+// https://github.com/yuwf/gobase
+
 import (
 	"context"
 	"database/sql"

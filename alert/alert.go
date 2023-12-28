@@ -29,14 +29,12 @@ var (
 		"HttpRequest Err":     nil,
 		"HttpRequest TimeOut": nil,
 	}
-	// 报警日志 Msg前缀部分
-	// 一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点
-	// 外部可重新 LogAlertCheck 函数
+	// 单一节点报警，一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点
 	errorLogPrefix2 = map[string]interface{}{
 		"JsonLoader": nil,
 		"StrLoader":  nil,
 	}
-	// 检查报警函数，外部可赋值重定义
+	// 单一节点报警，检查报警函数，外部可赋值重定义
 	LogAlertCheck = func(prefix string) bool {
 		return true
 	}

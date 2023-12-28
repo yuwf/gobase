@@ -109,6 +109,8 @@ func (gc *GNetClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// SendMsg 发送消息对象，会调用消息对象的MsgMarshal来编码消息
+// 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
 func (gc *GNetClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsger) error {
 	if msg == nil {
 		err := errors.New("msg is empty")

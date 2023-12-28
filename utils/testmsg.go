@@ -1,5 +1,7 @@
 package utils
 
+// https://github.com/yuwf/gobase
+
 import (
 	"encoding/binary"
 	"errors"

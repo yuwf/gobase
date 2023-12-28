@@ -131,6 +131,8 @@ func (tc *TCPClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// SendMsg 发送消息对象，会调用消息对象的MsgMarshal来编码消息
+// 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
 func (tc *TCPClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsger) error {
 	if msg == nil {
 		err := errors.New("msg is empty")
@@ -179,8 +181,9 @@ func (tc *TCPClient[ClientInfo]) SendText(ctx context.Context, data []byte) erro
 	return nil
 }
 
-// 发送RPC消息并等待消息回复，需要依赖event.CheckRPCResp来判断是否rpc调用
+// SendRPCMsg 发送RPC消息并等待消息回复，需要依赖event.CheckRPCResp来判断是否rpc调用
 // 成功返回解析后的消息
+// 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
 func (tc *TCPClient[ClientInfo]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg utils.SendMsger, timeout time.Duration) (interface{}, error) {
 	if msg == nil {
 		err := errors.New("msg is empty")

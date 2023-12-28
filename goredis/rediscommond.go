@@ -392,12 +392,12 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 	// 参数检查
 	vt := reflect.TypeOf(v)
 	if vt.Kind() != reflect.Ptr {
-		err := errors.New("Bind Param Kind must be Map Pointer")
+		err := errors.New("bind param kind must be map pointer")
 		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindMap fail")
 		return err
 	}
 	if vt.Elem().Kind() != reflect.Map {
-		err := errors.New("Bind Param Kind must be Map Pointer")
+		err := errors.New("bind param kind must be map pointer")
 		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindMap fail")
 		return err
 	}
