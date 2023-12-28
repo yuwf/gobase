@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/yuwf/gobase/log"
-	"github.com/yuwf/gobase/utils"
+	_ "git.ixianlai.com/base/gobase/log"
+	"git.ixianlai.com/base/gobase/utils"
 
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/gin-gonic/gin"
@@ -39,22 +39,8 @@ func noroute(ctx context.Context, c *gin.Context) {
 }
 
 func BenchmarkGinServer(b *testing.B) {
-	ParamConf.Get().LogLevelHeadByPath = map[string]int{"/getna*": 0}
-	//ParamConf.Get().TimeOutCheck = 2
-	ParamConf.Get().Hystrix = map[string]*hystrix.CommandConfig{
-		"/hystrix": {Timeout: 10 * 1000, MaxConcurrentRequests: 10, RequestVolumeThreshold: 1, SleepWindow: 10 * 1000},
-	}
-	ParamConf.Get().Normalize()
 	server := NewGinServer(1234)
-	server.RegJsonHandler("", "/getname1", getNameTimeOut)
-	server.RegJsonHandler("", "/getname2", getName2)
 	server.RegHandler("GET", "/health", func(c *gin.Context) { c.String(http.StatusOK, "success") })
-	server.RegHandler("GET", "/hystrix", func(c *gin.Context) {
-		log.Info().Msg("sleep begin")
-		time.Sleep(10 * time.Second)
-		log.Info().Msg("sleep over")
-		c.String(http.StatusOK, "hystrix")
-	})
 	server.RegNoRouteHandler(noroute)
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
@@ -84,6 +70,24 @@ func BenchmarkGinServerTimeOut(b *testing.B) {
 	ParamConf.Get().Normalize()
 	server := NewGinServer(1234)
 	server.RegJsonHandler("", "/getnametimeout", getNameTimeOut)
+	server.Start()
+	utils.RegExit(func(s os.Signal) {
+		server.Stop() // 退出服务监听
+	})
+
+	utils.ExitWait()
+}
+
+func BenchmarkGinServerHystrix(b *testing.B) {
+	ParamConf.Get().Hystrix = map[string]*hystrix.CommandConfig{
+		"/hystrix": {Timeout: 5 * 1000, MaxConcurrentRequests: 1, RequestVolumeThreshold: 1, SleepWindow: 10 * 1000},
+	}
+	ParamConf.Get().Normalize()
+	server := NewGinServer(1234)
+	server.RegHandler("GET", "/hystrix", func(c *gin.Context) {
+		time.Sleep(6 * time.Second)
+		c.String(http.StatusOK, "hystrix OK")
+	})
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听

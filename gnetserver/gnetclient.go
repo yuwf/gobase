@@ -22,9 +22,6 @@ type ClientNamer interface {
 type ClientCreater interface {
 	ClientCreate()
 }
-type MsgIDer interface {
-	MsgID() string
-}
 
 // ClientInfo是和业务相关的客户端信息结构
 // 如果ClientInfo存在ClientCreate函数，创建链接时会调用

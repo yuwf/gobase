@@ -365,6 +365,10 @@ func (gs *GinServer) hystrix(c *gin.Context) {
 			return nil
 		}, func(ctx context.Context, err error) error {
 			// 出现了熔断
+			utils.LogCtx(log.Error(), ctx).Err(err).Str("clientIP", c.ClientIP()).Str("path", c.Request.URL.Path).Msg("GinServer Hystrix")
+			if err == hystrix.ErrTimeout { // 如果是超时，逻辑层可能是因为慢，正常来说会回复，这里先不要回复，有待商榷
+				return err
+			}
 			c.String(http.StatusServiceUnavailable, err.Error())
 			c.Error(err)
 			c.Abort()

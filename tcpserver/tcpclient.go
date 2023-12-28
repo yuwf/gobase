@@ -24,9 +24,6 @@ type ClientNamer interface {
 type ClientCreater interface {
 	ClientCreate()
 }
-type MsgIDer interface {
-	MsgID() string
-}
 
 // TCPClient是TCPServer创建的连接对象
 // ClientInfo是和业务相关的客户端信息结构

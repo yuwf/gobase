@@ -86,7 +86,7 @@ func CreateClient(conf *Config) (*Client, error) {
 // Watch 监控key配置 immediately是否先同步获取一次配置
 // watch后的key允许删除
 func (c *Client) Watch(namespace, key string, loader loader.Loader, immediately bool) error {
-	log.Info().Str("Addr", c.conf.Addr).Str("AppID", c.conf.AppID).Str("Cluster", c.conf.Cluster).
+	log.Info().Str("addr", c.conf.Addr).Str("appID", c.conf.AppID).Str("cluster", c.conf.Cluster).
 		Str("namespace", namespace).Str("key", key).
 		Msg("Apollo Watch")
 
@@ -134,7 +134,7 @@ func (c *Client) Get(namespace, key string) (string, error) {
 	if conf == nil {
 		err := errors.New("namespace not exist")
 		log.Error().Err(err).
-			Str("Addr", c.conf.Addr).Str("AppID", c.conf.AppID).Str("Cluster", c.conf.Cluster).
+			Str("addr", c.conf.Addr).Str("appID", c.conf.AppID).Str("cluster", c.conf.Cluster).
 			Str("namespace", namespace).Str("key", key).
 			Msg("Apollo Get namespace error")
 		return "", err
@@ -142,7 +142,7 @@ func (c *Client) Get(namespace, key string) (string, error) {
 	value, err := conf.GetCache().Get(key)
 	if err != nil {
 		log.Error().Err(err).
-			Str("Addr", c.conf.Addr).Str("AppID", c.conf.AppID).Str("Cluster", c.conf.Cluster).
+			Str("addr", c.conf.Addr).Str("appID", c.conf.AppID).Str("cluster", c.conf.Cluster).
 			Str("namespace", namespace).Str("key", key).
 			Msg("Apollo Get key error")
 		return "", err

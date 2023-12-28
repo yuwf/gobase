@@ -14,8 +14,8 @@ const CtxKey_Text = utils.CtxKey("text") // 数据为text格式，否则为二�
 
 // 参数配置
 type ParamConfig struct {
-	IgnoreIp []string `json:"ignoreip,omitempty"` // log输出忽略的ip 支持?*通配符 不区分大小写
-	// SendMsg接口中，参数msg实现了MsgIDer接口，输出日志等级会按照下面的配置来执行，否则按照Debug输出
+	IgnoreIp []string `json:"ignoreip,omitempty"` // 建立连接和失去连接时，log输出忽略的ip， 支持?*通配符 不区分大小写
+	// SendMsg接口中，输出日志等级会按照下面的配置来执行，否则按照Debug输出
 	// 日志级别和zerolog.Level一致
 	LogLevelMsg   int            `json:"loglevelmsg,omitempty"`   // msg消息默认的消息级别，不配置就是debug级别
 	LogLevelByMsg map[string]int `json:"loglevelbymsg,omitempty"` // 根据消息ID区分的消息日志级别，消息ID：日志级别，不配置就使用LogLevelMsg级别

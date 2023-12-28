@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/yuwf/gobase/log"
+	_ "git.ixianlai.com/base/gobase/log"
 
+	"git.ixianlai.com/base/gobase/utils"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 type Client[T any] struct {

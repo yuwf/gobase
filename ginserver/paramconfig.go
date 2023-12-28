@@ -14,6 +14,7 @@ import (
 func init() {
 	alert.AddErrorLogPrefix("GinServer RegHandler")
 	alert.AddErrorLogPrefix("GinServer TimeOut")
+	alert.AddErrorLogPrefix("GinServer Hystrix")
 }
 
 // 参数配置

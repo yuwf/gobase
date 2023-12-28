@@ -306,6 +306,9 @@ func (r *MsgDispatch[Mr, Cr]) Dispatch(ctx context.Context, m Mr, c *Cr) bool {
 				return nil
 			}, func(ctx context.Context, err error) error {
 				// 出现了熔断
+				utils.LogCtx(log.Error(), ctx).Err(err).Str("MsgID", msgid).Str("MsgType", handler.msgType.String()).Msg("MsgDispatch Hystrix")
+				// 熔断也会调用回调
+				r.callhook(ctx, msgid, 0)
 				return err
 			})
 		} else {
