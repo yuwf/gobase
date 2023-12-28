@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+
+	"github.com/rs/zerolog"
 )
 
 type TestMsgHead struct {
@@ -22,29 +24,40 @@ type TestMsgBody interface {
 type TestMsg struct {
 	TestMsgHead
 	// 根据方向不一样，填充的字段不一样
-	Body    []byte      // 接受数据时填充
+	Data    []byte      // 接受数据时填充
 	BodyMsg TestMsgBody // 发送数据填充
 }
 
 func (tm *TestMsg) Head() interface{} {
 	return &tm.TestMsgHead
 }
+func (tm *TestMsg) Body() interface{} {
+	return tm.BodyMsg
+}
 func (tm *TestMsg) MsgID() string {
 	return strconv.Itoa(int(tm.Msgid))
 }
-func (tm *TestMsg) MsgUnMarshal(msgType reflect.Type) (interface{}, error) {
+func (tm *TestMsg) MsgMarshal() ([]byte, error) {
+	buf, _ := tm.BodyMsg.Marshal()
+	data := make([]byte, 4+4+len(buf))
+	binary.LittleEndian.PutUint32(data, tm.BodyMsg.MsgID())
+	binary.LittleEndian.PutUint32(data[4:], uint32(len(buf)))
+	copy(data[8:], buf)
+	return data, nil
+}
+func (tm *TestMsg) BodyUnMarshal(msgType reflect.Type) (interface{}, error) {
 	// 测试消息Data就是字符串 不用解析
 	msg := reflect.New(msgType).Interface().(TestMsgBody)
-	msg.UnMarshal(tm.Body)
+	msg.UnMarshal(tm.Data)
 	return msg, nil
 }
-func (tm *TestMsg) Resp(resp interface{}) interface{} {
-	msg, _ := resp.(TestMsgBody)
-	return &TestMsg{
-		TestMsgHead: TestMsgHead{
-			Msgid: msg.MsgID(),
-		},
-		BodyMsg: msg,
+func (tm *TestMsg) MarshalZerologObject(e *zerolog.Event) {
+	e.Interface("Head", &tm.TestMsgHead)
+	if tm.BodyMsg != nil {
+		e.Interface("Body", tm.BodyMsg)
+	}
+	if tm.Data != nil {
+		e.Interface("Data", string(tm.Data))
 	}
 }
 
@@ -78,17 +91,6 @@ func (m *TestHeatBeatResp) UnMarshal(buf []byte) error {
 	return nil
 }
 
-// 根据要发送的消息编码出发送的二进制文件
-func TestEncodeMsg(msg interface{}) ([]byte, error) {
-	m, _ := msg.(*TestMsg)
-	buf, _ := m.BodyMsg.Marshal()
-	data := make([]byte, 4+4+len(buf))
-	binary.LittleEndian.PutUint32(data, m.BodyMsg.MsgID())
-	binary.LittleEndian.PutUint32(data[4:], uint32(len(buf)))
-	copy(data[8:], buf)
-	return data, nil
-}
-
 // 根据二进制解码出TestMsg结构
 func TestDecodeMsg(data []byte) (*TestMsg, int, error) {
 	if len(data) >= 8 {
@@ -112,7 +114,7 @@ func TestDecodeMsg(data []byte) (*TestMsg, int, error) {
 					Msgid: msgid,
 					Len:   msglen,
 				},
-				Body: data[8 : 8+msglen],
+				Data: data[8 : 8+msglen],
 			}
 			return m, int(8 + msglen), nil
 		} else {

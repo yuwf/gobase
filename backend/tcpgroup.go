@@ -3,11 +3,13 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yuwf/gobase/utils"
 	"stathat.com/c/consistent"
 )
 
@@ -92,17 +94,17 @@ func (g *TcpGroup[T]) GetServiceByTagAndHash(tag, hash string) *TcpService[T] {
 }
 
 // 广播消息
-func (g *TcpGroup[T]) Broad(buf []byte) {
+func (g *TcpGroup[T]) Broad(ctx context.Context, buf []byte) {
 	ss := g.GetServices()
 	for _, service := range ss {
-		service.Send(buf)
+		service.Send(ctx, buf)
 	}
 }
 
-func (g *TcpGroup[T]) BroadMsg(msg interface{}) {
+func (g *TcpGroup[T]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
 	ss := g.GetServices()
 	for _, service := range ss {
-		service.SendMsg(msg)
+		service.SendMsg(ctx, msg)
 	}
 }
 

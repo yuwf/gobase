@@ -110,36 +110,44 @@ func (r *Redis) Do2(ctx context.Context, args ...interface{}) RedisResultBind {
 	return redisCmd
 }
 
-// 参数v 参考hmsetObjArgs的说明
+// 针对HMGET命令 调用Cmd时，参数不需要包括field
+// 结构成员首字母需要大写，tag中必须是包含 `redis:"hello"`  其中hello就表示在redis中存储的field名称
+// 结构成员类型 : Bool, Int, Int8, Int16, Int32, Int64, Uint, Uint8, Uint16, Uint32, Uint64, Uintptr, Float32, Float64, String, []byte
+// 结构成员其他类型 : 通过Json转化
+// 传入的参数为结构的地址
+// 参数组织调用 hmsetObjArgs hmgetObjArgs
 func (r *Redis) HMGetObj(ctx context.Context, key string, v interface{}) error {
 	redisCmd := &RedisCommond{
 		Caller: utils.GetCallerDesc(1),
 	}
 	// 组织参数
-	args := []interface{}{"hmget", key}
-	args, _, _, err := hmgetObjArgs(args, v)
+	fargs, elemts, structtype, err := hmgetObjArgs(v)
 	if err != nil {
-		log.Error().Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("Redis HMGetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("Redis HMGetObj Param error")
 		return err
 	}
+	args := []interface{}{"hmget", key}
+	args = append(args, fargs...)
 	rst := r.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), args...)
 	if rst.Err() != nil {
 		return rst.Err()
 	}
-	err = redisCmd.HMGetBindObj(v)
+	// 回调
+	err = redisCmd.hmgetCallback(elemts, structtype)
 	return err
 }
 
-// 参数v 参考RedisResultBind.HMGetBindObj的说明
+// 参数v 参考Redis.HMGetObj的说明
 func (r *Redis) HMSetObj(ctx context.Context, key string, v interface{}) error {
 	caller := utils.GetCallerDesc(1)
 	// 组织参数
-	args := []interface{}{"hmset", key}
-	args, err := hmsetObjArgs(args, v)
+	fargs, err := hmsetObjArgs(v)
 	if err != nil {
-		log.Error().Err(err).Str("pos", caller.Pos()).Msg("Redis HMSetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", caller.Pos()).Msg("Redis HMSetObj Param error")
 		return err
 	}
+	args := []interface{}{"hmset", key}
+	args = append(args, fargs...)
 	rst := r.Do(context.WithValue(ctx, CtxKey_caller, caller), args...)
 	return rst.Err()
 }
@@ -197,24 +205,24 @@ func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Tim
 		noscript := ctx.Value(CtxKey_noscript)
 		if noscript != nil {
 			if logOut {
-				log.Debug().Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+				utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 					Str("cmd", cmdStr).
 					Str("pos", redisCmd.Caller.Pos()).
 					Msg("Redis NOSCRIPT")
 			}
 		} else {
-			log.Error().Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+			utils.LogCtx(log.Error(), ctx).Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", cmdStr).
 				Str("pos", redisCmd.Caller.Pos()).
 				Msg("Redis NOSCRIPT")
 		}
 	} else if cmd.Err() != nil && cmd.Err() != redis.Nil {
-		log.Error().Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+		utils.LogCtx(log.Error(), ctx).Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("pos", redisCmd.Caller.Pos()).
 			Msg("Redis cmd fail")
 	} else if logOut {
-		log.Debug().Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+		utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("reply", replyStr).
 			Str("pos", redisCmd.Caller.Pos()).
@@ -323,13 +331,13 @@ func (r *Redis) pipelineCallback(ctx context.Context, cmds []redis.Cmder, err er
 	}
 
 	if err != nil && err != redis.Nil {
-		log.Error().Err(err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+		utils.LogCtx(log.Error(), ctx).Err(err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("reply", replyStr).
 			Str("pos", redisCmd.Caller.Pos()).
 			Msg("RedisPipeline cmd fail")
 	} else if logOut {
-		log.Debug().Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+		utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("reply", replyStr).
 			Str("pos", redisCmd.Caller.Pos()).

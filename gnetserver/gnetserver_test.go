@@ -12,7 +12,6 @@ import (
 	_ "github.com/yuwf/gobase/log"
 	"github.com/yuwf/gobase/utils"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,7 +35,7 @@ func (c *ClientInfo) LastHeart() time.Time {
 }
 
 type Handler struct {
-	dispatch.MsgDispatch[utils.TestMsg, GNetClient[ClientInfo]]
+	dispatch.MsgDispatch[*utils.TestMsg, GNetClient[ClientInfo]]
 }
 
 func NewHandler() *Handler {
@@ -46,26 +45,14 @@ func NewHandler() *Handler {
 	return h
 }
 
+func (h *Handler) Context(parent context.Context) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
+}
+
 func (h *Handler) OnConnected(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 
 func (h *Handler) OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo]) {
-}
-
-func (h *Handler) Encode(data []byte, gc *GNetClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
-	msgLog.Int("Size", len(data))
-	return data, nil
-}
-
-func (h *Handler) EncodeMsg(msg interface{}, gc *GNetClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
-	m, _ := msg.(*utils.TestMsg)
-	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Interface("data", m.BodyMsg)
-	return utils.TestEncodeMsg(msg)
-}
-
-func (h *Handler) EncodeText(data []byte, gc *GNetClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
-	msgLog.Int("Size", len(data))
-	return data, nil
 }
 
 func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (interface{}, int, error) {
@@ -79,7 +66,7 @@ func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[Cli
 func (h *Handler) OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo]) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
-		gc.SendText(msg.([]byte)) // 原路返回
+		gc.SendText(ctx, msg.([]byte)) // 原路返回
 		return
 	}
 	m, _ := msg.(*utils.TestMsg)
@@ -94,12 +81,13 @@ func (h *Handler) OnTick(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 
 func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestHeatBeatReq, gc *GNetClient[ClientInfo]) {
-	gc.SendMsg(utils.TestHeatBeatRespMsg)
+
+	gc.SendMsg(ctx, utils.TestHeatBeatRespMsg)
 	gc.info.SetLastHeart(time.Now())
 }
 
 func BenchmarkGNetServer(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1236, NewHandler(), "")
+	server := NewGNetServer[int, ClientInfo](1236, NewHandler())
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -109,7 +97,7 @@ func BenchmarkGNetServer(b *testing.B) {
 }
 
 func BenchmarkGNetServerConsul(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1236, NewHandler(), "")
+	server := NewGNetServer[int, ClientInfo](1236, NewHandler())
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -155,7 +143,7 @@ func BenchmarkGNetServerConsul(b *testing.B) {
 }
 
 func BenchmarkGNetServerWS(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1236, NewHandler(), "ws")
+	server := NewGNetServerWS[int, ClientInfo](1236, NewHandler())
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听

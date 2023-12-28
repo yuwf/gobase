@@ -33,10 +33,10 @@ type TCPServer[ClientId any, ClientInfo any] struct {
 	// 监听对象
 	listener *tcp.TCPListener
 
-	//所有的连接的客户端 [tcp.TCPConn:*gClient]
+	//所有的连接的客户端 [tcp.TCPConn:*tClient]
 	connMap *sync.Map
 
-	//外层添加的用户映射 [ClientId:*gClient]
+	//外层添加的用户映射 [ClientId:*tClient]
 	clientMap *sync.Map
 
 	// 请求处理完后回调 不使用锁，默认要求提前注册好
@@ -264,23 +264,23 @@ func (s *TCPServer[ClientId, ClientInfo]) RangeClient(f func(tc *TCPClient[Clien
 	})
 }
 
-func (s *TCPServer[ClientId, ClientInfo]) Send(id ClientId, data []byte) error {
+func (s *TCPServer[ClientId, ClientInfo]) Send(ctx context.Context, id ClientId, data []byte) error {
 	client, ok := s.clientMap.Load(id)
 	if ok {
-		return client.(*tClient[ClientId, ClientInfo]).tc.Send(data)
+		return client.(*tClient[ClientId, ClientInfo]).tc.Send(ctx, data)
 	}
 	err := fmt.Errorf("not exist client %v", id)
-	log.Debug().Err(err).Int("Size", len(data)).Msg("Send error")
+	utils.LogCtx(log.Debug(), ctx).Err(err).Int("Size", len(data)).Msg("Send error")
 	return err
 }
 
-func (s *TCPServer[ClientId, ClientInfo]) SendMsg(id ClientId, msg interface{}) error {
+func (s *TCPServer[ClientId, ClientInfo]) SendMsg(ctx context.Context, id ClientId, msg utils.SendMsger) error {
 	client, ok := s.clientMap.Load(id)
 	if ok {
-		return client.(*tClient[ClientId, ClientInfo]).tc.SendMsg(msg)
+		return client.(*tClient[ClientId, ClientInfo]).tc.SendMsg(ctx, msg)
 	}
 	err := fmt.Errorf("not exist client %v", id)
-	log.Debug().Err(err).Interface("Msg", msg).Msg("SendMsg error")
+	utils.LogCtx(log.Debug(), ctx).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 	return err
 }
 
@@ -473,11 +473,11 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 				} else {
 					if ParamConf.Get().MsgSeq {
 						tc.seq.Submit(func() {
-							s.event.OnTick(tc.ctx, tc)
+							s.event.OnTick(tc.event.Context(tc.ctx), tc)
 						})
 					} else {
 						utils.Submit(func() {
-							s.event.OnTick(tc.ctx, tc)
+							s.event.OnTick(tc.event.Context(tc.ctx), tc)
 						})
 					}
 				}

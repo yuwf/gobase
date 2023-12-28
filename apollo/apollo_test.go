@@ -5,6 +5,8 @@ import (
 
 	"github.com/yuwf/gobase/loader"
 
+	_ "github.com/yuwf/gobase/log"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -22,7 +24,7 @@ var strTest loader.StrLoader
 
 func BenchmarkWatcher(b *testing.B) {
 	c := &Config{
-		Addr:      "http://127.0.0.1:8080",
+		Addr:      "127.0.0.1:8080",
 		AppID:     "251",
 		NameSpace: []string{"application"},
 	}

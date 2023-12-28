@@ -86,6 +86,10 @@ var (
 	httpBackendOnce   sync.Once
 	httpBackendServer *prometheus.GaugeVec
 	httpBackendConned *prometheus.GaugeVec
+
+	// MsgDispatch
+	msgDispatchOnce    sync.Once
+	msgDispatchLatency *prometheus.HistogramVec
 )
 
 func init() {
@@ -442,4 +446,15 @@ func (h *httpBackendHook[ServerInfo]) OnConnected(hs *backend.HttpService[Server
 func (h *httpBackendHook[ServerInfo]) OnDisConnect(hs *backend.HttpService[ServerInfo]) {
 	h.init()
 	httpBackendConned.DeleteLabelValues(hs.ServiceName(), hs.ServiceId())
+}
+
+func msgDispatchHook(ctx context.Context, msgid string, elapsed time.Duration) {
+	msgDispatchOnce.Do(func() {
+		msgDispatchLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: MetricsNamePrefix + "msgdispatch_latency",
+			Buckets: []float64{1, 2, 4, 16, 64, 256, 1024, 2048, 4096, 16384, 65392, 261568, 1046272, 2092544, 4185088, 16740352}},
+			[]string{"msgid"},
+		)
+	})
+
+	msgDispatchLatency.WithLabelValues(msgid).Observe(float64(elapsed) / float64(time.Microsecond))
 }

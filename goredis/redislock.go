@@ -55,7 +55,7 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 		err := errors.New("not OK")
 		if logOut {
 			// Debug就行 毕竟是try
-			log.Debug().Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
+			utils.LogCtx(log.Debug(), ctx).Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
 				Str("key", key).
 				Str("uuid", uuid).
 				Str("pos", caller.Pos()).
@@ -64,7 +64,7 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 		return nil, err
 	} else {
 		if logOut {
-			log.Debug().Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
+			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
 				Str("key", key).
 				Str("uuid", uuid).
 				Str("pos", caller.Pos()).
@@ -117,7 +117,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 		if now.Sub(logtime) >= time.Second*2 {
 			logtime = time.Now()
 			lock := r.Get(ctx, key)
-			log.Error().Int32("elapsed", int32(now.Sub(entry)/time.Millisecond)).
+			utils.LogCtx(log.Error(), ctx).Int32("elapsed", int32(now.Sub(entry)/time.Millisecond)).
 				Str("key", key).
 				Str("uuid", uuid).
 				Str("lock", lock.String()).
@@ -131,7 +131,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 	}
 
 	if err != nil {
-		log.Error().Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
+		utils.LogCtx(log.Error(), ctx).Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
 			Str("key", key).
 			Str("uuid", uuid).
 			Str("pos", caller.Pos()).
@@ -140,7 +140,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 		return nil, err
 	} else {
 		if logOut {
-			log.Debug().Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
+			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
 				Str("key", key).
 				Str("uuid", uuid).
 				Str("pos", caller.Pos()).

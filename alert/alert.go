@@ -21,12 +21,13 @@ var (
 	errorLogPrefixLock sync.RWMutex
 	// 报警日志 Msg前缀部分
 	errorLogPrefix = map[string]interface{}{
-		"Panic":                nil,
-		"Consul":               nil,
-		"Redis":                nil,
-		"MySQL":                nil,
-		"RandParamErr":         nil,
-		"GinServer RegHandler": nil,
+		"Panic":               nil,
+		"Consul":              nil,
+		"Redis":               nil,
+		"MySQL":               nil,
+		"RandParamErr":        nil,
+		"HttpRequest Err":     nil,
+		"HttpRequest TimeOut": nil,
 	}
 	// 报警日志 Msg前缀部分
 	// 一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点

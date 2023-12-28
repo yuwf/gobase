@@ -4,6 +4,8 @@ package apollo
 
 import (
 	"errors"
+	"net/url"
+	"strings"
 
 	"github.com/yuwf/gobase/loader"
 
@@ -24,6 +26,7 @@ var defaultClient *Client
 
 // Client apollo对象
 type Client struct {
+	conf      Config
 	apolloCli agollo.Client // apollo连接
 	l         ChangeListener
 }
@@ -40,23 +43,28 @@ func InitDefaultClient(conf *Config) (*Client, error) {
 
 // CreateClient
 func CreateClient(conf *Config) (*Client, error) {
+	addr := conf.Addr
+	if !strings.HasPrefix(addr, "http://") {
+		addr = "http://" + addr
+	}
+	url, err := url.Parse(addr)
+	if err != nil {
+		log.Error().Err(err).Msg("Apollo CreateClient Addr error")
+		return nil, err
+	}
+
 	appconf := &config.AppConfig{
 		AppID:         conf.AppID,
 		Cluster:       conf.Cluster,
 		NamespaceName: "",
-		IP:            conf.Addr,
+		IP:            url.Scheme + "://" + url.Host + "/",
 		Secret:        conf.Secret,
 		MustStart:     false,
 	}
 	if appconf.Cluster == "" {
 		appconf.Cluster = "dev"
 	}
-	for i, k := range conf.NameSpace {
-		if i > 0 {
-			appconf.NamespaceName += ","
-		}
-		appconf.NamespaceName += k
-	}
+	appconf.NamespaceName = strings.Join(conf.NameSpace, ",")
 
 	c, err := agollo.StartWithConfig(func() (*config.AppConfig, error) {
 		return appconf, nil
@@ -66,17 +74,21 @@ func CreateClient(conf *Config) (*Client, error) {
 		return nil, err
 	}
 	Client := &Client{
+		conf:      *conf, // 配置拷贝一份 防止被外部修改
 		apolloCli: c,
 	}
 	c.AddChangeListener(&Client.l)
-	log.Info().Msg("Apollo CreateClient success")
+	log.Info().Str("Addr", conf.Addr).Str("AppID", conf.AppID).Str("Cluster", conf.Cluster).Strs("NameSpace", conf.NameSpace).
+		Msg("Apollo CreateClient Success")
 	return Client, nil
 }
 
 // Watch 监控key配置 immediately是否先同步获取一次配置
 // watch后的key允许删除
 func (c *Client) Watch(namespace, key string, loader loader.Loader, immediately bool) error {
-	log.Info().Str("namespace", namespace).Str("key", key).Msg("Apollo Watch")
+	log.Info().Str("Addr", c.conf.Addr).Str("AppID", c.conf.AppID).Str("Cluster", c.conf.Cluster).
+		Str("namespace", namespace).Str("key", key).
+		Msg("Apollo Watch")
 
 	if immediately {
 		err := c.Load(namespace, key, loader)
@@ -121,12 +133,18 @@ func (c *Client) Get(namespace, key string) (string, error) {
 	conf := c.apolloCli.GetConfig(namespace)
 	if conf == nil {
 		err := errors.New("namespace not exist")
-		log.Error().Err(err).Str("namespace", namespace).Str("key", key).Msg("Apollo Get namespace error")
+		log.Error().Err(err).
+			Str("Addr", c.conf.Addr).Str("AppID", c.conf.AppID).Str("Cluster", c.conf.Cluster).
+			Str("namespace", namespace).Str("key", key).
+			Msg("Apollo Get namespace error")
 		return "", err
 	}
 	value, err := conf.GetCache().Get(key)
 	if err != nil {
-		log.Error().Err(err).Str("namespace", namespace).Str("key", key).Msg("Apollo Get key error")
+		log.Error().Err(err).
+			Str("Addr", c.conf.Addr).Str("AppID", c.conf.AppID).Str("Cluster", c.conf.Cluster).
+			Str("namespace", namespace).Str("key", key).
+			Msg("Apollo Get key error")
 		return "", err
 	}
 	return value.(string), nil

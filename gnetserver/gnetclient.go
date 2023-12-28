@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"reflect"
 
 	"github.com/yuwf/gobase/utils"
 
@@ -22,6 +21,9 @@ type ClientNamer interface {
 }
 type ClientCreater interface {
 	ClientCreate()
+}
+type MsgIDer interface {
+	MsgID() string
 }
 
 // ClientInfo是和业务相关的客户端信息结构
@@ -87,91 +89,72 @@ func (gc *GNetClient[ClientInfo]) ConnName() string {
 	return gc.connName()
 }
 
-func (gc *GNetClient[ClientInfo]) Send(data []byte) error {
-	if gc.event != nil {
-		msgLog := zerolog.Dict()
-		buf, err := gc.event.Encode(data, gc, msgLog)
-		if err != nil {
-			log.Error().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("Send error")
-			return err
-		}
-		if gc.wsh != nil {
-			err = wsutil.WriteServerBinary(gc.wsh, buf)
-		} else {
-			err = gc.conn.AsyncWrite(buf)
-		}
-		if err != nil {
-			log.Error().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("Send error")
-			return err
-		}
-		logVo := reflect.ValueOf(msgLog).Elem()
-		logBuf := logVo.FieldByName("buf")
-		if len(logBuf.Bytes()) > 1 {
-			log.Debug().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("Send")
-		}
-		return nil
+func (gc *GNetClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
+	var err error
+	if len(data) == 0 {
+		err = errors.New("data is empty")
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Msg("Send error")
+		return err
 	}
-	err := errors.New("encode is empty")
-	log.Error().Str("Name", gc.ConnName()).Err(err).Int("Size", len(data)).Msg("Send error")
-	return err
+	if gc.wsh != nil {
+		err = wsutil.WriteServerBinary(gc.wsh, data)
+	} else {
+		err = gc.conn.AsyncWrite(data)
+	}
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Int("Size", len(data)).Msg("Send error")
+		return err
+	}
+	utils.LogCtx(log.Debug(), ctx).Str("Name", gc.ConnName()).Int("Size", len(data)).Msg("Send")
+	return nil
 }
 
-func (gc *GNetClient[ClientInfo]) SendMsg(msg interface{}) error {
-	if gc.event != nil {
-		msgLog := zerolog.Dict()
-		buf, err := gc.event.EncodeMsg(msg, gc, msgLog)
-		if err != nil {
-			log.Error().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendMsg error")
-			return err
-		}
-		if gc.wsh != nil {
-			err = wsutil.WriteServerBinary(gc.wsh, buf)
-		} else {
-			err = gc.conn.AsyncWrite(buf)
-		}
-		if err != nil {
-			log.Error().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendMsg error")
-			return err
-		}
-		logVo := reflect.ValueOf(msgLog).Elem()
-		logBuf := logVo.FieldByName("buf")
-		if len(logBuf.Bytes()) > 1 {
-			log.Debug().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendMsg")
-		}
-		return nil
+func (gc *GNetClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsger) error {
+	if msg == nil {
+		err := errors.New("msg is empty")
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Msg("SendMsg error")
+		return err
 	}
-	err := errors.New("encode is empty")
-	log.Error().Str("Name", gc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
-	return err
+	data, err := msg.MsgMarshal()
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
+		return err
+	}
+	if gc.wsh != nil {
+		err = wsutil.WriteServerBinary(gc.wsh, data)
+	} else {
+		err = gc.conn.AsyncWrite(data)
+	}
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
+		return err
+	}
+	// 日志
+	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+	if logLevel >= int(log.Logger.GetLevel()) {
+		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("SendMsg")
+	}
+	return nil
 }
 
-func (gc *GNetClient[ClientInfo]) SendText(data []byte) error {
-	if gc.event != nil {
-		msgLog := zerolog.Dict()
-		buf, err := gc.event.EncodeText(data, gc, msgLog)
-		if err != nil {
-			log.Error().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("Send error")
-			return err
-		}
-		if gc.wsh != nil {
-			err = wsutil.WriteServerText(gc.wsh, buf)
-		} else {
-			err = gc.conn.AsyncWrite(buf)
-		}
-		if err != nil {
-			log.Error().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendText error")
-			return err
-		}
-		logVo := reflect.ValueOf(msgLog).Elem()
-		logBuf := logVo.FieldByName("buf")
-		if len(logBuf.Bytes()) > 1 {
-			log.Debug().Str("Name", gc.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendText")
-		}
-		return nil
+func (gc *GNetClient[ClientInfo]) SendText(ctx context.Context, data []byte) error {
+	var err error
+	if len(data) == 0 {
+		err = errors.New("data is empty")
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Msg("SendText error")
+		return err
 	}
-	err := errors.New("encode is empty")
-	log.Error().Str("Name", gc.ConnName()).Err(err).Int("Size", len(data)).Msg("SendText error")
-	return err
+	if gc.wsh != nil {
+		err = wsutil.WriteServerText(gc.wsh, data)
+	} else {
+		err = gc.conn.AsyncWrite(data)
+	}
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Int("Size", len(data)).Msg("SendText error")
+		return err
+	}
+	utils.LogCtx(log.Debug(), ctx).Str("Name", gc.ConnName()).Int("Size", len(data)).Msg("SendText")
+	return nil
 }
 
 // 会回调event的OnDisConnect
@@ -203,18 +186,17 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 		if l > 0 {
 			readlen += l
 		}
-		if l == 0 || msg == nil {
-			break
-		}
-		// 消息放入协程池中
-		if ParamConf.Get().MsgSeq {
-			gc.seq.Submit(func() {
-				gc.event.OnMsg(ctx, msg, gc)
-			})
-		} else {
-			utils.Submit(func() {
-				gc.event.OnMsg(ctx, msg, gc)
-			})
+		if msg != nil {
+			// 消息放入协程池中
+			if ParamConf.Get().MsgSeq {
+				gc.seq.Submit(func() {
+					gc.event.OnMsg(gc.event.Context(ctx), msg, gc)
+				})
+			} else {
+				utils.Submit(func() {
+					gc.event.OnMsg(gc.event.Context(ctx), msg, gc)
+				})
+			}
 		}
 		if len(buf)-readlen == 0 {
 			break // 不需要继续读取了

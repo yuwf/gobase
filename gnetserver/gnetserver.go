@@ -49,10 +49,23 @@ type gClient[ClientId any, ClientInfo any] struct {
 
 // 创建服务器
 // scheme支持tcp和ws，为空表示tcp
-func NewGNetServer[ClientId any, ClientInfo any](port int, event GNetEvent[ClientInfo], scheme string) *GNetServer[ClientId, ClientInfo] {
+func NewGNetServer[ClientId any, ClientInfo any](port int, event GNetEvent[ClientInfo]) *GNetServer[ClientId, ClientInfo] {
 	s := &GNetServer[ClientId, ClientInfo]{
 		Address:     fmt.Sprintf("tcp://:%d", port),
-		Scheme:      scheme,
+		Scheme:      "tcp",
+		event:       event,
+		state:       0,
+		EventServer: &gnet.EventServer{},
+		connMap:     new(sync.Map),
+		clientMap:   new(sync.Map),
+	}
+	return s
+}
+
+func NewGNetServerWS[ClientId any, ClientInfo any](port int, event GNetEvent[ClientInfo]) *GNetServer[ClientId, ClientInfo] {
+	s := &GNetServer[ClientId, ClientInfo]{
+		Address:     fmt.Sprintf("tcp://:%d", port),
+		Scheme:      "ws",
 		event:       event,
 		state:       0,
 		EventServer: &gnet.EventServer{},
@@ -169,23 +182,23 @@ func (s *GNetServer[ClientId, ClientInfo]) RangeClient(f func(gc *GNetClient[Cli
 	})
 }
 
-func (s *GNetServer[ClientId, ClientInfo]) Send(id ClientId, data []byte) error {
+func (s *GNetServer[ClientId, ClientInfo]) Send(ctx context.Context, id ClientId, data []byte) error {
 	client, ok := s.clientMap.Load(id)
 	if ok {
-		return client.(*gClient[ClientId, ClientInfo]).gc.Send(data)
+		return client.(*gClient[ClientId, ClientInfo]).gc.Send(ctx, data)
 	}
 	err := fmt.Errorf("not exist client %v", id)
-	log.Debug().Err(err).Int("Size", len(data)).Msg("Send error")
+	utils.LogCtx(log.Debug(), ctx).Err(err).Int("Size", len(data)).Msg("Send error")
 	return err
 }
 
-func (s *GNetServer[ClientId, ClientInfo]) SendMsg(id ClientId, msg interface{}) error {
+func (s *GNetServer[ClientId, ClientInfo]) SendMsg(ctx context.Context, id ClientId, msg utils.SendMsger) error {
 	client, ok := s.clientMap.Load(id)
 	if ok {
-		return client.(*gClient[ClientId, ClientInfo]).gc.SendMsg(msg)
+		return client.(*gClient[ClientId, ClientInfo]).gc.SendMsg(ctx, msg)
 	}
 	err := fmt.Errorf("not exist client %v", id)
-	log.Debug().Err(err).Interface("Msg", msg).Msg("SendMsg error")
+	utils.LogCtx(log.Debug(), ctx).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 	return err
 }
 
@@ -378,11 +391,11 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 			} else {
 				if ParamConf.Get().MsgSeq {
 					gc.seq.Submit(func() {
-						s.event.OnTick(gc.ctx, gc)
+						s.event.OnTick(gc.event.Context(gc.ctx), gc)
 					})
 				} else {
 					utils.Submit(func() {
-						s.event.OnTick(gc.ctx, gc)
+						s.event.OnTick(gc.event.Context(gc.ctx), gc)
 					})
 				}
 			}

@@ -220,6 +220,30 @@ func (h *HttpRequest) call(ctx context.Context) {
 	}
 }
 func (h *HttpRequest) call_(ctx context.Context) {
+
+	// 消息超时检查
+	if ParamConf.Get().TimeOutCheck > 0 {
+		// 消息处理超时监控逻辑
+		msgDone := make(chan int, 1)
+		defer close(msgDone)
+
+		utils.Submit(func() {
+			timer := time.NewTimer(time.Duration(ParamConf.Get().TimeOutCheck) * time.Second)
+			select {
+			case <-msgDone:
+				if !timer.Stop() {
+					select {
+					case <-timer.C: // try to drain the channel
+					default:
+					}
+				}
+			case <-timer.C:
+				// 消息超时了
+				h.log(ctx, int(zerolog.ErrorLevel), time.Duration(ParamConf.Get().TimeOutCheck), "HttpRequest TimeOut")
+			}
+		})
+	}
+
 	// 准备body和header
 	reqBody := bytes.NewBuffer(h.Data)
 	var request *http.Request
@@ -233,9 +257,15 @@ func (h *HttpRequest) call_(ctx context.Context) {
 	}
 
 	// 请求
-	client := http.Client{
-		Timeout: time.Second * 8,
+	var client *http.Client
+	if ParamConf.Get().Pool {
+		client = getHttpClient(h.URL.Host)
+	} else {
+		client = &http.Client{
+			Timeout: time.Second * 8,
+		}
 	}
+
 	h.Resp, h.Err = client.Do(request)
 	if h.Err != nil {
 		h.errPos = "Request Do error"
@@ -292,65 +322,75 @@ func getHttpClient(host string) *http.Client {
 func (h *HttpRequest) done(ctx context.Context) {
 	h.Elapsed = time.Since(h.entry)
 
-	// 日志是否输出
-	logOut := true
-	if ctx != nil && ctx.Value(CtxKey_nolog) != nil {
-		logOut = false
-	}
-
-	// 忽略的路径
-	if logOut && h.URL != nil {
-		logOut = !ParamConf.Get().IsIgnoreHost(h.URL.Host)
-		if logOut {
-			logOut = !ParamConf.Get().IsIgnorePath(h.URL.Path)
-		}
-	}
-
-	if logOut {
-		logHeadOut := true
-		if h.URL != nil {
-			logHeadOut = !ParamConf.Get().IsIgnoreHeadHost(h.URL.Host)
-			if logHeadOut {
-				logHeadOut = !ParamConf.Get().IsIgnoreHeadPath(h.URL.Path)
-			}
-		}
-
-		// 日志输出
-		var l *zerolog.Event
-		if h.Err != nil {
-			l = log.Error().Err(h.Err).Int32("elapsed", int32(h.Elapsed/time.Millisecond))
+	// 日志
+	if h.URL != nil {
+		if ctx != nil && ctx.Value(CtxKey_nolog) != nil {
+			// 不输出日志
 		} else {
-			l = log.Info().Int32("elapsed", int32(h.Elapsed/time.Millisecond))
-		}
-		l = l.Str("addr", h.Addr)
-		if logHeadOut {
-			l = l.Interface("reqheader", h.Header)
-		}
-		if h.Body != nil {
-			l = utils.LogFmtHttpInterface(l, "req", h.Header, h.Body, ParamConf.Get().BodyLogLimit)
-		} else if len(h.Data) > 0 {
-			l = utils.LogFmtHttpBody(l, "req", h.Header, h.Data, ParamConf.Get().BodyLogLimit)
-		}
-		if h.Resp != nil {
-			l.Int("status", h.Resp.StatusCode)
-			if logHeadOut {
-				l = l.Interface("respheader", h.Resp.Header)
+			if h.Err != nil {
+				h.log(ctx, int(zerolog.ErrorLevel), h.Elapsed, "HttpRequest Err")
+			} else {
+				logLevel := ParamConf.Get().GetLogLevel(h.URL.Path, h.URL.Host)
+				if logLevel >= int(log.Logger.GetLevel()) {
+					h.log(ctx, logLevel, h.Elapsed, "HttpRequest")
+				}
 			}
-			if h.RespBody != nil {
-				l = utils.LogFmtHttpInterface(l, "resp", h.Header, h.RespBody, ParamConf.Get().BodyLogLimit)
-			} else if len(h.RespData) > 0 {
-				l = utils.LogFmtHttpBody(l, "resp", h.Resp.Header, h.RespData, ParamConf.Get().BodyLogLimit)
-			}
-		}
-		if len(h.errPos) > 0 {
-			l.Msgf("HttpRequest %s", h.errPos)
-		} else {
-			l.Msg("HttpRequest")
 		}
 	}
 
 	// 回调
+	h.callhook(ctx)
+}
+
+func (h *HttpRequest) callhook(ctx context.Context) {
+	defer utils.HandlePanic()
+	// 回调
 	for _, f := range httpHook {
 		f(ctx, h)
 	}
+}
+
+func (h *HttpRequest) log(ctx context.Context, logLevel int, elapsed time.Duration, msg string) {
+	l := log.WithLevel(zerolog.Level(logLevel))
+	if l == nil {
+		return
+	}
+
+	logHeadOut := true
+	if h.URL != nil {
+		logLevelHead := ParamConf.Get().GetLogLevelHead(h.URL.Path, h.URL.Host)
+		if logLevelHead == int(zerolog.Disabled) || logLevelHead < logLevel {
+			logHeadOut = false
+		}
+	}
+
+	l = utils.LogCtx(l, ctx)
+
+	if h.Err != nil {
+		l = l.Err(h.Err)
+	}
+	if len(h.errPos) > 0 {
+		l = l.Str("errPos", h.errPos)
+	}
+	l = l.Int32("elapsed", int32(h.Elapsed/time.Millisecond)).Str("addr", h.Addr)
+	if logHeadOut {
+		l = l.Interface("reqheader", h.Header)
+	}
+	if h.Body != nil {
+		l = utils.LogHttpInterface(l, h.Header, "req", h.Body, ParamConf.Get().BodyLogLimit)
+	} else if len(h.Data) > 0 {
+		l = utils.LogHttpBody(l, h.Header, "req", h.Data, ParamConf.Get().BodyLogLimit)
+	}
+	if h.Resp != nil {
+		l.Int("status", h.Resp.StatusCode)
+		if logHeadOut {
+			l = l.Interface("respheader", h.Resp.Header)
+		}
+		if h.RespBody != nil {
+			l = utils.LogHttpInterface(l, h.Resp.Header, "resp", h.RespBody, ParamConf.Get().BodyLogLimit)
+		} else if len(h.RespData) > 0 {
+			l = utils.LogHttpBody(l, h.Resp.Header, "resp", h.RespData, ParamConf.Get().BodyLogLimit)
+		}
+	}
+	l.Msg(msg)
 }

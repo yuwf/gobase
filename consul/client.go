@@ -33,13 +33,13 @@ func InitDefaultClient(addr, scheme string) (*Client, error) {
 func CreateClient(addr, scheme string) (*Client, error) {
 	c, err := api.NewClient(&api.Config{Address: addr, Scheme: scheme})
 	if err != nil {
-		log.Error().Err(err).Msg("Consul NewClient error")
+		log.Error().Err(err).Str("Addr", addr).Msg("Consul NewClient error")
 		return nil, err
 	}
 	Client := &Client{
 		consulCli: c,
 	}
-	log.Info().Msg("Consul CreateClient success")
+	log.Info().Str("Addr", addr).Msg("Consul CreateClient success")
 	return Client, nil
 }
 

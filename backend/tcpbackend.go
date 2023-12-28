@@ -3,11 +3,13 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yuwf/gobase/utils"
 )
 
 // T是和业务相关的客户端信息结构 透传给TcpService
@@ -73,116 +75,116 @@ func (tb *TcpBackend[T]) GetServiceByTagAndHash(serviceName, tag, hash string) *
 }
 
 // 向TcpService发消息，指定serviceId的
-func (tb *TcpBackend[T]) Send(serviceName string, serviceId string, buf []byte) error {
+func (tb *TcpBackend[T]) Send(ctx context.Context, serviceName string, serviceId string, buf []byte) error {
 	service := tb.GetService(serviceName, serviceId)
 	if service != nil {
-		return service.Send(buf)
+		return service.Send(ctx, buf)
 	}
 	err := fmt.Errorf("not find TcpService, serviceName=%s serviceId=%s", serviceName, serviceId)
-	log.Error().Err(err).Int("size", len(buf)).Msg("TcpServiceBackend Send error")
+	utils.LogCtx(log.Error(), ctx).Err(err).Int("size", len(buf)).Msg("TcpServiceBackend Send error")
 	return err
 }
 
-func (tb *TcpBackend[T]) SendMsg(serviceName string, serviceId string, msg interface{}) error {
+func (tb *TcpBackend[T]) SendMsg(ctx context.Context, serviceName string, serviceId string, msg utils.SendMsger) error {
 	service := tb.GetService(serviceName, serviceId)
 	if service != nil {
-		return service.SendMsg(msg)
+		return service.SendMsg(ctx, msg)
 	}
 	err := fmt.Errorf("not find TcpService, serviceName=%s serviceId=%s", serviceName, serviceId)
-	log.Error().Err(err).Interface("desc", msg).Msg("TcpServiceBackend SendMsg error")
+	utils.LogCtx(log.Error(), ctx).Err(err).Interface("Msg", msg).Msg("TcpServiceBackend SendMsg error")
 	return err
 }
 
 // 向TcpGroup发消息，使用哈希获取service
-func (tb *TcpBackend[T]) SendByHash(serviceName, hash string, buf []byte) error {
+func (tb *TcpBackend[T]) SendByHash(ctx context.Context, serviceName, hash string, buf []byte) error {
 	service := tb.GetServiceByHash(serviceName, hash)
 	if service != nil {
-		return service.Send(buf)
+		return service.Send(ctx, buf)
 	}
 	err := fmt.Errorf("not find TcpService, serviceName=%s hash=%s", serviceName, hash)
-	log.Error().Err(err).Int("size", len(buf)).Msg("TcpServiceBackend SendByHash error")
+	utils.LogCtx(log.Error(), ctx).Err(err).Int("size", len(buf)).Msg("TcpServiceBackend SendByHash error")
 	return err
 }
 
-func (tb *TcpBackend[T]) SendMsgByHash(serviceName string, hash string, msg interface{}) error {
+func (tb *TcpBackend[T]) SendMsgByHash(ctx context.Context, serviceName string, hash string, msg utils.SendMsger) error {
 	service := tb.GetServiceByHash(serviceName, hash)
 	if service != nil {
-		return service.SendMsg(msg)
+		return service.SendMsg(ctx, msg)
 	}
 	err := fmt.Errorf("not find TcpService, serviceName=%s hash=%s", serviceName, hash)
-	log.Error().Err(err).Interface("desc", msg).Msg("TcpServiceBackend SendMsgByHash error")
+	utils.LogCtx(log.Error(), ctx).Err(err).Interface("Msg", msg).Msg("TcpServiceBackend SendMsgByHash error")
 	return err
 }
 
 // 向TcpGroup发消息，使用哈希获取service
-func (tb *TcpBackend[T]) SendByTagAndHash(serviceName, tag, hash string, buf []byte) error {
+func (tb *TcpBackend[T]) SendByTagAndHash(ctx context.Context, serviceName, tag, hash string, buf []byte) error {
 	service := tb.GetServiceByTagAndHash(serviceName, tag, hash)
 	if service != nil {
-		return service.Send(buf)
+		return service.Send(ctx, buf)
 	}
 	err := fmt.Errorf("not find TcpService, serviceName=%s tag=%s hash=%s", serviceName, tag, hash)
-	log.Error().Err(err).Int("size", len(buf)).Msg("TcpServiceBackend SendByTagAndHash error")
+	utils.LogCtx(log.Error(), ctx).Err(err).Int("size", len(buf)).Msg("TcpServiceBackend SendByTagAndHash error")
 	return err
 }
 
-func (tb *TcpBackend[T]) SendMsgByTagAndHash(serviceName, tag, hash string, msg interface{}) error {
+func (tb *TcpBackend[T]) SendMsgByTagAndHash(ctx context.Context, serviceName, tag, hash string, msg utils.SendMsger) error {
 	service := tb.GetServiceByTagAndHash(serviceName, tag, hash)
 	if service != nil {
-		return service.SendMsg(msg)
+		return service.SendMsg(ctx, msg)
 	}
 	err := fmt.Errorf("not find TcpService, serviceName=%s tag=%s hash=%s", serviceName, tag, hash)
-	log.Error().Err(err).Interface("desc", msg).Msg("TcpServiceBackend SendMsgByTagAndHash error")
+	utils.LogCtx(log.Error(), ctx).Err(err).Interface("Msg", msg).Msg("TcpServiceBackend SendMsgByTagAndHash error")
 	return err
 }
 
 // 向所有的TcpService发消息发送消息
-func (tb *TcpBackend[T]) Broad(buf []byte) {
+func (tb *TcpBackend[T]) Broad(ctx context.Context, buf []byte) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
-		group.BroadMsg(buf)
+		group.Broad(ctx, buf)
 	}
 }
 
-func (tb *TcpBackend[T]) BroadMsg(msg interface{}) {
+func (tb *TcpBackend[T]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
-		group.BroadMsg(msg)
+		group.BroadMsg(ctx, msg)
 	}
 }
 
 // 向Group中的所有TcpService发送消息
-func (tb *TcpBackend[T]) BroadGroup(serviceName string, buf []byte) {
+func (tb *TcpBackend[T]) BroadGroup(ctx context.Context, serviceName string, buf []byte) {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
-		group.Broad(buf)
+		group.Broad(ctx, buf)
 	}
 }
 
-func (tb *TcpBackend[T]) BroadGroupMsg(serviceName string, msg interface{}) {
+func (tb *TcpBackend[T]) BroadGroupMsg(ctx context.Context, serviceName string, msg utils.SendMsger) {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
-		group.BroadMsg(msg)
+		group.BroadMsg(ctx, msg)
 	}
 }
 
 // 向每个组中的其中一个TcpService发消息，使用哈希获取service
-func (tb *TcpBackend[T]) BroadMsgByHash(hash string, msg interface{}) {
+func (tb *TcpBackend[T]) BroadMsgByHash(ctx context.Context, hash string, msg utils.SendMsger) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
 		service := group.GetServiceByHash(hash)
 		if service != nil {
-			service.SendMsg(msg)
+			service.SendMsg(ctx, msg)
 		}
 	}
 }
 
 // 向每个组中的指定的tag组中的其中一个TcpService发消息，使用哈希获取service
-func (tb *TcpBackend[T]) BroadMsgByTagAndHash(tag, hash string, msg interface{}) {
+func (tb *TcpBackend[T]) BroadMsgByTagAndHash(ctx context.Context, tag, hash string, msg utils.SendMsger) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
 		service := group.GetServiceByTagAndHash(tag, hash)
 		if service != nil {
-			service.SendMsg(msg)
+			service.SendMsg(ctx, msg)
 		}
 	}
 }

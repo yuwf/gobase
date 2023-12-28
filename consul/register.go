@@ -45,7 +45,7 @@ type RegistryConfig struct {
 // Register consul注册对象
 type Register struct {
 	c                  *Client
-	cfg                RegistryConfig
+	conf               RegistryConfig
 	consulRegistration *api.AgentServiceRegistration
 	state              int32 // 注册状态 原子操作 0：未注册 1：注册中 2：已注册
 	// 退出检查使用
@@ -53,30 +53,30 @@ type Register struct {
 }
 
 // CreateRegister 创建注册对象
-func (c *Client) CreateRegister(cfg *RegistryConfig) (*Register, error) {
+func (c *Client) CreateRegister(conf *RegistryConfig) (*Register, error) {
 	// 一些默认参数
 	interval := 4
-	if cfg.HealthInterval > 0 {
-		interval = cfg.HealthInterval
+	if conf.HealthInterval > 0 {
+		interval = conf.HealthInterval
 	}
 	timeout := 4
-	if cfg.HealthTimeout > 0 {
-		timeout = cfg.HealthTimeout
+	if conf.HealthTimeout > 0 {
+		timeout = conf.HealthTimeout
 	}
 	deregister := 4
-	if cfg.DeregisterTime > 0 {
-		deregister = cfg.DeregisterTime
+	if conf.DeregisterTime > 0 {
+		deregister = conf.DeregisterTime
 	}
 
 	r := &api.AgentServiceRegistration{
-		ID:      cfg.RegistryID,
-		Name:    cfg.RegistryName,
-		Address: cfg.RegistryAddr,
-		Port:    cfg.RegistryPort,
-		Tags:    cfg.RegistryTag,
-		Meta:    cfg.RegistryMeta,
+		ID:      conf.RegistryID,
+		Name:    conf.RegistryName,
+		Address: conf.RegistryAddr,
+		Port:    conf.RegistryPort,
+		Tags:    conf.RegistryTag,
+		Meta:    conf.RegistryMeta,
 		Check: &api.AgentServiceCheck{
-			HTTP:                           fmt.Sprintf("http://%s:%d%s", cfg.RegistryAddr, cfg.HealthPort, cfg.HealthPath),
+			HTTP:                           fmt.Sprintf("http://%s:%d%s", conf.RegistryAddr, conf.HealthPort, conf.HealthPath),
 			Interval:                       (time.Duration(interval) * time.Second).String(),
 			Timeout:                        (time.Duration(timeout) * time.Second).String(),
 			TLSSkipVerify:                  true,
@@ -85,12 +85,12 @@ func (c *Client) CreateRegister(cfg *RegistryConfig) (*Register, error) {
 	}
 	register := &Register{
 		c:                  c,
-		cfg:                *cfg, // 配置拷贝一份 防止被外部修改
+		conf:               *conf, // 配置拷贝一份 防止被外部修改
 		consulRegistration: r,
 		state:              0,
 		quit:               make(chan int),
 	}
-	log.Info().Str("RegistryName", cfg.RegistryName).Str("RegistryID", cfg.RegistryID).Msg("Consul CreateRegister success")
+	log.Info().Str("RegistryName", conf.RegistryName).Str("RegistryID", conf.RegistryID).Msg("Consul CreateRegister success")
 	return register, nil
 }
 
@@ -100,20 +100,20 @@ func (c *Client) CreateRegister(cfg *RegistryConfig) (*Register, error) {
 // 若RegistryMeta中有 "healthListenReuse":"yes" 开启健康检查的端口监听采用复用的方式
 func (r *Register) Reg() error {
 	if !atomic.CompareAndSwapInt32(&r.state, 0, 1) {
-		log.Error().Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msg("Consul already register")
+		log.Error().Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msg("Consul already register")
 		return nil
 	}
-	log.Debug().Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msg("Consul registering")
+	log.Debug().Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msg("Consul registering")
 
 	// 开启健康检查监听
-	healthAddr := fmt.Sprintf("%s:%d", r.cfg.RegistryAddr, r.cfg.HealthPort)
-	healthListenNo, ok := r.cfg.RegistryMeta["healthListenNo"]
+	healthAddr := fmt.Sprintf("%s:%d", r.conf.RegistryAddr, r.conf.HealthPort)
+	healthListenNo, ok := r.conf.RegistryMeta["healthListenNo"]
 	var healthListener net.Listener // 健康检查监听对象
 	var err error
 	if ok && healthListenNo == "yes" {
 		// 要求不开启健康检查的端口监听
 	} else {
-		healthListenReuse, ok := r.cfg.RegistryMeta["healthListenReuse"]
+		healthListenReuse, ok := r.conf.RegistryMeta["healthListenReuse"]
 		var control func(network, address string, c syscall.RawConn) error
 		if ok && healthListenReuse == "yes" {
 			control = reusePortControl
@@ -126,7 +126,7 @@ func (r *Register) Reg() error {
 		}
 		go func() {
 			mux := http.NewServeMux()
-			mux.HandleFunc(r.cfg.HealthPath, func(w http.ResponseWriter, r *http.Request) {
+			mux.HandleFunc(r.conf.HealthPath, func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
 			log.Info().Str("addr", healthAddr).Msg("Consul health check service start")
@@ -138,7 +138,7 @@ func (r *Register) Reg() error {
 	// 注册
 	err = r.c.consulCli.Agent().ServiceRegister(r.consulRegistration)
 	if err != nil {
-		log.Error().Err(err).Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msg("Consul Cannot register")
+		log.Error().Err(err).Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msg("Consul Cannot register")
 		if healthListener != nil {
 			healthListener.Close()
 		}
@@ -150,7 +150,7 @@ func (r *Register) Reg() error {
 	go r.loop(healthListener)
 	atomic.StoreInt32(&r.state, 2)
 
-	log.Info().Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msg("Consul register success")
+	log.Info().Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msg("Consul register success")
 	return nil
 }
 
@@ -183,14 +183,14 @@ func reusePortControl(network, address string, c syscall.RawConn) error {
 // DeReg 注销
 func (r *Register) DeReg() error {
 	if !atomic.CompareAndSwapInt32(&r.state, 2, 0) {
-		log.Error().Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msg("Consul not register")
+		log.Error().Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msg("Consul not register")
 		return nil
 	}
 
 	r.quit <- 1
 	<-r.quit
 
-	log.Info().Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msgf("Consul deregistered")
+	log.Info().Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msgf("Consul deregistered")
 	return nil
 }
 
@@ -198,23 +198,23 @@ func (r *Register) loop(healthListener net.Listener) {
 	// 定时检查是否还存在，不存在重新注册下
 	for {
 		select {
-		case <-time.NewTicker(time.Duration(r.cfg.HealthInterval) * time.Second).C:
+		case <-time.NewTicker(time.Duration(r.conf.HealthInterval) * time.Second).C:
 			services, err := r.c.consulCli.Agent().Services()
 			if err != nil {
 				log.Error().Err(err).Msgf("Consul Cannot get service list")
 				continue
 			}
-			_, ok := services[r.cfg.RegistryID]
+			_, ok := services[r.conf.RegistryID]
 			if !ok {
 				err := r.c.consulCli.Agent().ServiceRegister(r.consulRegistration)
 				if err != nil {
-					log.Error().Err(err).Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msg("Consul Cannot register")
+					log.Error().Err(err).Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msg("Consul Cannot register")
 				}
 			}
 		case <-r.quit:
-			err := r.c.consulCli.Agent().ServiceDeregister(r.cfg.RegistryID)
+			err := r.c.consulCli.Agent().ServiceDeregister(r.conf.RegistryID)
 			if err != nil {
-				log.Error().Str("RegistryName", r.cfg.RegistryName).Str("RegistryID", r.cfg.RegistryID).Msgf("Consul didn't deregister")
+				log.Error().Str("RegistryName", r.conf.RegistryName).Str("RegistryID", r.conf.RegistryID).Msgf("Consul didn't deregister")
 			}
 			if healthListener != nil {
 				healthListener.Close()

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +16,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+type MsgIDer interface {
+	MsgID() string
+}
 
 // 后端连接对象 协程安全对象
 // T是和业务相关的客户端信息结构
@@ -110,116 +113,109 @@ func (ts *TcpService[T]) ConnName() string {
 	return ts.conf.ServiceName + ":" + ts.conf.ServiceId
 }
 
-func (ts *TcpService[T]) Send(data []byte) error {
-	if ts.g.tb.event != nil {
-		msgLog := zerolog.Dict()
-		buf, err := ts.g.tb.event.Encode(data, ts, msgLog)
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("Send error")
-			return err
-		}
-		err = ts.conn.Send(buf)
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("Send error")
-			return err
-		}
-		logVo := reflect.ValueOf(msgLog).Elem()
-		logBuf := logVo.FieldByName("buf")
-		if len(logBuf.Bytes()) > 1 {
-			log.Debug().Str("Name", ts.ConnName()).Dict("Msg", msgLog).Msg("Send")
-		}
-		return nil
+func (ts *TcpService[T]) Send(ctx context.Context, data []byte) error {
+	var err error
+	if len(data) == 0 {
+		err = errors.New("data is empty")
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Msg("Send error")
+		return err
 	}
-	err := errors.New("encode is empty")
-	log.Error().Str("Name", ts.ConnName()).Err(err).Int("Size", len(data)).Msg("Send error")
-	return err
+	err = ts.conn.Send(data)
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Int("Size", len(data)).Msg("Send error")
+		return err
+	}
+	utils.LogCtx(log.Debug(), ctx).Str("Name", ts.ConnName()).Int("Size", len(data)).Msg("Send")
+	return nil
 }
 
-func (ts *TcpService[T]) SendMsg(msg interface{}) error {
-	if ts.g.tb.event != nil {
-		msgLog := zerolog.Dict()
-		buf, err := ts.g.tb.event.EncodeMsg(msg, ts, msgLog)
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendMsg error")
-			return err
-		}
-		err = ts.conn.Send(buf)
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendMsg error")
-			return err
-		}
-		logVo := reflect.ValueOf(msgLog).Elem()
-		logBuf := logVo.FieldByName("buf")
-		if len(logBuf.Bytes()) > 1 {
-			log.Debug().Str("Name", ts.ConnName()).Dict("Msg", msgLog).Msg("SendMsg")
-		}
-		return nil
+func (ts *TcpService[T]) SendMsg(ctx context.Context, msg utils.SendMsger) error {
+	if msg == nil {
+		err := errors.New("msg is empty")
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Msg("SendMsg error")
+		return err
 	}
-	err := errors.New("encode is empty")
-	log.Error().Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
-	return err
+	data, err := msg.MsgMarshal()
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
+		return err
+	}
+	err = ts.conn.Send(data)
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
+		return err
+	}
+	// 日志
+	logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
+	if logLevel >= int(log.Logger.GetLevel()) {
+		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("SendMsg")
+	}
+	return nil
 }
 
-func (ts *TcpService[T]) SendRPCMsg(rpcId interface{}, msg interface{}, timeout time.Duration) (interface{}, error) {
-	if ts.g.tb.event != nil {
-		msgLog := zerolog.Dict()
-		buf, err := ts.g.tb.event.EncodeMsg(msg, ts, msgLog)
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendRPCMsg error")
-			return nil, err
-		}
-		// rpc检查
-		_, ok := ts.rpc.Load(rpcId)
+func (ts *TcpService[T]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg utils.SendMsger, timeout time.Duration) (interface{}, error) {
+	if msg == nil {
+		err := errors.New("msg is empty")
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Msg("SendRPCMsg error")
+		return nil, err
+	}
+	data, err := msg.MsgMarshal()
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
+		return nil, err
+	}
+	_, ok := ts.rpc.Load(rpcId)
+	if ok {
+		err := errors.New("rpcId exist")
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("rpcID", rpcId).Interface("Msg", msg).Msg("SendRPCMsg error")
+		return nil, err
+	}
+	// 先添加一个记录，防止Send还没出来就收到了回复
+	ch := make(chan interface{})
+	ts.rpc.Store(rpcId, ch)
+	defer func() {
+		_, ok = ts.rpc.LoadAndDelete(rpcId)
 		if ok {
-			err := errors.New("rpcId exist")
-			log.Error().Str("Name", ts.ConnName()).Err(err).Interface("rpcID", rpcId).Interface("Msg", msg).Msg("SendRPCMsg error")
-			return nil, err
+			close(ch) // 删除的地方负责关闭
 		}
-		// 先添加一个记录，防止Send还没出来就收到了回复
-		ch := make(chan interface{})
-		ts.rpc.Store(rpcId, ch)
-		defer func() {
-			_, ok = ts.rpc.LoadAndDelete(rpcId)
-			if ok {
-				close(ch) // 删除的地方负责关闭
-			}
-		}()
-		// 发送
-		err = ts.conn.Send(buf)
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Dict("Msg", msgLog).Msg("SendRPCMsg error")
-			return nil, err
-		}
-		logVo := reflect.ValueOf(msgLog).Elem()
-		logBuf := logVo.FieldByName("buf")
-		if len(logBuf.Bytes()) > 1 {
-			log.Debug().Str("Name", ts.ConnName()).Dict("Msg", msgLog).Msg("SendRPCMsg")
-		}
-		// 等待rpc回复
-		timer := time.NewTimer(timeout)
-		var resp interface{}
-		select {
-		case resp = <-ch:
-			if !timer.Stop() {
-				select {
-				case <-timer.C: // try to drain the channel
-				default:
-				}
-			}
-		case <-timer.C:
-			err = errors.New("timeout")
-		}
-		if resp == nil && err == nil { // clear函数的调用会触发此情况
-			err = errors.New("close")
-		}
-		if err != nil {
-			log.Error().Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
-		}
-		return resp, err
+	}()
+	// 发送
+	err = ts.conn.Send(data)
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
+		return nil, err
 	}
-	err := errors.New("encode is empty")
-	log.Error().Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
-	return nil, err
+	// 日志
+	logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
+	if logLevel >= int(log.Logger.GetLevel()) {
+		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("SendRPCMsg")
+	}
+
+	// 等待rpc回复
+	timer := time.NewTimer(timeout)
+	var resp interface{}
+	select {
+	case resp = <-ch:
+		if !timer.Stop() {
+			select {
+			case <-timer.C: // try to drain the channel
+			default:
+			}
+		}
+	case <-timer.C:
+		err = errors.New("timeout")
+	}
+	if resp == nil && err == nil { //clear函数的调用会触发此情况
+		err = errors.New("close")
+	}
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Msg("SendRPCMsg resp error")
+	}
+	// 日志
+	if logLevel >= int(log.Logger.GetLevel()) {
+		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Resp", resp).Msg("RecvRPCMsg")
+	}
+	return resp, err
 }
 
 func (ts *TcpService[T]) loopTick() {
@@ -242,11 +238,11 @@ func (ts *TcpService[T]) loopTick() {
 		if ts.g.tb.event != nil {
 			if TcpParamConf.Get().MsgSeq {
 				ts.seq.Submit(func() {
-					ts.g.tb.event.OnTick(ts.ctx, ts)
+					ts.g.tb.event.OnTick(ts.g.tb.event.Context(ts.ctx), ts)
 				})
 			} else {
 				utils.Submit(func() {
-					ts.g.tb.event.OnTick(ts.ctx, ts)
+					ts.g.tb.event.OnTick(ts.g.tb.event.Context(ts.ctx), ts)
 				})
 			}
 		}
@@ -378,40 +374,39 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 			return 0, err
 		}
 		decodeLen += l
-		if l == 0 || msg == nil {
-			break
-		}
-		// rpc消息检查
-		rpcId := ts.g.tb.event.CheckRPCResp(msg)
-		if rpcId != nil {
-			// rpc
-			rpc, ok := ts.rpc.LoadAndDelete(rpcId)
-			if ok {
-				ch := rpc.(chan interface{})
-				ch <- msg
-				close(ch) // 删除的地方负责关闭
+		if msg != nil {
+			// rpc消息检查
+			rpcId := ts.g.tb.event.CheckRPCResp(msg)
+			if rpcId != nil {
+				// rpc
+				rpc, ok := ts.rpc.LoadAndDelete(rpcId)
+				if ok {
+					ch := rpc.(chan interface{})
+					ch <- msg
+					close(ch) // 删除的地方负责关闭
+				} else {
+					// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
+					if TcpParamConf.Get().MsgSeq {
+						ts.seq.Submit(func() {
+							ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
+						})
+					} else {
+						utils.Submit(func() {
+							ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
+						})
+					}
+				}
 			} else {
-				// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
+				// 消息放入协程池中
 				if TcpParamConf.Get().MsgSeq {
 					ts.seq.Submit(func() {
-						ts.g.tb.event.OnMsg(ts.ctx, msg, ts)
+						ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
 					})
 				} else {
 					utils.Submit(func() {
-						ts.g.tb.event.OnMsg(ts.ctx, msg, ts)
+						ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
 					})
 				}
-			}
-		} else {
-			// 消息放入协程池中
-			if TcpParamConf.Get().MsgSeq {
-				ts.seq.Submit(func() {
-					ts.g.tb.event.OnMsg(ts.ctx, msg, ts)
-				})
-			} else {
-				utils.Submit(func() {
-					ts.g.tb.event.OnMsg(ts.ctx, msg, ts)
-				})
 			}
 		}
 		if decodeLen >= len(data) {

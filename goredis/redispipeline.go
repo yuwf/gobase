@@ -37,34 +37,36 @@ func (p *RedisPipeline) ExecNoNil(ctx context.Context) ([]redis.Cmder, error) {
 	return p.Pipeliner.Exec(context.WithValue(ctx, CtxKey_nonilerr, 1))
 }
 
-// 参数v 参考RedisResultBind.HMGetBindObj的说明
+// 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMGetObj(ctx context.Context, key string, v interface{}) error {
 	redisCmd := &RedisCommond{
 		Caller: utils.GetCallerDesc(1),
 	}
 	// 组织参数
-	args := []interface{}{"hmget", key}
-	args, elemts, structtype, err := hmgetObjArgs(args, v)
+	fargs, elemts, structtype, err := hmgetObjArgs(v)
 	if err != nil {
-		log.Error().Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMGetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMGetObj Param error")
 		return err
 	}
 	redisCmd.hmgetCallback(elemts, structtype) // 管道里这个不会返回错误
 
+	args := []interface{}{"hmget", key}
+	args = append(args, fargs...)
 	cmd := p.Pipeliner.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), args...)
 	return cmd.Err()
 }
 
-// 参数v 参考RedisResultBind.HMGetBindObj的说明
+// 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMSetObj(ctx context.Context, key string, v interface{}) error {
 	caller := utils.GetCallerDesc(1)
 	// 组织参数
-	args := []interface{}{"hmset", key}
-	args, err := hmsetObjArgs(args, v)
+	fargs, err := hmsetObjArgs(v)
 	if err != nil {
-		log.Error().Err(err).Str("pos", caller.Pos()).Msg("RedisPipeline HMSetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", caller.Pos()).Msg("RedisPipeline HMSetObj Param error")
 		return err
 	}
+	args := []interface{}{"hmset", key}
+	args = append(args, fargs...)
 	cmd := p.Pipeliner.Do(context.WithValue(ctx, CtxKey_caller, caller), args...)
 	return cmd.Err()
 }

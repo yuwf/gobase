@@ -37,3 +37,7 @@ func BenchmarkProcess(b *testing.B) {
 	//ExitWait()
 	Exit(0)
 }
+
+func BenchmarkLocalIP(b *testing.B) {
+	LocalIPString()
+}

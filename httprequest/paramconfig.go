@@ -12,12 +12,25 @@ import (
 
 const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
 
+func init() {
+	// 因为报警依赖httprequest， 所以下面的报警直接在alert中添加好了
+	//alert.AddErrorLogPrefix("HttpRequest Err")
+	//alert.AddErrorLogPrefix("HttpRequest TimeOut")
+}
+
 // 参数配置
 type ParamConfig struct {
-	IgnoreHost     []string `json:"ignorehost,omitempty"`     // 日志忽略的Host 支持?*通配符 不区分大小写
-	IgnorePath     []string `json:"ignorepath,omitempty"`     // 日志忽略的Path 支持?*通配符 不区分大小写
-	IgnoreHeadHost []string `json:"ignoreheadhost,omitempty"` // 日志中请求头和回复头忽略的IP 支持?*通配符 不区分大小写
-	IgnoreHeadPath []string `json:"ignoreheadpath,omitempty"` // 日志请求头和回复头忽略的Path 支持?*通配符 不区分大小写
+	// 日志级别和zerolog.Level一致
+	// Host和Path共存的配置，优先使用Path配置
+	LogLevel           int            `json:"loglevel,omitempty"`           // 默认的级别，不配置就是info级别
+	LogLevelByHost     map[string]int `json:"loglevelbyhost,omitempty"`     // 根据Host区分的日志级别，Host:日志级别, Host支持?*通配符 不区分大小写，不配置默认使用LogLevel级别
+	LogLevelByPath     map[string]int `json:"loglevelbypath,omitempty"`     // 根据Path区分的日志级别，Path:日志级别 Path支持?*通配符 不区分大小写，不配置默认使用LogLevel级别
+	LogLevelHead       int            `json:"loglevelhead,omitempty"`       // 请求头和回复头的日志级别，不配置就是debug级别
+	LogLevelHeadByHost map[string]int `json:"loglevelheadbyhost,omitempty"` // 根据Host区分的请求头和回复头日志级别，Host:日志级别, Host支持?*通配符 不区分大小写，不配置默认使用LogLevelHead级别
+	LogLevelHeadByPath map[string]int `json:"loglevelheadbypath,omitempty"` // 根据Path区分的请求头和回复头日志级别，Path:日志级别 Path支持?*通配符 不区分大小写，不配置默认使用LogLevelHead级别
+
+	TimeOutCheck int  `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
+	Pool         bool `json:"pool,omitempty"`         // 是否使用连接池，有些网址处理完请求就执行关闭，会导致连接池有问题，默认不使用
 
 	BodyLogLimit int `json:"bodyloglimit,omitempty"` // body日志限制 <=0 表示不限制
 	// Timeout: 执行 command 的超时时间 单位为毫秒
@@ -31,21 +44,27 @@ type ParamConfig struct {
 var ParamConf loader.JsonLoader[ParamConfig]
 
 func (c *ParamConfig) Create() {
+	c.LogLevel = 1 // 外层配置比较好控制 这里默认info级别
+	c.LogLevelByHost = map[string]int{}
+	c.LogLevelByPath = map[string]int{}
+	c.LogLevelHeadByHost = map[string]int{}
+	c.LogLevelHeadByPath = map[string]int{}
+	c.TimeOutCheck = 8 // 8秒超时报警
 	c.BodyLogLimit = 1024
 }
 
 func (c *ParamConfig) Normalize() {
-	for i := 0; i < len(c.IgnoreHost); i++ {
-		c.IgnoreHost[i] = strings.ToLower(c.IgnoreHost[i])
+	for k, v := range c.LogLevelByHost {
+		c.LogLevelByHost[strings.ToLower(k)] = v
 	}
-	for i := 0; i < len(c.IgnorePath); i++ {
-		c.IgnorePath[i] = strings.ToLower(c.IgnorePath[i])
+	for k, v := range c.LogLevelByPath {
+		c.LogLevelByPath[strings.ToLower(k)] = v
 	}
-	for i := 0; i < len(c.IgnoreHeadHost); i++ {
-		c.IgnoreHeadHost[i] = strings.ToLower(c.IgnoreHeadHost[i])
+	for k, v := range c.LogLevelHeadByHost {
+		c.LogLevelHeadByHost[strings.ToLower(k)] = v
 	}
-	for i := 0; i < len(c.IgnoreHeadPath); i++ {
-		c.IgnoreHeadPath[i] = strings.ToLower(c.IgnoreHeadPath[i])
+	for k, v := range c.LogLevelHeadByPath {
+		c.LogLevelHeadByPath[strings.ToLower(k)] = v
 	}
 	for url, config := range c.Hystrix {
 		url = strings.ToLower(url)
@@ -54,44 +73,36 @@ func (c *ParamConfig) Normalize() {
 	}
 }
 
-func (c *ParamConfig) IsIgnoreHost(host string) bool {
-	v := strings.ToLower(host)
-	for _, o := range c.IgnoreHost {
-		if utils.IsMatch(o, v) {
-			return true
+func (c *ParamConfig) GetLogLevel(path, host string) int {
+	path = strings.ToLower(path)
+	for k, v := range c.LogLevelByPath {
+		if utils.IsMatch(k, path) {
+			return v
 		}
 	}
-	return false
+	host = strings.ToLower(host)
+	for k, v := range c.LogLevelByHost {
+		if utils.IsMatch(k, host) {
+			return v
+		}
+	}
+	return c.LogLevel
 }
 
-func (c *ParamConfig) IsIgnorePath(path string) bool {
-	v := strings.ToLower(path)
-	for _, o := range c.IgnorePath {
-		if utils.IsMatch(o, v) {
-			return true
+func (c *ParamConfig) GetLogLevelHead(path, host string) int {
+	path = strings.ToLower(path)
+	for k, v := range c.LogLevelHeadByPath {
+		if utils.IsMatch(k, path) {
+			return v
 		}
 	}
-	return false
-}
-
-func (c *ParamConfig) IsIgnoreHeadHost(host string) bool {
-	v := strings.ToLower(host)
-	for _, o := range c.IgnoreHeadHost {
-		if utils.IsMatch(o, v) {
-			return true
+	host = strings.ToLower(host)
+	for k, v := range c.LogLevelHeadByHost {
+		if utils.IsMatch(k, host) {
+			return v
 		}
 	}
-	return false
-}
-
-func (c *ParamConfig) IsIgnoreHeadPath(path string) bool {
-	v := strings.ToLower(path)
-	for _, o := range c.IgnoreHeadPath {
-		if utils.IsMatch(o, v) {
-			return true
-		}
-	}
-	return false
+	return c.LogLevelHead
 }
 
 func (c *ParamConfig) IsHystrixURL(url string) (string, bool) {

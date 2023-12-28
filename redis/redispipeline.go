@@ -35,9 +35,8 @@ type Test struct {
 	F2 int `redis:"f2"`
 }
 var t Test
-pipeline.Cmd("HMGET", "testmap").HMGetBindObj(&t)
-pipeline.HMGetObj("testmap", &t)
 pipeline.HMSetObj("testmap", &t)
+pipeline.HMGetObj("testmap", &t)
 
 pipeline.Do()                           //执行管道命令，并解析返回值到绑定的对象上
 */
@@ -99,17 +98,17 @@ func (p *RedisPipeline) do(ctx context.Context) error {
 		}
 		if logOut {
 			es := time.Since(entry) / time.Millisecond
-			ln := log.Debug().Int32("elapsed", int32(es))
+			l := utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(es))
 			for i, cmd := range p.cmds {
 				if i == 8 {
 					s := fmt.Sprintf("cmd(%d)", len(p.cmds)-i)
-					ln.Str(s, "...")
+					l.Str(s, "...")
 					break
 				}
-				ln.Str(fmt.Sprint("cmd", i), cmd.CmdString())
-				ln.Str(fmt.Sprint("reply", i), cmd.ReplyString())
+				l.Str(fmt.Sprint("cmd", i), cmd.CmdString())
+				l.Str(fmt.Sprint("reply", i), cmd.ReplyString())
 			}
-			ln.Str("pos", caller.Pos()).Msg("RedisPipeline docmd")
+			l.Str("pos", caller.Pos()).Msg("RedisPipeline docmd")
 		}
 
 		p.cmds = nil // 执行完清空命令
@@ -118,13 +117,13 @@ func (p *RedisPipeline) do(ctx context.Context) error {
 	for _, cmd := range p.cmds {
 		err := conn.Send(cmd.Cmd, cmd.Args...)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", cmd.CmdString()).Str("pos", cmd.Caller.Pos()).Msg("RedisPipeline Send Error")
+			utils.LogCtx(log.Error(), ctx).Err(err).Str("cmd", cmd.CmdString()).Str("pos", cmd.Caller.Pos()).Msg("RedisPipeline Send Error")
 			return err
 		}
 	}
 	err := conn.Flush()
 	if err != nil {
-		log.Error().Err(err).Str("pos", caller.Pos()).Msg("RedisPipeline Flush Error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", caller.Pos()).Msg("RedisPipeline Flush Error")
 		return err
 	}
 
@@ -135,13 +134,13 @@ func (p *RedisPipeline) do(ctx context.Context) error {
 			cmd.Reply, cmd.Err = redis.ReceiveWithTimeout(conn, p.Timeout)
 		}
 		if cmd.Err != nil { // 命令错误 也会走到这里面
-			log.Error().Err(cmd.Err).Str("cmd", cmd.CmdString()).Str("pos", cmd.Caller.Pos()).Msg("RedisPipeline Receive Error")
+			utils.LogCtx(log.Error(), ctx).Err(cmd.Err).Str("cmd", cmd.CmdString()).Str("pos", cmd.Caller.Pos()).Msg("RedisPipeline Receive Error")
 			continue
 		}
 		if cmd.callback != nil {
 			cmd.Err = cmd.callback(cmd.Reply)
 			if err != nil {
-				log.Error().Err(cmd.Err).Str("cmd", cmd.CmdString()).Str("pos", cmd.Caller.Pos()).Msg("RedisResult Bind Error")
+				utils.LogCtx(log.Error(), ctx).Err(cmd.Err).Str("cmd", cmd.CmdString()).Str("pos", cmd.Caller.Pos()).Msg("RedisResult Bind Error")
 			}
 		}
 	}
@@ -159,7 +158,7 @@ func (p *RedisPipeline) Cmd(commandName string, args ...interface{}) RedisResult
 	return redisCmd
 }
 
-// 参数v 参考RedisResultBind.HMGetBindObj的说明
+// 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMGetObj(key string, v interface{}) error {
 	redisCmd := &RedisCommond{
 		Cmd:    "HMGET",
@@ -167,26 +166,31 @@ func (p *RedisPipeline) HMGetObj(key string, v interface{}) error {
 	}
 	// 组织参数
 	redisCmd.Args = append(redisCmd.Args, key)
-	err := redisCmd.HMGetBindObj(v)
+	fargs, elemts, structtype, err := hmgetObjArgs(v)
 	if err != nil {
+		log.Error().Err(err).Str("cmd", redisCmd.CmdString()).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMSetObj Param error")
 		return err
 	}
+	redisCmd.hmgetCallback(elemts, structtype) // 管道里这个不会返回错误
+
+	redisCmd.Args = append(redisCmd.Args, fargs...)
 	p.cmds = append(p.cmds, redisCmd)
 	return nil
 }
 
-// 参数v 参考RedisResultBind.HMGetBindObj的说明
+// 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMSetObj(key string, v interface{}) bool {
 	redisCmd := &RedisCommond{
 		Cmd:    "HMSET",
 		Caller: utils.GetCallerDesc(1),
 	}
 	redisCmd.Args = append(redisCmd.Args, key)
-	redisCmd.Err = redisCmd._HMSetObjArgs(v)
-	if redisCmd.Err != nil {
-		log.Error().Str("cmd", redisCmd.CmdString()).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMSetObj Param error")
+	fargs, err := hmsetObjArgs(v)
+	if err != nil {
+		log.Error().Err(err).Str("cmd", redisCmd.CmdString()).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMSetObj Param error")
 		return false
 	}
+	redisCmd.Args = append(redisCmd.Args, fargs...)
 
 	p.cmds = append(p.cmds, redisCmd)
 	return true

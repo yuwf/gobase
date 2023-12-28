@@ -1,4 +1,4 @@
-package goredis
+package redis
 
 // https://github.com/yuwf/gobase
 

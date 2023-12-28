@@ -50,7 +50,7 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 	r.docmd(ctx, redisCmd)
 
 	if redisCmd.Err != nil {
-		log.Error().Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", redisCmd.CmdString()).
 			Str("pos", redisCmd.Caller.Pos()).
 			Msg("Redis TryLock fail")
@@ -65,7 +65,7 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 		}
 		if logOut {
 			// Debug就行 毕竟是try
-			log.Debug().Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+			utils.LogCtx(log.Debug(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
 				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).
@@ -74,7 +74,7 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 		return nil, redisCmd.Err
 	} else {
 		if logOut {
-			log.Debug().Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
 				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).
@@ -138,7 +138,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 		elapsed := time.Since(entry)
 		if elapsed%(time.Second*2) == 0 {
 			lock, _ := r.DoCmdString(ctx, "GET", key)
-			log.Error().Int32("elapsed", int32(elapsed/time.Millisecond)).
+			utils.LogCtx(log.Error(), ctx).Int32("elapsed", int32(elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
 				Str("pos", redisCmd.Caller.Pos()).
 				Str("lock", lock).
@@ -155,7 +155,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 	redisCmd.Elapsed = time.Since(entry)
 
 	if redisCmd.Err != nil {
-		log.Error().Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", redisCmd.CmdString()).
 			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
@@ -164,7 +164,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 		return nil, redisCmd.Err
 	} else {
 		if logOut {
-			log.Debug().Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
+			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
 				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).

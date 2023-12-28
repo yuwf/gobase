@@ -463,16 +463,6 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 	return nil
 }
 
-func (c *RedisCommond) HMGetBindObj(v interface{}) error {
-	// 参数检查
-	_, elemts, structtype, err := hmgetObjArgs(nil, v)
-	if err != nil {
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult HMGetBindObj fail")
-		return err
-	}
-	return c.hmgetCallback(elemts, structtype)
-}
-
 func (c *RedisCommond) hmgetCallback(elemts []reflect.Value, structtype reflect.Type) error {
 	c.callback = func(reply interface{}) error {
 		switch r := reply.(type) {
@@ -520,7 +510,7 @@ func (c *RedisCommond) hmgetCallback(elemts []reflect.Value, structtype reflect.
 		}
 		err := c.callback(cmd.Val())
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult HMGetBindObj fail")
+			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult HMGetObj fail")
 			return err
 		}
 	}
@@ -535,7 +525,8 @@ type Test struct {
 }
 上面的对象写入args中的格式为  "f1" "f2"
 */
-func hmgetObjArgs(args []interface{}, v interface{}) ([]interface{}, []reflect.Value, reflect.Type, error) {
+func hmgetObjArgs(v interface{}) ([]interface{}, []reflect.Value, reflect.Type, error) {
+	var args []interface{}
 	// 参数检查
 	vo := reflect.ValueOf(v)
 	if vo.Kind() != reflect.Ptr {
@@ -583,7 +574,8 @@ type Test struct {
 }
 上面的对象写入args中的格式为  "f1" F1 "f2" F2
 */
-func hmsetObjArgs(args []interface{}, v interface{}) ([]interface{}, error) {
+func hmsetObjArgs(v interface{}) ([]interface{}, error) {
+	var args []interface{}
 	// 验证参数
 	vo := reflect.ValueOf(v)
 	if vo.Kind() != reflect.Ptr {
@@ -623,12 +615,23 @@ func hmsetObjArgs(args []interface{}, v interface{}) ([]interface{}, error) {
 			args = append(args, tag)
 			args = append(args, v.Interface())
 		case reflect.Slice:
-			if v.Type().Elem().Kind() != reflect.Uint8 {
-				return args, errors.New("SliceElem Kind must be Uint8(byte)")
+			if v.Type().Elem().Kind() == reflect.Uint8 {
+				args = append(args, tag)
+				args = append(args, v.Interface())
+				break
 			}
-			args = append(args, tag)
-			args = append(args, v.Interface())
+			fallthrough
 		default:
+			if v.CanInterface() {
+				data, err := json.Marshal(v.Interface())
+				if err != nil {
+					return args, err
+				}
+				args = append(args, tag)
+				args = append(args, data)
+				break
+			}
+			// 对象转化成json
 			return args, errors.New("Param not support " + fmt.Sprint(v.Type()))
 		}
 	}
@@ -853,12 +856,33 @@ func stringHelper(r string, v reflect.Value) error {
 		v.SetFloat(n)
 	case reflect.String:
 		v.SetString(r)
-	case reflect.Slice: // 用[]byte接受返回值
-		if v.Type().Elem().Kind() != reflect.Uint8 {
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
+	case reflect.Slice:
+		// 接受类型是否[]byte
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			v.SetBytes([]byte(r))
+			break
 		}
-		v.SetBytes([]byte(r))
+		fallthrough
 	default:
+		// 其他对象向json上转化
+		if v.Kind() == reflect.Pointer {
+			if v.CanInterface() && v.CanSet() {
+				v.Set(reflect.New(v.Type().Elem()))
+				err := json.Unmarshal([]byte(r), v.Interface())
+				if err != nil {
+					return err
+				}
+				break
+			}
+		} else {
+			if v.Addr().CanInterface() {
+				err := json.Unmarshal([]byte(r), v.Addr().Interface())
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
 		return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
 	}
 	return nil
@@ -892,12 +916,33 @@ func bytesHelper(r []byte, v reflect.Value) error {
 		v.SetFloat(n)
 	case reflect.String:
 		v.SetString(string(r))
-	case reflect.Slice: // 用[]byte接受返回值
-		if v.Type().Elem().Kind() != reflect.Uint8 {
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
+	case reflect.Slice:
+		// 接受类型是否[]byte
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			v.SetBytes(r)
+			break
 		}
-		v.SetBytes(r)
+		fallthrough
 	default:
+		// 其他对象向json上转化
+		if v.Kind() == reflect.Pointer {
+			if v.CanInterface() && v.CanSet() {
+				v.Set(reflect.New(v.Type().Elem()))
+				err := json.Unmarshal(r, v.Interface())
+				if err != nil {
+					return err
+				}
+				break
+			}
+		} else {
+			if v.Addr().CanInterface() {
+				err := json.Unmarshal(r, v.Addr().Interface())
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
 		return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
 	}
 	return nil

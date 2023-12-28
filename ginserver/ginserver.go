@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,6 +27,10 @@ var (
 	JsonParamBindError = map[string]interface{}{"errCode": 1, "errDesc": "Param Error"}
 	// 处理逻辑Panic了 回复状态：http.StatusBadRequest
 	PanicError = map[string]interface{}{"errCode": 500, "errDesc": "Server Error"}
+	// 生成Context
+	Context = func(parent context.Context) context.Context {
+		return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
+	}
 )
 
 type GinServer struct {
@@ -240,6 +246,16 @@ func (gs *GinServer) RegJsonHandler(method, path string, fun interface{}, option
 			c.Set("req", reqVal.Interface()) // 日志使用
 			if funType.In(2).Elem().NumField() > 0 {
 				err := c.ShouldBind(reqVal.Interface())
+
+				// ShouldBind之后，外层调用GetRawData会返回空，这里在回写一次
+				rawdata, ok := c.Get("rawdata")
+				if ok {
+					data := rawdata.([]byte)
+					if data != nil {
+						c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+					}
+				}
+
 				if err != nil {
 					c.Set("err", err)
 					if JsonParamBindError != nil {
@@ -339,7 +355,7 @@ func (w responseWriterWrapper) WriteString(s string) (int, error) {
 }
 
 func (gs *GinServer) hystrix(c *gin.Context) {
-	ctx := context.TODO()
+	ctx := Context(context.TODO())
 	c.Set("ctx", ctx)
 
 	// 熔断
@@ -363,68 +379,51 @@ func (gs *GinServer) handle(c *gin.Context) {
 	ctxv, _ := c.Get("ctx")
 	ctx, _ := ctxv.(context.Context)
 
-	// 忽略的路径
-	logOut := !ParamConf.Get().IsIgnoreIP(c.ClientIP())
-	if logOut {
-		logOut = !ParamConf.Get().IsIgnorePath(c.Request.URL.Path)
+	// Request的Body数据只能读取一次，先读取出来，然后在回写一个
+	rawdata, err := c.GetRawData()
+	if err == nil {
+		c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(rawdata))
+		c.Set("rawdata", rawdata)
 	}
+
+	// 日志
+	logOut := false
+	logMerge := true
+	logHeadOut := true
 	var blw *responseWriterWrapper
-	if logOut {
+	logLevel := ParamConf.Get().GetLogLevel(c.Request.URL.Path, c.ClientIP())
+	if logLevel >= int(log.Logger.GetLevel()) {
+		logOut = true
+		logMerge = ParamConf.Get().GetLogMerge(c.Request.URL.Path, c.ClientIP())
+		logLevelHead := ParamConf.Get().GetLogLevelHead(c.Request.URL.Path, c.ClientIP())
+		if logLevelHead == int(zerolog.Disabled) || logLevelHead < logLevel {
+			logHeadOut = false
+		}
 		blw = &responseWriterWrapper{ResponseWriter: c.Writer, Body: bytes.NewBufferString("")}
 		c.Writer = blw
 	}
 
+	if logOut && !logMerge {
+		gs.reqLog(ctx, c, logLevel, logHeadOut, "GinServer Begin")
+	}
+
 	entry := time.Now()
 	// 调用外部的逻辑
-	gs.handleNext(c)
+	gs.handleNext(ctx, c, blw)
 	elapsed := time.Since(entry)
 
 	if logOut {
-		logHeadOut := !ParamConf.Get().IsIgnoreHeadIP(c.ClientIP())
-		if logHeadOut {
-			logHeadOut = !ParamConf.Get().IsIgnoreHeadPath(c.Request.URL.Path)
-		}
-
-		l := log.Info().Str("clientIP", c.ClientIP()).
-			Str("method", c.Request.Method).
-			Str("path", c.Request.URL.Path)
-		if logHeadOut {
-			l = l.Interface("reqheader", c.Request.Header)
-		}
-		err, ok := c.Get("err")
-		if ok {
-			l = l.Interface("err", err)
-		}
-		req, ok := c.Get("req")
-		if ok {
-			l = utils.LogFmtHttpInterface(l, "req", c.Request.Header, req, ParamConf.Get().BodyLogLimit)
-		} else if len(c.Request.URL.RawQuery) > 0 {
-			l = l.Str("req", c.Request.URL.RawQuery)
+		if logMerge {
+			gs.log(ctx, c, logLevel, logHeadOut, elapsed, blw, "GinServer")
 		} else {
-			data, _ := c.GetRawData()
-			if len(data) > 0 {
-				l = utils.LogFmtHttpBody(l, "req", c.Request.Header, data, ParamConf.Get().BodyLogLimit)
-			}
+			gs.respLog(ctx, c, logLevel, logHeadOut, elapsed, blw)
 		}
-		l = l.Int("status", c.Writer.Status()).Int("elapsed", int(elapsed/time.Millisecond))
-		if logHeadOut {
-			l = l.Interface("respheader", c.Writer.Header())
-		}
-		resp, ok := c.Get("resp")
-		if ok {
-			l = utils.LogFmtHttpInterface(l, "resp", c.Request.Header, resp, ParamConf.Get().BodyLogLimit)
-		} else {
-			if blw.Body.Len() > 0 {
-				l = utils.LogFmtHttpBody(l, "resp", c.Writer.Header(), blw.Body.Bytes(), ParamConf.Get().BodyLogLimit)
-			}
-		}
-		l.Msg("GinServer handle")
 	}
 
 	gs.callhook(ctx, c, elapsed)
 }
 
-func (gs *GinServer) handleNext(c *gin.Context) {
+func (gs *GinServer) handleNext(ctx context.Context, c *gin.Context, blw *responseWriterWrapper) {
 	// 外层部分的panic
 	defer utils.HandlePanic2(func() {
 		if PanicError != nil {
@@ -435,6 +434,34 @@ func (gs *GinServer) handleNext(c *gin.Context) {
 		}
 	})
 
+	// 消息超时检查
+	if ParamConf.Get().TimeOutCheck > 0 {
+		// 消息处理超时监控逻辑
+		msgDone := make(chan int, 1)
+		defer close(msgDone)
+
+		utils.Submit(func() {
+			timer := time.NewTimer(time.Duration(ParamConf.Get().TimeOutCheck) * time.Second)
+			select {
+			case <-msgDone:
+				if !timer.Stop() {
+					select {
+					case <-timer.C: // try to drain the channel
+					default:
+					}
+				}
+			case <-timer.C:
+				// 消息超时了
+				logHeadOut := true
+				logLevelHead := ParamConf.Get().GetLogLevelHead(c.Request.URL.Path, c.ClientIP())
+				if logLevelHead == int(zerolog.Disabled) || logLevelHead < int(zerolog.ErrorLevel) {
+					logHeadOut = false
+				}
+				gs.log(ctx, c, int(zerolog.ErrorLevel), logHeadOut, time.Duration(ParamConf.Get().TimeOutCheck), blw, "GinServer TimeOut")
+			}
+		})
+	}
+
 	c.Next()
 }
 
@@ -444,4 +471,105 @@ func (gs *GinServer) callhook(ctx context.Context, c *gin.Context, elapsed time.
 	for _, f := range gs.hook {
 		f(ctx, c, elapsed)
 	}
+}
+
+func (gs *GinServer) log(ctx context.Context, c *gin.Context, logLevel int, logHeadOut bool, elapsed time.Duration, blw *responseWriterWrapper, msg string) {
+	l := log.WithLevel(zerolog.Level(logLevel))
+	if l == nil {
+		return
+	}
+
+	l = utils.LogCtx(l, ctx).Str("clientIP", c.ClientIP()).
+		Str("method", c.Request.Method).
+		Str("path", c.Request.URL.Path)
+	if logHeadOut {
+		l = l.Interface("reqheader", c.Request.Header)
+	}
+	err, ok := c.Get("err")
+	if ok {
+		l = l.Interface("err", err)
+	}
+	req, ok := c.Get("req")
+	if ok {
+		l = utils.LogHttpInterface(l, c.Request.Header, "req", req, ParamConf.Get().BodyLogLimit)
+	} else if len(c.Request.URL.RawQuery) > 0 {
+		l = l.Str("req", c.Request.URL.RawQuery)
+	} else {
+		rawdata, ok := c.Get("rawdata")
+		if ok {
+			data := rawdata.([]byte)
+			if len(data) > 0 {
+				l = utils.LogHttpBody(l, c.Request.Header, "req", data, ParamConf.Get().BodyLogLimit)
+			}
+		}
+	}
+	l = l.Int("status", c.Writer.Status()).Int("elapsed", int(elapsed/time.Millisecond))
+	if logHeadOut {
+		l = l.Interface("respheader", c.Writer.Header())
+	}
+	resp, ok := c.Get("resp")
+	if ok {
+		l = utils.LogHttpInterface(l, c.Writer.Header(), "resp", resp, ParamConf.Get().BodyLogLimit)
+	} else {
+		if blw != nil && blw.Body.Len() > 0 {
+			l = utils.LogHttpBody(l, c.Writer.Header(), "resp", blw.Body.Bytes(), ParamConf.Get().BodyLogLimit)
+		}
+	}
+	l.Msg(msg)
+}
+
+func (gs *GinServer) reqLog(ctx context.Context, c *gin.Context, logLevel int, logHeadOut bool, msg string) {
+	l := log.WithLevel(zerolog.Level(logLevel))
+	if l == nil {
+		return
+	}
+
+	l = utils.LogCtx(l, ctx).Str("clientIP", c.ClientIP()).
+		Str("method", c.Request.Method).
+		Str("path", c.Request.URL.Path)
+	if logHeadOut {
+		l = l.Interface("reqheader", c.Request.Header)
+	}
+	err, ok := c.Get("err")
+	if ok {
+		l = l.Interface("err", err)
+	}
+	req, ok := c.Get("req")
+	if ok {
+		l = utils.LogHttpInterface(l, c.Request.Header, "req", req, ParamConf.Get().BodyLogLimit)
+	} else if len(c.Request.URL.RawQuery) > 0 {
+		l = l.Str("req", c.Request.URL.RawQuery)
+	} else {
+		rawdata, ok := c.Get("rawdata")
+		if ok {
+			data := rawdata.([]byte)
+			if len(data) > 0 {
+				l = utils.LogHttpBody(l, c.Request.Header, "req", data, ParamConf.Get().BodyLogLimit)
+			}
+		}
+	}
+	l.Msg(msg)
+}
+
+func (gs *GinServer) respLog(ctx context.Context, c *gin.Context, logLevel int, logHeadOut bool, elapsed time.Duration, blw *responseWriterWrapper) {
+	l := log.WithLevel(zerolog.Level(logLevel))
+	if l == nil {
+		return
+	}
+
+	l = utils.LogCtx(l, ctx)
+
+	l = l.Int("status", c.Writer.Status()).Int("elapsed", int(elapsed/time.Millisecond))
+	if logHeadOut {
+		l = l.Interface("respheader", c.Writer.Header())
+	}
+	resp, ok := c.Get("resp")
+	if ok {
+		l = utils.LogHttpInterface(l, c.Writer.Header(), "resp", resp, ParamConf.Get().BodyLogLimit)
+	} else {
+		if blw != nil && blw.Body.Len() > 0 {
+			l = utils.LogHttpBody(l, c.Writer.Header(), "resp", blw.Body.Bytes(), ParamConf.Get().BodyLogLimit)
+		}
+	}
+	l.Msg("GinServer End")
 }

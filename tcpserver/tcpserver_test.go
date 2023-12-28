@@ -14,7 +14,6 @@ import (
 	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/utils"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -39,7 +38,7 @@ func (c *ClientInfo) LastHeart() time.Time {
 }
 
 type Handler struct {
-	dispatch.MsgDispatch[utils.TestMsg, TCPClient[ClientInfo]]
+	dispatch.MsgDispatch[*utils.TestMsg, TCPClient[ClientInfo]]
 }
 
 func NewHandler() *Handler {
@@ -49,26 +48,14 @@ func NewHandler() *Handler {
 	return h
 }
 
+func (h *Handler) Context(parent context.Context) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
+}
+
 func (h *Handler) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 
 func (h *Handler) OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo]) {
-}
-
-func (h *Handler) Encode(data []byte, tc *TCPClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
-	msgLog.Int("Size", len(data))
-	return data, nil
-}
-
-func (h *Handler) EncodeMsg(msg interface{}, tc *TCPClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
-	m, _ := msg.(*utils.TestMsg)
-	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Interface("data", m.BodyMsg)
-	return utils.TestEncodeMsg(msg)
-}
-
-func (h *Handler) EncodeText(data []byte, gc *TCPClient[ClientInfo], msgLog *zerolog.Event) ([]byte, error) {
-	msgLog.Int("Size", len(data))
-	return data, nil
 }
 
 func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, error) {
@@ -86,7 +73,7 @@ func (h *Handler) CheckRPCResp(msg interface{}) interface{} {
 func (h *Handler) OnMsg(ctx context.Context, msg interface{}, tc *TCPClient[ClientInfo]) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
-		tc.SendText(msg.([]byte)) // 原路返回
+		tc.SendText(ctx, msg.([]byte)) // 原路返回
 		return
 	}
 	m, _ := msg.(*utils.TestMsg)
@@ -101,7 +88,7 @@ func (h *Handler) OnTick(ctx context.Context, tc *TCPClient[ClientInfo]) {
 
 func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestHeatBeatReq, tc *TCPClient[ClientInfo]) {
 	//time.Sleep(time.Second * 2)
-	tc.SendMsg(utils.TestHeatBeatRespMsg)
+	tc.SendMsg(ctx, utils.TestHeatBeatRespMsg)
 	tc.info.SetLastHeart(time.Now())
 }
 

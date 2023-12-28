@@ -15,9 +15,18 @@ func LocalIP() (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 优先取全局单播地址
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.IsGlobalUnicast() {
 			if ipnet.IP.To4() != nil || ipnet.IP.To16() != nil {
+				return ipnet.IP, nil
+			}
+		}
+	}
+	// 取回环地址
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
 				return ipnet.IP, nil
 			}
 		}
@@ -40,7 +49,6 @@ func LocalIPString() string {
 			log.Error().Msg("LocalIPString empty")
 		}
 		localIp = ip.String()
-		return
 	})
 	return localIp
 }
@@ -91,5 +99,4 @@ func ClientIPRequest(req *http.Request) *net.IPAddr {
 func ParseIP(addr net.Addr) string {
 	ip := strings.Split(addr.String(), ":")[0]
 	return ip
-
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/utils"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -39,7 +38,7 @@ func (c *TcpServiceInfo) LastHeart() time.Time {
 }
 
 type TcpHandler struct {
-	dispatch.MsgDispatch[utils.TestMsg, TcpService[TcpServiceInfo]]
+	dispatch.MsgDispatch[*utils.TestMsg, TcpService[TcpServiceInfo]]
 }
 
 func NewTcpHandler() *TcpHandler {
@@ -47,6 +46,10 @@ func NewTcpHandler() *TcpHandler {
 	h.RegMsgID = utils.TestRegMsgID
 	h.RegMsg(h.onHeatBeatResp)
 	return h
+}
+
+func (h *TcpHandler) Context(parent context.Context) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
 }
 
 func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
@@ -129,17 +132,6 @@ func (h *TcpHandler) OnDisConnect(ctx context.Context, ts *TcpService[TcpService
 
 }
 
-func (h *TcpHandler) Encode(data []byte, ts *TcpService[TcpServiceInfo], msgLog *zerolog.Event) ([]byte, error) {
-	msgLog.Int("Size", len(data))
-	return data, nil
-}
-
-func (h *TcpHandler) EncodeMsg(msg interface{}, ts *TcpService[TcpServiceInfo], msgLog *zerolog.Event) ([]byte, error) {
-	m, _ := msg.(*utils.TestMsg)
-	msgLog.Uint32("msgid", m.Msgid).Uint32("size", m.Len).Interface("data", m.BodyMsg)
-	return utils.TestEncodeMsg(msg)
-}
-
 func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (interface{}, int, error) {
 	return utils.TestDecodeMsg(data)
 }
@@ -169,10 +161,10 @@ func (h *TcpHandler) OnTick(ctx context.Context, ts *TcpService[TcpServiceInfo])
 			//正常发送
 			//ts.SendMsg(utils.TestHeatBeatReqMsg)
 			//rpc方式发送，需要修改CheckRPCResp支持
-			resp, err := ts.SendRPCMsg(utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5)
+			resp, err := ts.SendRPCMsg(ctx, utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5)
 			if err == nil {
 				m, _ := resp.(*utils.TestMsg)
-				log.Debug().Str("Name", ts.ConnName()).Interface("Msg", m).Msg("RecvRPCMsg")
+				utils.LogCtx(log.Debug(), ctx).Str("Name", ts.ConnName()).Interface("Msg", m).Msg("RecvRPCMsg")
 			}
 		}
 	}
@@ -182,7 +174,7 @@ func (h *TcpHandler) onHeatBeatResp(ctx context.Context, msg *utils.TestHeatBeat
 
 }
 
-func BenchmarkTCPBackend(b *testing.B) {
+func BenchmarkTCPBackendConsul(b *testing.B) {
 	_, err := NewTcpBackendWithConsul[TcpServiceInfo]("127.0.0.1:8500", "gobase-test", NewTcpHandler())
 	if err != nil {
 		return

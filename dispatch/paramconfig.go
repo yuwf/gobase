@@ -4,14 +4,21 @@ package dispatch
 
 import (
 	"github.com/afex/hystrix-go/hystrix"
+	"github.com/yuwf/gobase/alert"
 	"github.com/yuwf/gobase/loader"
 )
 
+func init() {
+	alert.AddErrorLogPrefix("MsgDispatch Reg")
+	alert.AddErrorLogPrefix("MsgDispatch TimeOut")
+}
+
 // 参数配置
 type ParamConfig struct {
-	IngoreMsg    []string               `json:"ignoremsg,omitempty"`    // 忽略的消息日志
-	ingoreMsg    map[string]interface{} `json:"-"`                      // 根据IngoreMsg来生成，快速查找
-	TimeOutCheck int                    `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
+	// 日志级别和zerolog.Level一致
+	LogLevelMsg   int            `json:"loglevelmsg,omitempty"`   // msg消息默认的消息级别，不配置就是debug级别
+	LogLevelByMsg map[string]int `json:"loglevelbymsg,omitempty"` // 根据消息ID区分的消息日志级别，消息ID：日志级别，不配置就使用LogLevelMsg级别
+	TimeOutCheck  int            `json:"timeoutcheck,omitempty"`  // 消息超时监控 单位秒 默认0不开启监控
 	// Timeout: 执行 command 的超时时间 单位为毫秒
 	// MaxConcurrentRequests: 最大并发量
 	// RequestVolumeThreshold: 一个统计窗口 10 秒内请求数量 达到这个请求数量后才去判断是否要开启熔断
@@ -23,23 +30,22 @@ type ParamConfig struct {
 var ParamConf loader.JsonLoader[ParamConfig]
 
 func (c *ParamConfig) Create() {
-	c.ingoreMsg = map[string]interface{}{}
+	c.LogLevelByMsg = map[string]int{}
 }
 
 func (c *ParamConfig) Normalize() {
-	c.ingoreMsg = map[string]interface{}{}
-	for i := 0; i < len(c.IngoreMsg); i++ {
-		c.ingoreMsg[c.IngoreMsg[i]] = nil
-	}
 	for msgid, config := range c.HystrixMsg {
 		c.HystrixMsg[msgid] = config
 		hystrix.ConfigureCommand("msg_"+msgid, *config) // 加个msg_前缀，区别其他模块使用
 	}
 }
 
-func (c *ParamConfig) IsIgnoreMsg(msgid string) bool {
-	_, ok := c.ingoreMsg[msgid]
-	return ok
+func (c *ParamConfig) MsgLogLevel(msgid string) int {
+	loglevel, ok := c.LogLevelByMsg[msgid]
+	if !ok {
+		return c.LogLevelMsg
+	}
+	return loglevel
 }
 
 func (c *ParamConfig) IsHystrixMsg(msgid string) (string, bool) {

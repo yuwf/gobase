@@ -9,11 +9,13 @@ import (
 	"github.com/yuwf/gobase/consul"
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/redis"
-
-	"github.com/rs/zerolog"
+	"github.com/yuwf/gobase/utils"
 )
 
 type TcpEvent[T any] interface {
+	// 生成Context, 目前OnMsg、OnTick参数使用
+	Context(parent context.Context) context.Context
+
 	// consul服务器配置过滤器，返回符合条件的服务器
 	ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig
 
@@ -29,20 +31,6 @@ type TcpEvent[T any] interface {
 	// 网络失去连接
 	OnDisConnect(ctx context.Context, ts *TcpService[T])
 
-	// Encode 编码实现，一般情况都是已经编码完的
-	// msgLog 外层不写日志，内部就也不输出日志
-	// 返回值为 data,err
-	// data    编码出的buf内容
-	// err     发生error，消息发送失败
-	Encode(data []byte, ts *TcpService[T], msgLog *zerolog.Event) ([]byte, error)
-
-	// EncodeMsg 编码实现
-	// msgLog 外层不写日志，内部就也不输出日志
-	// 返回值为 data,err
-	// data    编码出的buf内容
-	// err     发生error，消息发送失败
-	EncodeMsg(msg interface{}, ts *TcpService[T], msgLog *zerolog.Event) ([]byte, error)
-
 	// DecodeMsg 解码实现
 	// 返回值为 msg,len,err
 	// msg     解码出的消息体
@@ -50,7 +38,7 @@ type TcpEvent[T any] interface {
 	// err     解码错误，若发生error，服务器将重连
 	DecodeMsg(ctx context.Context, data []byte, ts *TcpService[T]) (interface{}, int, error)
 
-	// CheckRPC 判断是否RPC返回消息，如果使用SendRPCMsg需要实现此函数
+	// CheckRPCResp 判断是否RPC返回消息，如果使用SendRPCMsg需要实现此函数
 	// 返回值为 rpcid
 	// rpcid   对应请求SendRPC的id， 返回nil表示非rpc调用
 	CheckRPCResp(msg interface{}) interface{}
@@ -67,6 +55,9 @@ type TcpEvent[T any] interface {
 type TcpEventHandler[T any] struct {
 }
 
+func (h *TcpEventHandler[T]) Context(parent context.Context) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
+}
 func (*TcpEventHandler[T]) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
 	return []*ServiceConfig{}
 }
@@ -79,12 +70,6 @@ func (*TcpEventHandler[T]) GoRedisFilter(confs []*goredis.RegistryInfo) []*Servi
 func (*TcpEventHandler[T]) OnConnected(ctx context.Context, ts *TcpService[T]) {
 }
 func (*TcpEventHandler[T]) OnDisConnect(ctx context.Context, ts *TcpService[T]) {
-}
-func (*TcpEventHandler[T]) Encode(data []byte, ts *TcpService[T], msgLog *zerolog.Event) ([]byte, error) {
-	return nil, errors.New("Encode not Implementation")
-}
-func (*TcpEventHandler[T]) EncodeMsg(msg interface{}, ts *TcpService[T], msgLog *zerolog.Event) ([]byte, error) {
-	return nil, errors.New("EncodeMsg not Implementation")
 }
 func (*TcpEventHandler[T]) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[T]) (interface{}, int, error) {
 	return nil, len(data), errors.New("DecodeMsg not Implementation")
