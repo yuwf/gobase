@@ -52,8 +52,8 @@ func InitAlert() func(sendAlert bool) {
 	hook.bootChecking = true
 	// 开启超时关闭检查
 	go func() {
-		ticker := time.Tick(15 * time.Second)
-		<-ticker
+		timer := time.NewTimer(15 * time.Second)
+		<-timer.C
 		hook.bootChecking = false
 	}()
 	// 外层回调
@@ -99,7 +99,7 @@ func checkSendAlert(msg string) bool {
 	defer errorLogPrefixLock.RUnlock()
 
 	alert := false
-	for k, _ := range errorLogPrefix2 {
+	for k := range errorLogPrefix2 {
 		l := len(k)
 		if len(msg) >= l && msg[0:l] == k {
 			if LogAlertCheck != nil && LogAlertCheck(k) {
@@ -109,7 +109,7 @@ func checkSendAlert(msg string) bool {
 		}
 	}
 	if !alert {
-		for k, _ := range errorLogPrefix {
+		for k := range errorLogPrefix {
 			l := len(k)
 			if len(msg) >= l && msg[0:l] == k {
 				alert = true

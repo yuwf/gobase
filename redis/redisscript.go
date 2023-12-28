@@ -39,7 +39,7 @@ func (r *Redis) doScript(ctx context.Context, script *RedisScript, keysAndArgs .
 		Args: keysAndArgs,
 	}
 	if ctx != nil {
-		caller := ctx.Value("caller")
+		caller := ctx.Value(CtxKey_caller)
 		if caller != nil {
 			redisCmd.Caller, _ = caller.(*utils.CallerDesc)
 		}
@@ -59,7 +59,7 @@ func (r *Redis) doScriptCmd(ctx context.Context, script *RedisScript, redisCmd *
 	}
 
 	if len(redisCmd.CmdDesc) == 0 && ctx != nil {
-		cmddesc := ctx.Value("cmddesc")
+		cmddesc := ctx.Value(CtxKey_cmddesc)
 		if cmddesc != nil {
 			redisCmd.CmdDesc, _ = cmddesc.(string)
 		}

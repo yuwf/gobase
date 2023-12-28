@@ -42,7 +42,7 @@ func BenchmarkGinServer(b *testing.B) {
 	ParamConf.Get().LogLevelHeadByPath = map[string]int{"/getna*": 0}
 	//ParamConf.Get().TimeOutCheck = 2
 	ParamConf.Get().Hystrix = map[string]*hystrix.CommandConfig{
-		"/hystrix": &hystrix.CommandConfig{Timeout: 10 * 1000, MaxConcurrentRequests: 10, RequestVolumeThreshold: 1, SleepWindow: 10 * 1000},
+		"/hystrix": {Timeout: 10 * 1000, MaxConcurrentRequests: 10, RequestVolumeThreshold: 1, SleepWindow: 10 * 1000},
 	}
 	ParamConf.Get().Normalize()
 	server := NewGinServer(1234)

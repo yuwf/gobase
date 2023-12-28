@@ -93,7 +93,7 @@ func SendFeiShuAlert2(format string, a ...interface{}) {
 	httprequest.JsonRequest[response](ctx, "POST", addr, body, nil)
 }
 
-func genFeiShuData(secret string, format string, a ...interface{}) interface{} {
+/*func genFeiShuData(secret string, format string, a ...interface{}) interface{} {
 	type altert_content struct {
 		Text string `json:"text"`
 	}
@@ -114,7 +114,7 @@ func genFeiShuData(secret string, format string, a ...interface{}) interface{} {
 	data.Content.Text = fmt.Sprintf(format, a...)
 
 	return data
-}
+}*/
 
 func genFeiShuCardData(title, secret string, format string, a ...interface{}) interface{} {
 	type altert_config struct {

@@ -352,10 +352,10 @@ func equal(last, new *RegistryInfo) bool {
 	// 对比Meta 是否完全一致
 	lastMeta := []string{}
 	newMeta := []string{}
-	for k, _ := range last.RegistryMeta {
+	for k := range last.RegistryMeta {
 		lastMeta = append(lastMeta, k)
 	}
-	for k, _ := range new.RegistryMeta {
+	for k := range new.RegistryMeta {
 		newMeta = append(newMeta, k)
 	}
 	sort.Strings(lastMeta)

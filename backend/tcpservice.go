@@ -17,9 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type MsgIDer interface {
-	MsgID() string
-}
+const CtxKey_scheme = utils.CtxKey("scheme")
 
 // 后端连接对象 协程安全对象
 // T是和业务相关的客户端信息结构
@@ -53,7 +51,7 @@ func NewTcpService[T any](conf *ServiceConfig, g *TcpGroup[T]) (*TcpService[T], 
 		confDestroy: 0,
 		address:     fmt.Sprintf("%s:%d", conf.ServiceAddr, conf.ServicePort),
 		info:        new(T),
-		ctx:         context.WithValue(context.TODO(), "scheme", "tcp"),
+		ctx:         context.WithValue(context.TODO(), CtxKey_scheme, "tcp"),
 		rpc:         new(sync.Map),
 		quit:        make(chan int),
 		quitFlag:    0,

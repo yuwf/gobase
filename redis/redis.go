@@ -16,6 +16,9 @@ import (
 
 const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
 
+const CtxKey_caller = utils.CtxKey("caller")   // 值：CallerDesc对象 一般情况内部使用
+const CtxKey_cmddesc = utils.CtxKey("cmddesc") // 值：字符串 命令描述 一般情况内部使用
+
 type Config struct {
 	Addr          string `json:"addr,omitempty"` //地址,host:port
 	Passwd        string `json:"passwd,omitempty"`
@@ -124,7 +127,7 @@ func (r *Redis) do(ctx context.Context, cmd string, args ...interface{}) *RedisC
 		Args: args,
 	}
 	if ctx != nil {
-		caller := ctx.Value("caller")
+		caller := ctx.Value(CtxKey_caller)
 		if caller != nil {
 			redisCmd.Caller, _ = caller.(*utils.CallerDesc)
 		}
@@ -144,7 +147,7 @@ func (r *Redis) docmd(ctx context.Context, redisCmd *RedisCommond) {
 	}
 
 	if len(redisCmd.CmdDesc) == 0 && ctx != nil {
-		cmddesc := ctx.Value("cmddesc")
+		cmddesc := ctx.Value(CtxKey_cmddesc)
 		if cmddesc != nil {
 			redisCmd.CmdDesc, _ = cmddesc.(string)
 		}

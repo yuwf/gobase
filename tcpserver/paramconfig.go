@@ -9,8 +9,8 @@ import (
 	"github.com/yuwf/gobase/utils"
 )
 
-const CtxKey_WS = "ws"     // 表示ws连接 值：不受限制 一般写1
-const CtxKey_Text = "text" // 数据为text格式，否则为二进制格式 值：不受限制 一般写1
+const CtxKey_WS = utils.CtxKey("ws")     // 表示ws连接 值：不受限制 一般写1
+const CtxKey_Text = utils.CtxKey("text") // 数据为text格式，否则为二进制格式 值：不受限制 一般写1
 
 // 参数配置
 type ParamConfig struct {

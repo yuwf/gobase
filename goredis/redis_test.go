@@ -170,14 +170,14 @@ func BenchmarkRedisWatchRegister(b *testing.B) {
 	}
 
 	infos := []*RegistryInfo{
-		&RegistryInfo{
+		{
 			RegistryName:   "Name",
 			RegistryID:     "456",
 			RegistryAddr:   "192.168.0.1",
 			RegistryPort:   123,
 			RegistryScheme: "tcp",
 		},
-		&RegistryInfo{
+		{
 			RegistryName: "Name",
 			RegistryID:   "123",
 			RegistryAddr: "192.168.0.1",

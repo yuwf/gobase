@@ -102,7 +102,9 @@ func BenchmarkRedisLock(b *testing.B) {
 	}
 
 	unlock, err := redis.Lock(context.TODO(), "__lock__", time.Second*50)
-	unlock()
+	if err == nil {
+		unlock()
+	}
 }
 
 func BenchmarkRedisFmt(b *testing.B) {
@@ -130,14 +132,14 @@ func BenchmarkRedisWatchRegister(b *testing.B) {
 	}
 
 	infos := []*RegistryInfo{
-		&RegistryInfo{
+		{
 			RegistryName:   "Name",
 			RegistryID:     "456",
 			RegistryAddr:   "192.168.0.1",
 			RegistryPort:   123,
 			RegistryScheme: "tcp",
 		},
-		&RegistryInfo{
+		{
 			RegistryName: "Name",
 			RegistryID:   "123",
 			RegistryAddr: "192.168.0.1",

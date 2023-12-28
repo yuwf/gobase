@@ -29,7 +29,7 @@ func BenchmarkHttpRequestHystrix(b *testing.B) {
 	ctx := context.TODO()
 	//ParamConf.Get().TimeOutCheck = 2
 	ParamConf.Get().Hystrix = map[string]*hystrix.CommandConfig{
-		"*wwww.baidu*": &hystrix.CommandConfig{MaxConcurrentRequests: 1, SleepWindow: 10 * 1000},
+		"*wwww.baidu*": {MaxConcurrentRequests: 1, SleepWindow: 10 * 1000},
 	}
 	ParamConf.Get().Normalize()
 	go Request(ctx, "GET", "https://wwww.baidu.com", nil, nil)
