@@ -10,9 +10,6 @@ import (
 )
 
 type GNetEvent[ClientInfo any] interface {
-	// 生成Context, 目前OnMsg、OnTick参数使用
-	Context(parent context.Context) context.Context
-
 	// 收到连接
 	OnConnected(ctx context.Context, gc *GNetClient[ClientInfo])
 
@@ -26,6 +23,10 @@ type GNetEvent[ClientInfo any] interface {
 	// err     解码错误，若发生error，服务器将重连
 	DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (interface{}, int, error)
 
+	// Context 生成Context, 目前OnMsg、OnTick参数使用
+	// msg为nil时 表示是OnTick调用
+	Context(parent context.Context, msg interface{}) context.Context
+
 	// OnRecv 收到消息，解码成功后调用 异步顺序调用
 	OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo])
 
@@ -38,15 +39,15 @@ type GNetEvent[ClientInfo any] interface {
 type GNetEventHandler[ClientInfo any] struct {
 }
 
-func (h *GNetEventHandler[ClientInfo]) Context(parent context.Context) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
 func (*GNetEventHandler[ClientInfo]) OnConnected(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 func (*GNetEventHandler[ClientInfo]) OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 func (*GNetEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (interface{}, int, error) {
 	return nil, len(data), errors.New("DecodeMsg not Implementation")
+}
+func (h *GNetEventHandler[ClientInfo]) Context(parent context.Context, msg interface{}) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
 }
 func (*GNetEventHandler[ClientInfo]) OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo]) {
 }

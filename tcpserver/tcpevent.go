@@ -10,9 +10,6 @@ import (
 )
 
 type TCPEvent[ClientInfo any] interface {
-	// 生成Context, 目前OnMsg、OnTick参数使用
-	Context(parent context.Context) context.Context
-
 	// 收到连接
 	OnConnected(ctx context.Context, tc *TCPClient[ClientInfo])
 
@@ -25,6 +22,10 @@ type TCPEvent[ClientInfo any] interface {
 	// len     解码消息的数据长度，内部根据len来删除已解码的数据
 	// err     解码错误，若发生error，服务器将重连
 	DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, error)
+
+	// Context 生成Context, 目前OnMsg、OnTick参数使用
+	// msg为nil时 表示是OnTick调用
+	Context(parent context.Context, msg interface{}) context.Context
 
 	// CheckRPCResp 判断是否RPC返回消息，如果使用SendRPCMsg需要实现此函数
 	// 返回值为 rpcid
@@ -43,15 +44,15 @@ type TCPEvent[ClientInfo any] interface {
 type TCPEventHandler[ClientInfo any] struct {
 }
 
-func (h *TCPEventHandler[ClientInfo]) Context(parent context.Context) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
 func (*TCPEventHandler[ClientInfo]) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 func (*TCPEventHandler[ClientInfo]) OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 func (*TCPEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, error) {
 	return nil, len(data), errors.New("DecodeMsg not Implementation")
+}
+func (h *TCPEventHandler[ClientInfo]) Context(parent context.Context, msg interface{}) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
 }
 func (*TCPEventHandler[ClientInfo]) CheckRPCResp(msg interface{}) interface{} {
 	return nil

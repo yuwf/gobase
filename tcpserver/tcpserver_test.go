@@ -48,10 +48,6 @@ func NewHandler() *Handler {
 	return h
 }
 
-func (h *Handler) Context(parent context.Context) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-
 func (h *Handler) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 
@@ -64,6 +60,10 @@ func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[Clie
 		return data, len(data), nil
 	}
 	return utils.TestDecodeMsg(data)
+}
+
+func (h *Handler) Context(parent context.Context, msg interface{}) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
 }
 
 func (h *Handler) CheckRPCResp(msg interface{}) interface{} {

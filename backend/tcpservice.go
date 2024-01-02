@@ -239,13 +239,14 @@ func (ts *TcpService[T]) loopTick() {
 			break
 		}
 		if ts.g.tb.event != nil {
+			ctx := ts.g.tb.event.Context(ts.ctx, nil)
 			if TcpParamConf.Get().MsgSeq {
 				ts.seq.Submit(func() {
-					ts.g.tb.event.OnTick(ts.g.tb.event.Context(ts.ctx), ts)
+					ts.g.tb.event.OnTick(ctx, ts)
 				})
 			} else {
 				utils.Submit(func() {
-					ts.g.tb.event.OnTick(ts.g.tb.event.Context(ts.ctx), ts)
+					ts.g.tb.event.OnTick(ctx, ts)
 				})
 			}
 		}
@@ -378,6 +379,7 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 		}
 		decodeLen += l
 		if msg != nil {
+			ctx := ts.g.tb.event.Context(ts.ctx, msg)
 			// rpc消息检查
 			rpcId := ts.g.tb.event.CheckRPCResp(msg)
 			if rpcId != nil {
@@ -391,11 +393,11 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 					// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
 					if TcpParamConf.Get().MsgSeq {
 						ts.seq.Submit(func() {
-							ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
+							ts.g.tb.event.OnMsg(ctx, msg, ts)
 						})
 					} else {
 						utils.Submit(func() {
-							ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
+							ts.g.tb.event.OnMsg(ctx, msg, ts)
 						})
 					}
 				}
@@ -403,11 +405,11 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 				// 消息放入协程池中
 				if TcpParamConf.Get().MsgSeq {
 					ts.seq.Submit(func() {
-						ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
+						ts.g.tb.event.OnMsg(ctx, msg, ts)
 					})
 				} else {
 					utils.Submit(func() {
-						ts.g.tb.event.OnMsg(ts.g.tb.event.Context(ts.ctx), msg, ts)
+						ts.g.tb.event.OnMsg(ctx, msg, ts)
 					})
 				}
 			}

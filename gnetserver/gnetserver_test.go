@@ -45,10 +45,6 @@ func NewHandler() *Handler {
 	return h
 }
 
-func (h *Handler) Context(parent context.Context) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-
 func (h *Handler) OnConnected(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 
@@ -62,7 +58,9 @@ func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[Cli
 	}
 	return utils.TestDecodeMsg(data)
 }
-
+func (h *Handler) Context(parent context.Context, msg interface{}) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
+}
 func (h *Handler) OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo]) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {

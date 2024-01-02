@@ -186,14 +186,15 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 			readlen += l
 		}
 		if msg != nil {
+			ctx := gc.event.Context(ctx, msg)
 			// 消息放入协程池中
 			if ParamConf.Get().MsgSeq {
 				gc.seq.Submit(func() {
-					gc.event.OnMsg(gc.event.Context(ctx), msg, gc)
+					gc.event.OnMsg(ctx, msg, gc)
 				})
 			} else {
 				utils.Submit(func() {
-					gc.event.OnMsg(gc.event.Context(ctx), msg, gc)
+					gc.event.OnMsg(ctx, msg, gc)
 				})
 			}
 		}

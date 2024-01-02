@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	_ "git.ixianlai.com/base/gobase/log"
-	"git.ixianlai.com/base/gobase/utils"
+	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/gin-gonic/gin"

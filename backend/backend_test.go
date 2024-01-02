@@ -48,10 +48,6 @@ func NewTcpHandler() *TcpHandler {
 	return h
 }
 
-func (h *TcpHandler) Context(parent context.Context) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-
 func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
 	// 过滤出tcp的配置
 	// 【目前根据业务 ServiceId是存储在meta中nodeId】
@@ -134,6 +130,10 @@ func (h *TcpHandler) OnDisConnect(ctx context.Context, ts *TcpService[TcpService
 
 func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (interface{}, int, error) {
 	return utils.TestDecodeMsg(data)
+}
+
+func (h *TcpHandler) Context(parent context.Context, msg interface{}) context.Context {
+	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
 }
 
 func (h *TcpHandler) CheckRPCResp(msg interface{}) interface{} {

@@ -471,13 +471,14 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 				if timeout > 0 && time.Since(tclient.lastActiveTime) > time.Second*time.Duration(timeout) {
 					tc.Close(errors.New("activetimeout"))
 				} else {
+					ctx := tc.event.Context(tc.ctx, nil)
 					if ParamConf.Get().MsgSeq {
 						tc.seq.Submit(func() {
-							s.event.OnTick(tc.event.Context(tc.ctx), tc)
+							s.event.OnTick(ctx, tc)
 						})
 					} else {
 						utils.Submit(func() {
-							s.event.OnTick(tc.event.Context(tc.ctx), tc)
+							s.event.OnTick(ctx, tc)
 						})
 					}
 				}

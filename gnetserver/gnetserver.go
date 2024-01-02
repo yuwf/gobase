@@ -389,13 +389,14 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 			if timeout > 0 && time.Since(gclient.lastActiveTime) > time.Second*time.Duration(timeout) {
 				gc.Close(errors.New("activetimeout"))
 			} else {
+				ctx := gc.event.Context(gc.ctx, nil)
 				if ParamConf.Get().MsgSeq {
 					gc.seq.Submit(func() {
-						s.event.OnTick(gc.event.Context(gc.ctx), gc)
+						s.event.OnTick(ctx, gc)
 					})
 				} else {
 					utils.Submit(func() {
-						s.event.OnTick(gc.event.Context(gc.ctx), gc)
+						s.event.OnTick(ctx, gc)
 					})
 				}
 			}

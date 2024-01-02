@@ -283,6 +283,7 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 			readlen += l
 		}
 		if msg != nil {
+			ctx = tc.event.Context(ctx, msg)
 			// rpc消息检查
 			rpcId := tc.event.CheckRPCResp(msg)
 			if rpcId != nil {
@@ -297,11 +298,11 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 					// 消息放入协程池中
 					if ParamConf.Get().MsgSeq {
 						tc.seq.Submit(func() {
-							tc.event.OnMsg(tc.event.Context(ctx), msg, tc)
+							tc.event.OnMsg(ctx, msg, tc)
 						})
 					} else {
 						utils.Submit(func() {
-							tc.event.OnMsg(tc.event.Context(ctx), msg, tc)
+							tc.event.OnMsg(ctx, msg, tc)
 						})
 					}
 				}
@@ -309,11 +310,11 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 				// 消息放入协程池中
 				if ParamConf.Get().MsgSeq {
 					tc.seq.Submit(func() {
-						tc.event.OnMsg(tc.event.Context(ctx), msg, tc)
+						tc.event.OnMsg(ctx, msg, tc)
 					})
 				} else {
 					utils.Submit(func() {
-						tc.event.OnMsg(tc.event.Context(ctx), msg, tc)
+						tc.event.OnMsg(ctx, msg, tc)
 					})
 				}
 			}
