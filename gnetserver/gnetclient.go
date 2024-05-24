@@ -185,6 +185,9 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 		if l > 0 {
 			readlen += l
 		}
+		if l == 0 || msg == nil {
+			break
+		}
 		if msg != nil {
 			ctx := gc.event.Context(ctx, msg)
 			// 消息放入协程池中

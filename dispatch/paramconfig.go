@@ -19,6 +19,7 @@ type ParamConfig struct {
 	// 日志级别和zerolog.Level一致
 	LogLevelMsg   int            `json:"loglevelmsg,omitempty"`   // msg消息默认的消息级别，不配置就是debug级别
 	LogLevelByMsg map[string]int `json:"loglevelbymsg,omitempty"` // 根据消息ID区分的消息日志级别，消息ID：日志级别，不配置就使用LogLevelMsg级别
+	RegFuncShort  bool           `json:"logfuncshort,omitempty"`  // 函数名使用简短一些，否则就是类似dispatch.(*Server).onTestHeatBeatResp
 
 	TimeOutCheck int `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
 	// Timeout: 执行 command 的超时时间 单位为毫秒

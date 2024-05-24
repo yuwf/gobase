@@ -377,7 +377,12 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 			err = fmt.Errorf("decode return len is %d, readbuf len is %d", l, len(data)-decodeLen)
 			return 0, err
 		}
-		decodeLen += l
+		if l > 0 {
+			decodeLen += l
+		}
+		if l == 0 || msg == nil {
+			break
+		}
 		if msg != nil {
 			ctx := ts.g.tb.event.Context(ts.ctx, msg)
 			// rpc消息检查

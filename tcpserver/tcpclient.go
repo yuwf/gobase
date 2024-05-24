@@ -282,6 +282,9 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 		if l > 0 {
 			readlen += l
 		}
+		if l == 0 || msg == nil {
+			break
+		}
 		if msg != nil {
 			ctx = tc.event.Context(ctx, msg)
 			// rpc消息检查

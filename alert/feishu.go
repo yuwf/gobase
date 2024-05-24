@@ -118,7 +118,7 @@ func SendFeiShuAlert2(format string, a ...interface{}) {
 
 func genFeiShuCardData(title, secret string, format string, a ...interface{}) interface{} {
 	type altert_config struct {
-		WideScreenMode bool `json:"wide_screen_mode"`
+		EnableForward bool `json:"enable_forward"`
 	}
 	type altert_element_text struct {
 		Tag     string `json:"tag"`
@@ -155,7 +155,7 @@ func genFeiShuCardData(title, secret string, format string, a ...interface{}) in
 		data.Sign, _ = genFeiShuSign(secret, now.Unix())
 	}
 	data.Msg_type = "interactive"
-	data.Card.Config.WideScreenMode = true
+	data.Card.Config.EnableForward = true
 
 	data.Card.Header.Template = "yellow"
 	data.Card.Header.Title.Content = title
@@ -166,7 +166,6 @@ func genFeiShuCardData(title, secret string, format string, a ...interface{}) in
 	element.Tag = "div"
 	element.Text.Tag = "plain_text"
 	element.Text.Content = fmt.Sprintf(format, a...)
-	element.Text.Content = element.Text.Content + "\n\n" + time.Now().String()
 	data.Card.Elements = append(data.Card.Elements, element)
 
 	return data
