@@ -64,6 +64,10 @@ var (
 	gnetDisConnCount      *prometheus.CounterVec
 	gnetSendSize          *prometheus.CounterVec
 	gnetRecvSize          *prometheus.CounterVec
+	gnetSendMsgCount      *prometheus.CounterVec
+	gnetRecvMsgCount      *prometheus.CounterVec
+	gnetSendMsgSize       *prometheus.CounterVec
+	gnetRecvMsgSize       *prometheus.CounterVec
 
 	// TCPServer
 	tcpServerOnce              sync.Once
@@ -76,13 +80,21 @@ var (
 	tcpServerDisConnCount      *prometheus.CounterVec
 	tcpServerSendSize          *prometheus.CounterVec
 	tcpServerRecvSize          *prometheus.CounterVec
+	tcpServerSendMsgCount      *prometheus.CounterVec
+	tcpServerRecvMsgCount      *prometheus.CounterVec
+	tcpServerSendMsgSize       *prometheus.CounterVec
+	tcpServerRecvMsgSize       *prometheus.CounterVec
 
 	// TCPBackend
-	tcpBackendOnce     sync.Once
-	tcpBackendServer   *prometheus.GaugeVec
-	tcpBackendConned   *prometheus.GaugeVec
-	tcpBackendSendSize *prometheus.CounterVec
-	tcpBackendRecvSize *prometheus.CounterVec
+	tcpBackendOnce         sync.Once
+	tcpBackendServer       *prometheus.GaugeVec
+	tcpBackendConned       *prometheus.GaugeVec
+	tcpBackendSendSize     *prometheus.CounterVec
+	tcpBackendRecvSize     *prometheus.CounterVec
+	tcpBackendSendMsgCount *prometheus.CounterVec
+	tcpBackendRecvMsgCount *prometheus.CounterVec
+	tcpBackendSendMsgSize  *prometheus.CounterVec
+	tcpBackendRecvMsgSize  *prometheus.CounterVec
 
 	// HTTPBackend
 	httpBackendOnce   sync.Once
@@ -273,6 +285,10 @@ func (h *gNetHook[ClientInfo]) init() {
 		gnetDisConnCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_disconn_count"}, []string{"addr"})
 		gnetSendSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_send_size"}, []string{"addr"})
 		gnetRecvSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_recv_size"}, []string{"addr"})
+		gnetSendMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_sendmsg_count"}, []string{"msgid"})
+		gnetRecvMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_recvmsg_count"}, []string{"msgid"})
+		gnetSendMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_sendmsg_size"}, []string{"msgid"})
+		gnetRecvMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_recvmsg_size"}, []string{"msgid"})
 	})
 }
 
@@ -319,6 +335,16 @@ func (h *gNetHook[ClientInfo]) OnRecv(gc *gnetserver.GNetClient[ClientInfo], len
 	h.init()
 	gnetRecvSize.WithLabelValues(h.addr).Add(float64(len))
 }
+func (h *gNetHook[ClientInfo]) OnSendMsg(gc *gnetserver.GNetClient[ClientInfo], msgId string, len int) {
+	h.init()
+	gnetSendMsgCount.WithLabelValues(msgId).Inc()
+	gnetSendMsgSize.WithLabelValues(msgId).Add(float64(len))
+}
+func (h *gNetHook[ClientInfo]) OnRecvMsg(gc *gnetserver.GNetClient[ClientInfo], msgId string, len int) {
+	h.init()
+	gnetRecvMsgCount.WithLabelValues(msgId).Inc()
+	gnetRecvMsgSize.WithLabelValues(msgId).Add(float64(len))
+}
 
 type tcpServerHook[ClientInfo any] struct {
 	addr      string
@@ -336,6 +362,10 @@ func (h *tcpServerHook[ClientInfo]) init() {
 		tcpServerDisConnCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_disconn_count"}, []string{"addr"})
 		tcpServerSendSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_send_size"}, []string{"addr"})
 		tcpServerRecvSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_recv_size"}, []string{"addr"})
+		tcpServerSendMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_sendmsg_count"}, []string{"msgid"})
+		tcpServerRecvMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_recvmsg_count"}, []string{"msgid"})
+		tcpServerSendMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_sendmsg_size"}, []string{"msgid"})
+		tcpServerRecvMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_recvmsg_size"}, []string{"msgid"})
 	})
 }
 
@@ -375,11 +405,22 @@ func (h *tcpServerHook[ClientInfo]) OnRemoveClient(tc *tcpserver.TCPClient[Clien
 	tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
 }
 func (h *tcpServerHook[ClientInfo]) OnSend(tc *tcpserver.TCPClient[ClientInfo], len int) {
+	h.init()
 	tcpServerSendSize.WithLabelValues(h.addr).Add(float64(len))
 }
 func (h *tcpServerHook[ClientInfo]) OnRecv(tc *tcpserver.TCPClient[ClientInfo], len int) {
 	h.init()
 	tcpServerRecvSize.WithLabelValues(h.addr).Add(float64(len))
+}
+func (h *tcpServerHook[ClientInfo]) OnSendMsg(tc *tcpserver.TCPClient[ClientInfo], msgId string, len int) {
+	h.init()
+	tcpServerSendMsgCount.WithLabelValues(msgId).Inc()
+	tcpServerSendMsgSize.WithLabelValues(msgId).Add(float64(len))
+}
+func (h *tcpServerHook[ClientInfo]) OnRecvMsg(tc *tcpserver.TCPClient[ClientInfo], msgId string, len int) {
+	h.init()
+	tcpServerRecvMsgCount.WithLabelValues(msgId).Inc()
+	tcpServerRecvMsgSize.WithLabelValues(msgId).Add(float64(len))
 }
 
 type tcpBackendHook[ServerInfo any] struct {
@@ -391,6 +432,10 @@ func (h *tcpBackendHook[ServerInfo]) init() {
 		tcpBackendConned = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: MetricsNamePrefix + "tcpbackend_conned"}, []string{"servicename", "serviceid"})
 		tcpBackendSendSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_send_size"}, []string{"servicename", "serviceid"})
 		tcpBackendRecvSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_recv_size"}, []string{"servicename", "serviceid"})
+		tcpBackendSendMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_sendmsg_count"}, []string{"servicename", "serviceid", "msgid"})
+		tcpBackendRecvMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_recvmsg_count"}, []string{"servicename", "serviceid", "msgid"})
+		tcpBackendSendMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_sendmsg_size"}, []string{"servicename", "serviceid", "msgid"})
+		tcpBackendRecvMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_recvmsg_size"}, []string{"servicename", "serviceid", "msgid"})
 	})
 }
 
@@ -420,6 +465,16 @@ func (h *tcpBackendHook[ServerInfo]) OnSend(ts *backend.TcpService[ServerInfo], 
 func (h *tcpBackendHook[ServerInfo]) OnRecv(ts *backend.TcpService[ServerInfo], len int) {
 	h.init()
 	tcpBackendRecvSize.WithLabelValues(ts.ServiceName(), ts.ServiceId()).Add(float64(len))
+}
+func (h *tcpBackendHook[ServerInfo]) OnSendMsg(ts *backend.TcpService[ServerInfo], msgId string, len int) {
+	h.init()
+	tcpBackendSendMsgCount.WithLabelValues(ts.ServiceName(), ts.ServiceId(), msgId).Inc()
+	tcpBackendSendMsgSize.WithLabelValues(ts.ServiceName(), ts.ServiceId(), msgId).Add(float64(len))
+}
+func (h *tcpBackendHook[ServerInfo]) OnRecvMsg(ts *backend.TcpService[ServerInfo], msgId string, len int) {
+	h.init()
+	tcpBackendRecvMsgCount.WithLabelValues(ts.ServiceName(), ts.ServiceId(), msgId).Inc()
+	tcpBackendRecvMsgSize.WithLabelValues(ts.ServiceName(), ts.ServiceId(), msgId).Add(float64(len))
 }
 
 type httpBackendHook[ServerInfo any] struct {

@@ -276,7 +276,7 @@ func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, ac
 		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Msg("OnOpened")
 	}
 
-	gc := newGNetClient(c, s.event)
+	gc := newGNetClient(c, s.event, s.hook)
 	if s.Scheme == "ws" {
 		gc.ctx = context.WithValue(gc.ctx, CtxKey_WS, 1)
 		gc.wsh = newGNetWSHandler(gc)
@@ -389,7 +389,8 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 			if timeout > 0 && time.Since(gclient.lastActiveTime) > time.Second*time.Duration(timeout) {
 				gc.Close(errors.New("activetimeout"))
 			} else {
-				ctx := gc.event.Context(gc.ctx, nil)
+				ctx := context.WithValue(gc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+				ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
 				if ParamConf.Get().MsgSeq {
 					gc.seq.Submit(func() {
 						s.event.OnTick(ctx, gc)

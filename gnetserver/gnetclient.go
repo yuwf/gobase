@@ -28,10 +28,11 @@ type ClientCreater interface {
 // 如果ClientInfo存在ClientName函数，输出日志是会调用
 type GNetClient[ClientInfo any] struct {
 	// 本身不可修改对象
-	conn       gnet.Conn                  // gnet连接对象
-	removeAddr net.TCPAddr                // 拷贝出来 防止conn关闭时发生变化
-	localAddr  net.TCPAddr                //
-	event      GNetEvent[ClientInfo]      // 事件处理器
+	conn       gnet.Conn             // gnet连接对象
+	removeAddr net.TCPAddr           // 拷贝出来 防止conn关闭时发生变化
+	localAddr  net.TCPAddr           //
+	event      GNetEvent[ClientInfo] // 事件处理器
+	hook       []GNetHook[ClientInfo]
 	seq        utils.Sequence             // 消息顺序处理工具 协程安全
 	info       *ClientInfo                // 客户端信息 内容修改需要外层加锁控制
 	connName   func() string              // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
@@ -42,12 +43,13 @@ type GNetClient[ClientInfo any] struct {
 	closeReason error // 关闭原因
 }
 
-func newGNetClient[ClientInfo any](conn gnet.Conn, event GNetEvent[ClientInfo]) *GNetClient[ClientInfo] {
+func newGNetClient[ClientInfo any](conn gnet.Conn, event GNetEvent[ClientInfo], hook []GNetHook[ClientInfo]) *GNetClient[ClientInfo] {
 	gc := &GNetClient[ClientInfo]{
 		conn:       conn,
 		removeAddr: *conn.RemoteAddr().(*net.TCPAddr),
 		localAddr:  *conn.LocalAddr().(*net.TCPAddr),
 		event:      event,
+		hook:       hook,
 		info:       new(ClientInfo),
 		ctx:        context.TODO(),
 	}
@@ -128,6 +130,10 @@ func (gc *GNetClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsg
 		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 		return err
 	}
+	// 回调
+	for _, h := range gc.hook {
+		h.OnSendMsg(gc, msg.MsgID(), len(data))
+	}
 	// 日志
 	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
 	if logLevel >= int(log.Logger.GetLevel()) {
@@ -189,7 +195,17 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 			break
 		}
 		if msg != nil {
-			ctx := gc.event.Context(ctx, msg)
+			ctx := context.WithValue(ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
+			// 回调
+			for _, h := range gc.hook {
+				h.OnRecvMsg(gc, msg.MsgID(), l)
+			}
+			// 日志
+			logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+			if logLevel >= int(log.Logger.GetLevel()) {
+				utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("RecvMsg")
+			}
 			// 消息放入协程池中
 			if ParamConf.Get().MsgSeq {
 				gc.seq.Submit(func() {

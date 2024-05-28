@@ -31,10 +31,11 @@ type ClientCreater interface {
 // 如果ClientInfo存在ClientName函数，输出日志是会调用
 type TCPClient[ClientInfo any] struct {
 	// 本身不可修改对象
-	conn       *tcp.TCPConn              // 连接对象
-	removeAddr net.TCPAddr               // 拷贝出来 防止conn关闭时发生变化
-	localAddr  net.TCPAddr               //
-	event      TCPEvent[ClientInfo]      // 事件处理器
+	conn       *tcp.TCPConn         // 连接对象
+	removeAddr net.TCPAddr          // 拷贝出来 防止conn关闭时发生变化
+	localAddr  net.TCPAddr          //
+	event      TCPEvent[ClientInfo] // 事件处理器
+	hook       []TCPHook[ClientInfo]
 	seq        utils.Sequence            // 消息顺序处理工具 协程安全
 	info       *ClientInfo               // 客户端信息 内容修改需要外层加锁控制
 	connName   func() string             // // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
@@ -48,12 +49,13 @@ type TCPClient[ClientInfo any] struct {
 	closeReason error // 关闭原因
 }
 
-func newTCPClient[ClientInfo any](conn *tcp.TCPConn, event TCPEvent[ClientInfo]) *TCPClient[ClientInfo] {
+func newTCPClient[ClientInfo any](conn *tcp.TCPConn, event TCPEvent[ClientInfo], hook []TCPHook[ClientInfo]) *TCPClient[ClientInfo] {
 	tc := &TCPClient[ClientInfo]{
 		conn:       conn,
 		removeAddr: *conn.RemoteAddr(),
 		localAddr:  *conn.LocalAddr(),
 		event:      event,
+		hook:       hook,
 		info:       new(ClientInfo),
 		ctx:        context.TODO(),
 		rpc:        new(sync.Map),
@@ -150,6 +152,10 @@ func (tc *TCPClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsge
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 		return err
 	}
+	// 回调
+	for _, h := range tc.hook {
+		h.OnSendMsg(tc, msg.MsgID(), len(data))
+	}
 	// 日志
 	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
 	if logLevel >= int(log.Logger.GetLevel()) {
@@ -217,6 +223,10 @@ func (tc *TCPClient[ClientInfo]) SendRPCMsg(ctx context.Context, rpcId interface
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
 		return nil, err
 	}
+	// 回调
+	for _, h := range tc.hook {
+		h.OnSendMsg(tc, msg.MsgID(), len(data))
+	}
 	// 日志
 	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
 	if logLevel >= int(log.Logger.GetLevel()) {
@@ -242,10 +252,6 @@ func (tc *TCPClient[ClientInfo]) SendRPCMsg(ctx context.Context, rpcId interface
 	}
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Msg("SendRPCMsg resp error")
-	}
-	// 日志
-	if logLevel >= int(log.Logger.GetLevel()) {
-		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", tc.ConnName()).Interface("Resp", resp).Msg("RecvRPCMsg")
 	}
 	return resp, err
 }
@@ -286,9 +292,23 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 			break
 		}
 		if msg != nil {
-			ctx = tc.event.Context(ctx, msg)
+			ctx := context.WithValue(ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
 			// rpc消息检查
 			rpcId := tc.event.CheckRPCResp(msg)
+			// 回调
+			for _, h := range tc.hook {
+				h.OnRecvMsg(tc, msg.MsgID(), l)
+			}
+			// 日志
+			logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+			if logLevel >= int(log.Logger.GetLevel()) {
+				if rpcId != nil {
+					utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", tc.ConnName()).Interface("Resp", msg).Msg("RecvRPCMsg")
+				} else {
+					utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", tc.ConnName()).Interface("Msg", msg).Msg("RecvMsg")
+				}
+			}
 			if rpcId != nil {
 				// rpc
 				rpc, ok := tc.rpc.LoadAndDelete(rpcId)

@@ -26,40 +26,43 @@ type TestMsgBody interface {
 type TestMsg struct {
 	TestMsgHead
 	// 根据方向不一样，填充的字段不一样
-	Data    []byte      // 接受数据时填充
-	BodyMsg TestMsgBody // 发送数据填充
+	RecvData []byte      // 接受数据时填充
+	SendMsg  TestMsgBody // 发送数据填充
 }
 
 func (tm *TestMsg) Head() interface{} {
 	return &tm.TestMsgHead
 }
 func (tm *TestMsg) Body() interface{} {
-	return tm.BodyMsg
+	return tm.SendMsg
 }
 func (tm *TestMsg) MsgID() string {
 	return strconv.Itoa(int(tm.Msgid))
 }
 func (tm *TestMsg) MsgMarshal() ([]byte, error) {
-	buf, _ := tm.BodyMsg.Marshal()
+	buf, _ := tm.SendMsg.Marshal()
 	data := make([]byte, 4+4+len(buf))
-	binary.LittleEndian.PutUint32(data, tm.BodyMsg.MsgID())
+	binary.LittleEndian.PutUint32(data, tm.SendMsg.MsgID())
 	binary.LittleEndian.PutUint32(data[4:], uint32(len(buf)))
 	copy(data[8:], buf)
 	return data, nil
 }
+func (tm *TestMsg) BodyData() []byte {
+	return tm.RecvData
+}
 func (tm *TestMsg) BodyUnMarshal(msgType reflect.Type) (interface{}, error) {
 	// 测试消息Data就是字符串 不用解析
 	msg := reflect.New(msgType).Interface().(TestMsgBody)
-	msg.UnMarshal(tm.Data)
+	msg.UnMarshal(tm.RecvData)
 	return msg, nil
 }
 func (tm *TestMsg) MarshalZerologObject(e *zerolog.Event) {
 	e.Interface("Head", &tm.TestMsgHead)
-	if tm.BodyMsg != nil {
-		e.Interface("Body", tm.BodyMsg)
+	if tm.SendMsg != nil {
+		e.Interface("Body", tm.SendMsg)
 	}
-	if tm.Data != nil {
-		e.Interface("Data", string(tm.Data))
+	if tm.RecvData != nil {
+		e.Interface("Data", string(tm.RecvData))
 	}
 }
 
@@ -116,7 +119,7 @@ func TestDecodeMsg(data []byte) (*TestMsg, int, error) {
 					Msgid: msgid,
 					Len:   msglen,
 				},
-				Data: data[8 : 8+msglen],
+				RecvData: data[8 : 8+msglen],
 			}
 			return m, int(8 + msglen), nil
 		} else {
@@ -131,13 +134,13 @@ var (
 		TestMsgHead: TestMsgHead{
 			Msgid: 1,
 		},
-		BodyMsg: &TestHeatBeatReq{Data: string("heatreqmsg")},
+		SendMsg: &TestHeatBeatReq{Data: string("heatreqmsg")},
 	}
 	TestHeatBeatRespMsg = &TestMsg{
 		TestMsgHead: TestMsgHead{
 			Msgid: 2,
 		},
-		BodyMsg: &TestHeatBeatResp{Data: string("heatrespmsg")},
+		SendMsg: &TestHeatBeatResp{Data: string("heatrespmsg")},
 	}
 
 	TestRegMsgID = func(msgType reflect.Type) string {

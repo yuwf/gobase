@@ -54,29 +54,31 @@ func (h *Handler) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 func (h *Handler) OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 
-func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, error) {
+func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (utils.RecvMsger, int, error) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
-		return data, len(data), nil
+		return &utils.TestMsg{
+			TestMsgHead: utils.TestMsgHead{
+				Msgid: 0,
+				Len:   uint32(len(data)),
+			},
+			RecvData: data,
+		}, len(data), nil
 	}
 	return utils.TestDecodeMsg(data)
 }
 
-func (h *Handler) Context(parent context.Context, msg interface{}) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-
-func (h *Handler) CheckRPCResp(msg interface{}) interface{} {
+func (h *Handler) CheckRPCResp(msg utils.RecvMsger) interface{} {
 	return nil
 }
 
-func (h *Handler) OnMsg(ctx context.Context, msg interface{}, tc *TCPClient[ClientInfo]) {
+func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo]) {
+	m, _ := msg.(*utils.TestMsg)
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
-		tc.SendText(ctx, msg.([]byte)) // 原路返回
+		tc.SendText(ctx, m.RecvData) // 原路返回
 		return
 	}
-	m, _ := msg.(*utils.TestMsg)
 	if h.Dispatch(ctx, m, tc) {
 		return
 	}

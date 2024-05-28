@@ -128,15 +128,11 @@ func (h *TcpHandler) OnDisConnect(ctx context.Context, ts *TcpService[TcpService
 
 }
 
-func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (interface{}, int, error) {
+func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (utils.RecvMsger, int, error) {
 	return utils.TestDecodeMsg(data)
 }
 
-func (h *TcpHandler) Context(parent context.Context, msg interface{}) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-
-func (h *TcpHandler) CheckRPCResp(msg interface{}) interface{} {
+func (h *TcpHandler) CheckRPCResp(msg utils.RecvMsger) interface{} {
 	m, _ := msg.(*utils.TestMsg)
 	if m.Msgid == utils.TestHeatBeatRespMsg.Msgid {
 		return utils.TestHeatBeatReqMsg.Msgid
@@ -144,7 +140,7 @@ func (h *TcpHandler) CheckRPCResp(msg interface{}) interface{} {
 	return nil
 }
 
-func (h *TcpHandler) OnMsg(ctx context.Context, msg interface{}, ts *TcpService[TcpServiceInfo]) {
+func (h *TcpHandler) OnMsg(ctx context.Context, msg utils.RecvMsger, ts *TcpService[TcpServiceInfo]) {
 	m, _ := msg.(*utils.TestMsg)
 	if h.Dispatch(ctx, m, ts) {
 		return
@@ -161,10 +157,10 @@ func (h *TcpHandler) OnTick(ctx context.Context, ts *TcpService[TcpServiceInfo])
 			//正常发送
 			//ts.SendMsg(utils.TestHeatBeatReqMsg)
 			//rpc方式发送，需要修改CheckRPCResp支持
-			resp, err := ts.SendRPCMsg(ctx, utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5)
+			_, err := ts.SendRPCMsg(ctx, utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5)
 			if err == nil {
-				m, _ := resp.(*utils.TestMsg)
-				utils.LogCtx(log.Debug(), ctx).Str("Name", ts.ConnName()).Interface("Msg", m).Msg("RecvRPCMsg")
+				//m, _ := resp.(*utils.TestMsg)
+				//utils.LogCtx(log.Debug(), ctx).Str("Name", ts.ConnName()).Interface("Msg", m).Msg("RecvRPCMsg")
 			}
 		}
 	}

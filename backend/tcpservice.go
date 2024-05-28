@@ -145,6 +145,10 @@ func (ts *TcpService[T]) SendMsg(ctx context.Context, msg utils.SendMsger) error
 		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 		return err
 	}
+	// 回调
+	for _, h := range ts.g.tb.hook {
+		h.OnSendMsg(ts, msg.MsgID(), len(data))
+	}
 	// 日志
 	logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
 	if logLevel >= int(log.Logger.GetLevel()) {
@@ -188,6 +192,10 @@ func (ts *TcpService[T]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg 
 		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
 		return nil, err
 	}
+	// 回调
+	for _, h := range ts.g.tb.hook {
+		h.OnSendMsg(ts, msg.MsgID(), len(data))
+	}
 	// 日志
 	logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
 	if logLevel >= int(log.Logger.GetLevel()) {
@@ -214,10 +222,6 @@ func (ts *TcpService[T]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg 
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Msg("SendRPCMsg resp error")
 	}
-	// 日志
-	if logLevel >= int(log.Logger.GetLevel()) {
-		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Resp", resp).Msg("RecvRPCMsg")
-	}
 	return resp, err
 }
 
@@ -239,7 +243,8 @@ func (ts *TcpService[T]) loopTick() {
 			break
 		}
 		if ts.g.tb.event != nil {
-			ctx := ts.g.tb.event.Context(ts.ctx, nil)
+			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
 			if TcpParamConf.Get().MsgSeq {
 				ts.seq.Submit(func() {
 					ts.g.tb.event.OnTick(ctx, ts)
@@ -384,9 +389,23 @@ func (ts *TcpService[T]) recv(data []byte) (int, error) {
 			break
 		}
 		if msg != nil {
-			ctx := ts.g.tb.event.Context(ts.ctx, msg)
+			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
 			// rpc消息检查
 			rpcId := ts.g.tb.event.CheckRPCResp(msg)
+			// 回调
+			for _, h := range ts.g.tb.hook {
+				h.OnRecvMsg(ts, msg.MsgID(), l)
+			}
+			// 日志
+			logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
+			if logLevel >= int(log.Logger.GetLevel()) {
+				if rpcId != nil {
+					utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Resp", msg).Msg("RecvRPCMsg")
+				} else {
+					utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("RecvMsg")
+				}
+			}
 			if rpcId != nil {
 				// rpc
 				rpc, ok := ts.rpc.LoadAndDelete(rpcId)

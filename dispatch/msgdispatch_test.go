@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/yuwf/gobase/log"
+	_ "github.com/yuwf/gobase/gobase/log"
 
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
+	"github.com/yuwf/gobase/gobase/utils"
 )
 
 type Client[T any] struct {
@@ -77,7 +77,7 @@ func BenchmarkRegReqResp(b *testing.B) {
 			TestMsgHead: utils.TestMsgHead{
 				Msgid: msg.MsgID(),
 			},
-			BodyMsg: msg,
+			SendMsg: msg,
 		}
 		c.SendMsg(sendMsg)
 	}
@@ -100,7 +100,7 @@ func BenchmarkRegReqRespTimeOut(b *testing.B) {
 			TestMsgHead: utils.TestMsgHead{
 				Msgid: msg.MsgID(),
 			},
-			BodyMsg: msg,
+			SendMsg: msg,
 		}
 		c.SendMsg(sendMsg)
 	}

@@ -17,25 +17,25 @@ type TCPEvent[ClientInfo any] interface {
 	OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo])
 
 	// DecodeMsg 解码消息实现
-	// 返回值为 msg,len,err
-	// msg     解码出的消息体
-	// len     解码消息的数据长度，内部根据len来删除已解码的数据
-	// err     解码错误，若发生error，服务器将重连
-	DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, error)
-
-	// Context 生成Context, 目前OnMsg、OnTick参数使用
-	// msg为nil时 表示是OnTick调用
-	Context(parent context.Context, msg interface{}) context.Context
+	// ctx       包括 [CtxKey_WS,CtxKey_Text]
+	// 返回值为   msg,len,err
+	// msg       解码出的消息体
+	// len       解码消息的数据长度，内部根据len来删除已解码的数据
+	// err       解码错误，若发生error，服务器将重连
+	DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (utils.RecvMsger, int, error)
 
 	// CheckRPCResp 判断是否RPC返回消息，如果使用SendRPCMsg需要实现此函数
-	// 返回值为 rpcid
-	// rpcid   对应请求SendRPC的id， 返回nil表示非rpc调用
-	CheckRPCResp(msg interface{}) interface{}
+	// ctx          包括 [CtxKey_WS,CtxKey_Text]
+	// 返回值为      rpcid
+	// rpcid        对应请求SendRPC的id， 返回nil表示非rpc调用
+	CheckRPCResp(msg utils.RecvMsger) interface{}
 
-	// OnRecv 收到消息，解码成功后调用 异步顺序调用，rpc不会调用此函数
-	OnMsg(ctx context.Context, msg interface{}, tc *TCPClient[ClientInfo])
+	// OnRecv 收到消息，解码成功后调用，rpc不会调用此函数
+	// ctx    包括 [CtxKey_WS,CtxKey_Text],CtxKey_traceId,CtxKey_msgId
+	OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo])
 
 	// OnTick 每秒调用一次 异步调用
+	// ctx    包括 [CtxKey_WS],CtxKey_traceId,CtxKey_msgId(固定为：_tick_)
 	OnTick(ctx context.Context, tc *TCPClient[ClientInfo])
 }
 
@@ -51,13 +51,10 @@ func (*TCPEventHandler[ClientInfo]) OnDisConnect(ctx context.Context, tc *TCPCli
 func (*TCPEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, error) {
 	return nil, len(data), errors.New("DecodeMsg not Implementation")
 }
-func (h *TCPEventHandler[ClientInfo]) Context(parent context.Context, msg interface{}) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-func (*TCPEventHandler[ClientInfo]) CheckRPCResp(msg interface{}) interface{} {
+func (*TCPEventHandler[ClientInfo]) CheckRPCResp(msg utils.RecvMsger) interface{} {
 	return nil
 }
-func (*TCPEventHandler[ClientInfo]) OnMsg(ctx context.Context, msg interface{}, tc *TCPClient[ClientInfo]) {
+func (*TCPEventHandler[ClientInfo]) OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo]) {
 }
 func (*TCPEventHandler[ClientInfo]) OnTick(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
@@ -76,8 +73,13 @@ type TCPHook[ClientInfo any] interface {
 	// 添加Client
 	OnRemoveClient(tc *TCPClient[ClientInfo])
 
-	// 发送数据
+	// 发送数据 所有的发送
 	OnSend(tc *TCPClient[ClientInfo], len int)
-	// 接受数据
+	// 接受数据 所有的接受
 	OnRecv(tc *TCPClient[ClientInfo], len int)
+
+	// 发送消息数据
+	OnSendMsg(tc *TCPClient[ClientInfo], msgId string, len int)
+	// 接受消息数据
+	OnRecvMsg(tc *TCPClient[ClientInfo], msgId string, len int)
 }

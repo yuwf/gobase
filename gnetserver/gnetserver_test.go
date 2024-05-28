@@ -9,6 +9,7 @@ import (
 
 	"github.com/yuwf/gobase/consul"
 	"github.com/yuwf/gobase/dispatch"
+	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
 	"github.com/yuwf/gobase/utils"
 
@@ -51,23 +52,26 @@ func (h *Handler) OnConnected(ctx context.Context, gc *GNetClient[ClientInfo]) {
 func (h *Handler) OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 
-func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (interface{}, int, error) {
+func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (utils.RecvMsger, int, error) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
-		return data, len(data), nil
+		return &utils.TestMsg{
+			TestMsgHead: utils.TestMsgHead{
+				Msgid: 0,
+				Len:   uint32(len(data)),
+			},
+			RecvData: data,
+		}, len(data), nil
 	}
 	return utils.TestDecodeMsg(data)
 }
-func (h *Handler) Context(parent context.Context, msg interface{}) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-func (h *Handler) OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo]) {
+func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, gc *GNetClient[ClientInfo]) {
+	m, _ := msg.(*utils.TestMsg)
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
-		gc.SendText(ctx, msg.([]byte)) // 原路返回
+		gc.SendText(ctx, m.RecvData) // 原路返回
 		return
 	}
-	m, _ := msg.(*utils.TestMsg)
 	if h.Dispatch(ctx, m, gc) {
 		return
 	}
@@ -136,6 +140,37 @@ func BenchmarkGNetServerConsul(b *testing.B) {
 			})
 		}
 	}
+
+	utils.ExitWait()
+}
+
+func BenchmarkGNetServerRegGoRedis(b *testing.B) {
+	server := NewGNetServer[int, ClientInfo](1237, NewHandler())
+	server.Start()
+	utils.RegExit(func(s os.Signal) {
+		server.Stop() // 退出服务监听
+	})
+
+	// 服务器注册下
+	var cfg = &goredis.Config{
+		Addrs: []string{"127.0.0.1:6379"},
+	}
+	r, err := goredis.NewRedis(cfg)
+	if err != nil {
+		return
+	}
+	var info = &goredis.RegistryInfo{
+		RegistryName:   "name",
+		RegistryID:     "id",
+		RegistryAddr:   "127.0.0.1",
+		RegistryPort:   1237,
+		RegistryScheme: "tcp",
+	}
+	reg := r.CreateRegister("test-service", info)
+	reg.Reg()
+	utils.RegExit(func(s os.Signal) {
+		reg.DeReg()
+	})
 
 	utils.ExitWait()
 }

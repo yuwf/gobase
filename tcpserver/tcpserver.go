@@ -318,7 +318,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	}
 
 	conn, _ := tcp.NewTCPConned(c, s)
-	tc := newTCPClient(conn, s.event)
+	tc := newTCPClient(conn, s.event, s.hook)
 	if s.Scheme == "ws" {
 		tc.ctx = context.WithValue(tc.ctx, CtxKey_WS, 1)
 		tc.wsh = newTCPWSHandler(tc)
@@ -471,7 +471,8 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 				if timeout > 0 && time.Since(tclient.lastActiveTime) > time.Second*time.Duration(timeout) {
 					tc.Close(errors.New("activetimeout"))
 				} else {
-					ctx := tc.event.Context(tc.ctx, nil)
+					ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+					ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
 					if ParamConf.Get().MsgSeq {
 						tc.seq.Submit(func() {
 							s.event.OnTick(ctx, tc)

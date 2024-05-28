@@ -17,20 +17,19 @@ type GNetEvent[ClientInfo any] interface {
 	OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo])
 
 	// DecodeMsg 解码消息实现
-	// 返回值为 msg,len,err
-	// msg     解码出的消息体
-	// len     解码消息的数据长度，内部根据len来删除已解码的数据
-	// err     解码错误，若发生error，服务器将重连
-	DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (interface{}, int, error)
+	// ctx       包括 [CtxKey_WS,CtxKey_Text]
+	// 返回值为   msg,len,err
+	// msg       解码出的消息体
+	// len       解码消息的数据长度，内部根据len来删除已解码的数据
+	// err       解码错误，若发生error，服务器将重连
+	DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (utils.RecvMsger, int, error)
 
-	// Context 生成Context, 目前OnMsg、OnTick参数使用
-	// msg为nil时 表示是OnTick调用
-	Context(parent context.Context, msg interface{}) context.Context
+	// OnRecv 收到消息，解码成功后调用
+	// ctx    包括 [CtxKey_WS,CtxKey_Text],CtxKey_traceId,CtxKey_msgId
+	OnMsg(ctx context.Context, msg utils.RecvMsger, gc *GNetClient[ClientInfo])
 
-	// OnRecv 收到消息，解码成功后调用 异步顺序调用
-	OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo])
-
-	// tick每秒调用一次 异步调用
+	// OnTick 每秒调用一次
+	// ctx    包括 [CtxKey_WS],CtxKey_traceId,CtxKey_msgId(固定为：_tick_)
 	OnTick(ctx context.Context, gc *GNetClient[ClientInfo])
 }
 
@@ -43,13 +42,10 @@ func (*GNetEventHandler[ClientInfo]) OnConnected(ctx context.Context, gc *GNetCl
 }
 func (*GNetEventHandler[ClientInfo]) OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
-func (*GNetEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (interface{}, int, error) {
+func (*GNetEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (utils.RecvMsger, int, error) {
 	return nil, len(data), errors.New("DecodeMsg not Implementation")
 }
-func (h *GNetEventHandler[ClientInfo]) Context(parent context.Context, msg interface{}) context.Context {
-	return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-}
-func (*GNetEventHandler[ClientInfo]) OnMsg(ctx context.Context, msg interface{}, gc *GNetClient[ClientInfo]) {
+func (*GNetEventHandler[ClientInfo]) OnMsg(ctx context.Context, msg utils.RecvMsger, gc *GNetClient[ClientInfo]) {
 }
 func (*GNetEventHandler[ClientInfo]) OnTick(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
@@ -68,8 +64,13 @@ type GNetHook[ClientInfo any] interface {
 	// 添加Client
 	OnRemoveClient(gc *GNetClient[ClientInfo])
 
-	// 发送数据
+	// 发送数据 所有的发送
 	OnSend(gc *GNetClient[ClientInfo], len int)
-	// 接受数据
+	// 接受数据 所有的接受
 	OnRecv(gc *GNetClient[ClientInfo], len int)
+
+	// 发送消息数据
+	OnSendMsg(gc *GNetClient[ClientInfo], msgId string, len int)
+	// 接受消息数据
+	OnRecvMsg(gc *GNetClient[ClientInfo], msgId string, len int)
 }
