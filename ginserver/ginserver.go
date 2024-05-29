@@ -27,10 +27,6 @@ var (
 	JsonParamBindError = map[string]interface{}{"errCode": 1, "errDesc": "Param Error"}
 	// 处理逻辑Panic了 回复状态：http.StatusInternalServerError
 	PanicError = map[string]interface{}{"errCode": 500, "errDesc": "Server Error"}
-	// 生成Context
-	Context = func(parent context.Context, c *gin.Context) context.Context {
-		return context.WithValue(parent, utils.CtxKey_traceId, utils.GenTraceID())
-	}
 )
 
 type GinServer struct {
@@ -54,6 +50,7 @@ func NewGinServer(port int) *GinServer {
 
 	gs.engine.Use(
 		cors,
+		gs.context,
 		gs.hystrix,
 		gs.handle,
 	)
@@ -354,9 +351,15 @@ func (w responseWriterWrapper) WriteString(s string) (int, error) {
 	return w.ResponseWriter.WriteString(s)
 }
 
-func (gs *GinServer) hystrix(c *gin.Context) {
-	ctx := Context(context.TODO(), c)
+func (gs *GinServer) context(c *gin.Context) {
+	ctx := context.WithValue(context.TODO(), utils.CtxKey_traceId, utils.GenTraceID())
+	ctx = context.WithValue(ctx, utils.CtxKey_msgId, c.Request.URL.Path)
 	c.Set("ctx", ctx)
+}
+
+func (gs *GinServer) hystrix(c *gin.Context) {
+	ctxv, _ := c.Get("ctx")
+	ctx, _ := ctxv.(context.Context)
 
 	// 熔断
 	if name, ok := ParamConf.Get().IsHystrixPath(c.Request.URL.Path); ok {
