@@ -21,6 +21,9 @@ func BenchmarkSequence(b *testing.B) {
 	for i := 0; i < 20; i++ {
 		n := i
 		seq.Submit(func() {
+			if n == 10 {
+				panic("no")
+			}
 			fmt.Println(n)
 		})
 	}

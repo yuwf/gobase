@@ -108,17 +108,20 @@ func (s *Sequence) handle() {
 	task := s.tasks.Front().Value.(func())
 	s.mutex.Unlock() // 解锁
 
+	// 任务执行完之后调用，防止任务有崩溃，放到defer中调用
+	defer func() {
+		s.mutex.Lock() // 加锁
+		// 移除当前完成的任务
+		s.tasks.Remove(s.tasks.Front())
+		// 如果任务列表不为空继续开启下一个handle
+		if s.tasks.Len() > 0 {
+			defaultAntsPool.Submit(s.handle)
+		}
+		s.mutex.Unlock() // 解锁
+	}()
+
 	// 执行task
 	if task != nil {
 		task()
 	}
-
-	s.mutex.Lock() // 加锁
-	// 移除当前完成的任务
-	s.tasks.Remove(s.tasks.Front())
-	// 如果任务列表不为空继续开启下一个handle
-	if s.tasks.Len() > 0 {
-		defaultAntsPool.Submit(s.handle)
-	}
-	s.mutex.Unlock() // 解锁
 }
