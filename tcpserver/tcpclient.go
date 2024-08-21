@@ -94,12 +94,12 @@ func (tc *TCPClient[ClientInfo]) clear() {
 	})
 }
 
-func (tc *TCPClient[ClientInfo]) RemoteAddr() string {
-	return tc.removeAddr.String()
+func (tc *TCPClient[ClientInfo]) RemoteAddr() net.TCPAddr {
+	return tc.removeAddr
 }
 
-func (tc *TCPClient[ClientInfo]) LocalAddr() string {
-	return tc.localAddr.String()
+func (tc *TCPClient[ClientInfo]) LocalAddr() net.TCPAddr {
+	return tc.localAddr
 }
 
 func (tc *TCPClient[ClientInfo]) Info() *ClientInfo {
@@ -269,7 +269,7 @@ func (tc *TCPClient[ClientInfo]) CloseWait(err error) {
 	tc.conn.Close(true)
 }
 
-//收到数据时调用
+// 收到数据时调用
 func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, error) {
 	if tc.event == nil {
 		return len(buf), nil

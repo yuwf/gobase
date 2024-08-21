@@ -153,7 +153,9 @@ var readRegisterScirpt = NewScript(`
 // 读取一次服务器列表
 func (r *Redis) ReadServices(ctx context.Context, key string, serverNames []string) ([]*RegistryInfo, error) {
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "WatchServices")
-	ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(1))
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	result, err := r.DoScript(ctx, readRegisterScirpt, []string{key}, RegExprieTime*1000).StringSlice()
 	if err != nil {
 		// 错误了 在来一次
@@ -213,7 +215,9 @@ func (r *Redis) loopCheckServicesChange(ctx context.Context, key string) {
 // 返回值表示是否抢占到了
 func (r *Redis) checkServicesChange(ctx context.Context, key string, uuid string) bool {
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "CheckServices")
-	ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(0))
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	// 先抢占下
 	lockKey := fmt.Sprintf(regCheckLockerFmt, key) // 抢占锁
 	listKey := fmt.Sprintf(regListFmt, key)        // 服务器列表
@@ -247,7 +251,7 @@ func isSame(last, new []*RegistryInfo) bool {
 	return true
 }
 
-//比较新旧列表，返回：new相比last，增加列表，删除的列表
+// 比较新旧列表，返回：new相比last，增加列表，删除的列表
 func diff(last, new []*RegistryInfo) ([]*RegistryInfo, []*RegistryInfo) {
 	addInfos, delInfos := make([]*RegistryInfo, 0), make([]*RegistryInfo, 0)
 	for i := range new {

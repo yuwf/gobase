@@ -13,24 +13,24 @@ import (
 )
 
 // T是和业务相关的客户端信息结构
-type HttpService[T any] struct {
+type HttpService[ServiceInfo any] struct {
 	// 不可修改
-	g       *HttpGroup[T]  // 上层对象
-	conf    *ServiceConfig // 服务器发现的配置
-	address string         // 地址
-	info    *T             // 客户端信息 内容修改需要外层加锁控制
+	g       *HttpGroup[ServiceInfo] // 上层对象
+	conf    *ServiceConfig          // 服务器发现的配置
+	address string                  // 地址
+	info    *ServiceInfo            // 客户端信息 内容修改需要外层加锁控制
 
 	// 外部要求退出
 	quit     chan int // 退出chan 外部写 内部读
 	quitFlag int32    // 标记是否退出，原子操作
 }
 
-func NewHttpService[T any](conf *ServiceConfig, g *HttpGroup[T]) (*HttpService[T], error) {
-	hs := &HttpService[T]{
+func NewHttpService[ServiceInfo any](conf *ServiceConfig, g *HttpGroup[ServiceInfo]) (*HttpService[ServiceInfo], error) {
+	hs := &HttpService[ServiceInfo]{
 		g:        g,
 		conf:     conf,
 		address:  fmt.Sprintf("http://%s:%d", conf.ServiceAddr, conf.ServicePort),
-		info:     new(T),
+		info:     new(ServiceInfo),
 		quit:     make(chan int),
 		quitFlag: 0,
 	}
@@ -40,27 +40,27 @@ func NewHttpService[T any](conf *ServiceConfig, g *HttpGroup[T]) (*HttpService[T
 }
 
 // 获取配置 获取后外层要求只读
-func (hs *HttpService[T]) Conf() *ServiceConfig {
+func (hs *HttpService[ServiceInfo]) Conf() *ServiceConfig {
 	return hs.conf
 }
 
-func (hs *HttpService[T]) ServiceName() string {
+func (hs *HttpService[ServiceInfo]) ServiceName() string {
 	return hs.conf.ServiceName
 }
 
-func (hs *HttpService[T]) ServiceId() string {
+func (hs *HttpService[ServiceInfo]) ServiceId() string {
 	return hs.conf.ServiceId
 }
 
-func (hs *HttpService[T]) Address() string {
+func (hs *HttpService[ServiceInfo]) Address() string {
 	return hs.address
 }
 
-func (hs *HttpService[T]) Info() *T {
+func (hs *HttpService[ServiceInfo]) Info() *ServiceInfo {
 	return hs.info
 }
 
-func (hs *HttpService[T]) loopTick() {
+func (hs *HttpService[ServiceInfo]) loopTick() {
 	cheackAddr := fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)
 	add := false
 	for {
@@ -120,7 +120,7 @@ func (hs *HttpService[T]) loopTick() {
 	hs.quit <- 1                                               // 反写让Close退出
 }
 
-func (hs *HttpService[T]) close() {
+func (hs *HttpService[ServiceInfo]) close() {
 	// 先从哈希环中移除
 	hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
 	// 异步关闭

@@ -5,12 +5,16 @@ package backend
 import (
 	"github.com/yuwf/gobase/consul"
 	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/redis"
 )
 
-type HttpEvent[T any] interface {
+type HttpEvent[ServiceInfo any] interface {
 	// consul服务器配置过滤器，返回符合条件的服务器
 	ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig
+
+	// consul服务器配置过滤器，返回符合条件的服务器
+	NacosFilter(confs []*nacos.RegistryInfo) []*ServiceConfig
 
 	// redis服务器配置过滤器，返回符合条件的服务器
 	RedisFilter(confs []*redis.RegistryInfo) []*ServiceConfig
@@ -21,28 +25,31 @@ type HttpEvent[T any] interface {
 
 // HttpEventHandler HttpEvent的内置实现
 // 如果不想实现HttpEvent的所有接口，可以继承它实现部分方法
-type HttpEventHandler[T any] struct {
+type HttpEventHandler[ServiceInfo any] struct {
 }
 
-func (*HttpEventHandler[T]) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
+func (*HttpEventHandler[ServiceInfo]) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
 	return []*ServiceConfig{}
 }
-func (*HttpEventHandler[T]) RedisFilter(confs []*redis.RegistryInfo) []*ServiceConfig {
+func (*HttpEventHandler[ServiceInfo]) NacosFilter(confs []*nacos.RegistryInfo) []*ServiceConfig {
 	return []*ServiceConfig{}
 }
-func (*HttpEventHandler[T]) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConfig {
+func (*HttpEventHandler[ServiceInfo]) RedisFilter(confs []*redis.RegistryInfo) []*ServiceConfig {
+	return []*ServiceConfig{}
+}
+func (*HttpEventHandler[ServiceInfo]) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConfig {
 	return []*ServiceConfig{}
 }
 
 // Hook
-type HttpHook[T any] interface {
+type HttpHook[ServiceInfo any] interface {
 	// 添加服务器
-	OnAdd(ts *HttpService[T])
+	OnAdd(ts *HttpService[ServiceInfo])
 	// 移除一个服务器，彻底移除
-	OnRemove(ts *HttpService[T])
+	OnRemove(ts *HttpService[ServiceInfo])
 
 	// 连接成功
-	OnConnected(ts *HttpService[T])
+	OnConnected(ts *HttpService[ServiceInfo])
 	// 连接掉线
-	OnDisConnect(ts *HttpService[T])
+	OnDisConnect(ts *HttpService[ServiceInfo])
 }

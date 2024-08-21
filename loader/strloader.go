@@ -16,8 +16,7 @@ import (
 // StrLoader
 type StrLoader struct {
 	sync.RWMutex
-	conf       string                  // 配置对象
-	src        []byte                  // 原始值
+	src        []byte                  // 原始值 每次修改都重新make出一个来
 	updateHook []func(old, new string) // 配置更新后的回调
 }
 
@@ -25,7 +24,10 @@ type StrLoader struct {
 func (l *StrLoader) Get() string {
 	l.RLock()
 	defer l.RUnlock()
-	return l.conf
+	if l.src == nil {
+		return ""
+	}
+	return utils.BytesToString(l.src)
 }
 
 // RegHook 注册配置修改Hook
@@ -35,6 +37,7 @@ func (l *StrLoader) RegHook(hook func(old, new string)) {
 	l.updateHook = append(l.updateHook, hook)
 }
 
+// 返回的对象可能会为nil，外部只读不可修改
 func (l *StrLoader) GetSrc() []byte {
 	l.RLock()
 	defer l.RUnlock()
@@ -54,10 +57,8 @@ func (l *StrLoader) Load(src []byte, path string) error {
 	old := l.Get()
 	// 替换值
 	l.Lock()
-	l.conf = ""
 	l.src = nil
 	if src != nil {
-		l.conf = string(src)
 		l.src = make([]byte, len(src)) // 深拷贝 防止传入的src会修改
 		copy(l.src, src)
 	}
@@ -87,6 +88,7 @@ func (l *StrLoader) LoadFile(path string) error {
 		log.Error().Err(err).Str("path", path).Msg("StrLoader LoadFile error")
 		return err
 	}
+
 	if reflect.DeepEqual(l.GetSrc(), src) {
 		return nil
 	}
@@ -96,7 +98,6 @@ func (l *StrLoader) LoadFile(path string) error {
 	old := l.Get()
 	// 替换值
 	l.Lock()
-	l.conf = string(src)
 	l.src = src          // 不需要深拷贝
 	hook := l.updateHook // 拷贝出一份来
 	l.Unlock()

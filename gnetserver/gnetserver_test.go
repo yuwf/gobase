@@ -11,6 +11,7 @@ import (
 	"github.com/yuwf/gobase/dispatch"
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
@@ -122,7 +123,7 @@ func BenchmarkGNetServerConsul(b *testing.B) {
 			"metricsPath": "/metrics",
 			"metricsPort": "9100",
 			"serviceName": "my-service-name",
-			"nodeId":      "110",
+			"serviceId":   "110",
 			"scheme":      "tcp",
 		},
 		HealthPort:     9502, //consul内部自己开启监听
@@ -132,6 +133,48 @@ func BenchmarkGNetServerConsul(b *testing.B) {
 		DeregisterTime: 4,
 	}
 	reg, err := consul.DefaultClient().CreateRegister(conf)
+	if err == nil {
+		err = reg.Reg()
+		if err != nil {
+			utils.RegExit(func(s os.Signal) {
+				reg.DeReg()
+			})
+		}
+	}
+
+	utils.ExitWait()
+}
+
+func BenchmarkGNetServerNacos(b *testing.B) {
+	server := NewGNetServer[int, ClientInfo](1237, NewHandler())
+	server.Start()
+	utils.RegExit(func(s os.Signal) {
+		server.Stop() // 退出服务监听
+	})
+
+	// 服务器注册下
+	cfg := nacos.Config{
+		NamespaceId: "",
+		Username:    "nacos",
+		Password:    "nacos",
+		Addrs:       []string{"localhost:8848"},
+	}
+	nacosCli, err := nacos.CreateClient(&cfg)
+	if err != nil {
+		return
+	}
+	conf := &nacos.RegistryConfig{
+		ServiceName: "serviceN",
+		GroupName:   "groupN",
+		Ip:          "localhost",
+		Port:        1237,
+		Metadata: map[string]string{
+			"serviceName": "my-service-name",
+			"serviceId":   "110",
+			"scheme":      "tcp",
+		},
+	}
+	reg, err := nacosCli.CreateRegister(conf)
 	if err == nil {
 		err = reg.Reg()
 		if err != nil {

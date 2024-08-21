@@ -51,8 +51,6 @@ type MySQLCommond struct {
 	Query string
 	Args  []interface{}
 
-	Caller *utils.CallerDesc
-
 	// 执行结果
 	Err     error
 	Elapsed time.Duration
@@ -71,7 +69,7 @@ func InitDefaultMySQL(conf *Config) (*MySQL, error) {
 	return defaultMySQL, nil
 }
 
-//NewMySQL ...
+// NewMySQL ...
 func NewMySQL(conf *Config) (*MySQL, error) {
 	conf.Source = strings.TrimSpace(conf.Source)
 	if len(conf.Source) == 0 {
@@ -103,11 +101,13 @@ func (m *MySQL) RegHook(f func(ctx context.Context, cmd *MySQLCommond)) {
 }
 
 func (m *MySQL) Get(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "Get",
-		Query:  query,
-		Args:   args,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "Get",
+		Query: query,
+		Args:  args,
 	}
 
 	entry := time.Now()
@@ -117,7 +117,6 @@ func (m *MySQL) Get(ctx context.Context, dest interface{}, query string, args ..
 	if mysqlCmd.Err != nil && mysqlCmd.Err != sql.ErrNoRows {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 			Str("query", query).Interface("args", args).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQL Get fail")
 	} else {
 		logOut := true
@@ -127,7 +126,6 @@ func (m *MySQL) Get(ctx context.Context, dest interface{}, query string, args ..
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 				Str("query", query).Interface("args", args).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Interface("dest", dest).
 				Msg("MySQL Get success")
 		}
@@ -140,11 +138,13 @@ func (m *MySQL) Get(ctx context.Context, dest interface{}, query string, args ..
 }
 
 func (m *MySQL) Select(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "Select",
-		Query:  query,
-		Args:   args,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "Select",
+		Query: query,
+		Args:  args,
 	}
 
 	entry := time.Now()
@@ -154,7 +154,6 @@ func (m *MySQL) Select(ctx context.Context, dest interface{}, query string, args
 	if mysqlCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 			Str("query", query).Interface("args", args).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQL Select fail")
 	} else {
 		logOut := true
@@ -164,7 +163,6 @@ func (m *MySQL) Select(ctx context.Context, dest interface{}, query string, args
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 				Str("query", query).Interface("args", args).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Interface("dest", dest).
 				Msg("MySQL Select success")
 		}
@@ -177,11 +175,13 @@ func (m *MySQL) Select(ctx context.Context, dest interface{}, query string, args
 }
 
 func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "Exec",
-		Query:  query,
-		Args:   args,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "Exec",
+		Query: query,
+		Args:  args,
 	}
 
 	entry := time.Now()
@@ -192,7 +192,6 @@ func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sq
 	if mysqlCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 			Str("query", query).Interface("args", args).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQL Exec fail")
 	} else {
 		logOut := true
@@ -202,7 +201,6 @@ func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sq
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 				Str("query", query).Interface("args", args).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Msg("MySQL Exec success")
 		}
 	}
@@ -214,11 +212,13 @@ func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sq
 }
 
 func (m *MySQL) Update(ctx context.Context, query string, args ...interface{}) (int64, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "Update",
-		Query:  query,
-		Args:   args,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "Update",
+		Query: query,
+		Args:  args,
 	}
 
 	entry := time.Now()
@@ -229,7 +229,6 @@ func (m *MySQL) Update(ctx context.Context, query string, args ...interface{}) (
 	if mysqlCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 			Str("query", query).Interface("args", args).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQL Update fail")
 	} else {
 		logOut := true
@@ -239,7 +238,6 @@ func (m *MySQL) Update(ctx context.Context, query string, args ...interface{}) (
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 				Str("query", query).Interface("args", args).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Msg("MySQL Update success")
 		}
 	}
@@ -256,7 +254,7 @@ func (m *MySQL) Update(ctx context.Context, query string, args ...interface{}) (
 func (m *MySQL) Begin(ctx context.Context) (*MySQLTx, error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		log.Error().Err(err).Msg("MySQL Begin fail")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("MySQL Begin fail")
 	}
 	return &MySQLTx{m: m, tx: tx}, err
 }
@@ -267,11 +265,13 @@ func (m *MySQL) Close() error {
 }
 
 func (mt *MySQLTx) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "TxExec",
-		Query:  query,
-		Args:   args,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "TxExec",
+		Query: query,
+		Args:  args,
 	}
 
 	entry := time.Now()
@@ -282,7 +282,6 @@ func (mt *MySQLTx) Exec(ctx context.Context, query string, args ...interface{}) 
 	if mysqlCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 			Str("query", query).Interface("args", args).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQLTx Exec fail")
 	} else {
 		logOut := true
@@ -292,7 +291,6 @@ func (mt *MySQLTx) Exec(ctx context.Context, query string, args ...interface{}) 
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
 				Str("query", query).Interface("args", args).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Msg("MySQLTx Exec success")
 		}
 	}
@@ -304,11 +302,13 @@ func (mt *MySQLTx) Exec(ctx context.Context, query string, args ...interface{}) 
 }
 
 func (mt *MySQLTx) Commit(ctx context.Context) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "TxCommit",
-		Query:  "Commit",
-		Args:   nil,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "TxCommit",
+		Query: "Commit",
+		Args:  nil,
 	}
 
 	entry := time.Now()
@@ -317,7 +317,6 @@ func (mt *MySQLTx) Commit(ctx context.Context) error {
 
 	if mysqlCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQLTx Commit fail")
 	} else {
 		logOut := true
@@ -326,7 +325,6 @@ func (mt *MySQLTx) Commit(ctx context.Context) error {
 		}
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Msg("MySQLTx Commit success")
 		}
 	}
@@ -338,11 +336,13 @@ func (mt *MySQLTx) Commit(ctx context.Context) error {
 }
 
 func (mt *MySQLTx) Rollback(ctx context.Context) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	mysqlCmd := &MySQLCommond{
-		Cmd:    "TxRollback",
-		Query:  "Rollback",
-		Args:   nil,
-		Caller: utils.GetCallerDesc(1),
+		Cmd:   "TxRollback",
+		Query: "Rollback",
+		Args:  nil,
 	}
 
 	entry := time.Now()
@@ -351,7 +351,6 @@ func (mt *MySQLTx) Rollback(ctx context.Context) error {
 
 	if mysqlCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
-			Str("pos", mysqlCmd.Caller.Pos()).
 			Msg("MySQLTx Rollback fail")
 	} else {
 		logOut := true
@@ -360,7 +359,6 @@ func (mt *MySQLTx) Rollback(ctx context.Context) error {
 		}
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
-				Str("pos", mysqlCmd.Caller.Pos()).
 				Msg("MySQLTx Rollback success")
 		}
 	}

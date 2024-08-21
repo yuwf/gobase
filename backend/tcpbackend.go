@@ -8,26 +8,27 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/rs/zerolog/log"
 	"github.com/yuwf/gobase/utils"
+
+	"github.com/rs/zerolog/log"
 )
 
-// T是和业务相关的客户端信息结构 透传给TcpService
-type TcpBackend[T any] struct {
-	sync.RWMutex                         // 注意只保护group的变化 不要保护group内的操作
-	group        map[string]*TcpGroup[T] // 所有的服务器组 锁保护
-	event        TcpEvent[T]             // 事件处理
-	watcher      interface{}             // 服务器发现相关的对象 consul或者redis对象
+// ServiceInfo是和业务相关的客户端信息结构 透传给TcpService
+type TcpBackend[ServiceInfo any] struct {
+	sync.RWMutex                                   // 注意只保护group的变化 不要保护group内的操作
+	group        map[string]*TcpGroup[ServiceInfo] // 所有的服务器组 锁保护
+	event        TcpEvent[ServiceInfo]             // 事件处理
+	watcher      interface{}                       // 服务器发现相关的对象 consul或者redis对象
 	// 请求处理完后回调 不使用锁，默认要求提前注册好
-	hook []TCPHook[T]
+	hook []TCPHook[ServiceInfo]
 }
 
 // 注册hook
-func (tb *TcpBackend[T]) RegHook(h TCPHook[T]) {
+func (tb *TcpBackend[ServiceInfo]) RegHook(h TCPHook[ServiceInfo]) {
 	tb.hook = append(tb.hook, h)
 }
 
-func (tb *TcpBackend[T]) GetGroup(serviceName string) *TcpGroup[T] {
+func (tb *TcpBackend[ServiceInfo]) GetGroup(serviceName string) *TcpGroup[ServiceInfo] {
 	serviceName = strings.TrimSpace(strings.ToLower(serviceName))
 	tb.RLock()
 	defer tb.RUnlock()
@@ -38,17 +39,17 @@ func (tb *TcpBackend[T]) GetGroup(serviceName string) *TcpGroup[T] {
 	return nil
 }
 
-func (tb *TcpBackend[T]) GetGroups() map[string]*TcpGroup[T] {
+func (tb *TcpBackend[ServiceInfo]) GetGroups() map[string]*TcpGroup[ServiceInfo] {
 	tb.RLock()
 	defer tb.RUnlock()
-	gs := map[string]*TcpGroup[T]{}
+	gs := map[string]*TcpGroup[ServiceInfo]{}
 	for serviceName, group := range tb.group {
 		gs[serviceName] = group
 	}
 	return gs
 }
 
-func (tb *TcpBackend[T]) GetService(serviceName, serviceId string) *TcpService[T] {
+func (tb *TcpBackend[ServiceInfo]) GetService(serviceName, serviceId string) *TcpService[ServiceInfo] {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
 		return group.GetService(serviceId)
@@ -57,7 +58,7 @@ func (tb *TcpBackend[T]) GetService(serviceName, serviceId string) *TcpService[T
 }
 
 // 根据哈希环获取,哈希环行记录的都是连接成功的
-func (tb *TcpBackend[T]) GetServiceByHash(serviceName, hash string) *TcpService[T] {
+func (tb *TcpBackend[ServiceInfo]) GetServiceByHash(serviceName, hash string) *TcpService[ServiceInfo] {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
 		return group.GetServiceByHash(hash)
@@ -66,7 +67,7 @@ func (tb *TcpBackend[T]) GetServiceByHash(serviceName, hash string) *TcpService[
 }
 
 // 根据哈希环获取,哈希环行记录的都是连接成功的
-func (tb *TcpBackend[T]) GetServiceByTagAndHash(serviceName, tag, hash string) *TcpService[T] {
+func (tb *TcpBackend[ServiceInfo]) GetServiceByTagAndHash(serviceName, tag, hash string) *TcpService[ServiceInfo] {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
 		return group.GetServiceByTagAndHash(tag, hash)
@@ -75,7 +76,7 @@ func (tb *TcpBackend[T]) GetServiceByTagAndHash(serviceName, tag, hash string) *
 }
 
 // 向TcpService发消息，指定serviceId的
-func (tb *TcpBackend[T]) Send(ctx context.Context, serviceName string, serviceId string, buf []byte) error {
+func (tb *TcpBackend[ServiceInfo]) Send(ctx context.Context, serviceName, serviceId string, buf []byte) error {
 	service := tb.GetService(serviceName, serviceId)
 	if service != nil {
 		return service.Send(ctx, buf)
@@ -85,7 +86,7 @@ func (tb *TcpBackend[T]) Send(ctx context.Context, serviceName string, serviceId
 	return err
 }
 
-func (tb *TcpBackend[T]) SendMsg(ctx context.Context, serviceName string, serviceId string, msg utils.SendMsger) error {
+func (tb *TcpBackend[ServiceInfo]) SendMsg(ctx context.Context, serviceName, serviceId string, msg utils.SendMsger) error {
 	service := tb.GetService(serviceName, serviceId)
 	if service != nil {
 		return service.SendMsg(ctx, msg)
@@ -96,7 +97,7 @@ func (tb *TcpBackend[T]) SendMsg(ctx context.Context, serviceName string, servic
 }
 
 // 向TcpGroup发消息，使用哈希获取service
-func (tb *TcpBackend[T]) SendByHash(ctx context.Context, serviceName, hash string, buf []byte) error {
+func (tb *TcpBackend[ServiceInfo]) SendByHash(ctx context.Context, serviceName, hash string, buf []byte) error {
 	service := tb.GetServiceByHash(serviceName, hash)
 	if service != nil {
 		return service.Send(ctx, buf)
@@ -106,7 +107,7 @@ func (tb *TcpBackend[T]) SendByHash(ctx context.Context, serviceName, hash strin
 	return err
 }
 
-func (tb *TcpBackend[T]) SendMsgByHash(ctx context.Context, serviceName string, hash string, msg utils.SendMsger) error {
+func (tb *TcpBackend[ServiceInfo]) SendMsgByHash(ctx context.Context, serviceName, hash string, msg utils.SendMsger) error {
 	service := tb.GetServiceByHash(serviceName, hash)
 	if service != nil {
 		return service.SendMsg(ctx, msg)
@@ -117,7 +118,7 @@ func (tb *TcpBackend[T]) SendMsgByHash(ctx context.Context, serviceName string, 
 }
 
 // 向TcpGroup发消息，使用哈希获取service
-func (tb *TcpBackend[T]) SendByTagAndHash(ctx context.Context, serviceName, tag, hash string, buf []byte) error {
+func (tb *TcpBackend[ServiceInfo]) SendByTagAndHash(ctx context.Context, serviceName, tag, hash string, buf []byte) error {
 	service := tb.GetServiceByTagAndHash(serviceName, tag, hash)
 	if service != nil {
 		return service.Send(ctx, buf)
@@ -127,7 +128,7 @@ func (tb *TcpBackend[T]) SendByTagAndHash(ctx context.Context, serviceName, tag,
 	return err
 }
 
-func (tb *TcpBackend[T]) SendMsgByTagAndHash(ctx context.Context, serviceName, tag, hash string, msg utils.SendMsger) error {
+func (tb *TcpBackend[ServiceInfo]) SendMsgByTagAndHash(ctx context.Context, serviceName, tag, hash string, msg utils.SendMsger) error {
 	service := tb.GetServiceByTagAndHash(serviceName, tag, hash)
 	if service != nil {
 		return service.SendMsg(ctx, msg)
@@ -138,14 +139,14 @@ func (tb *TcpBackend[T]) SendMsgByTagAndHash(ctx context.Context, serviceName, t
 }
 
 // 向所有的TcpService发消息发送消息
-func (tb *TcpBackend[T]) Broad(ctx context.Context, buf []byte) {
+func (tb *TcpBackend[ServiceInfo]) Broad(ctx context.Context, buf []byte) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
 		group.Broad(ctx, buf)
 	}
 }
 
-func (tb *TcpBackend[T]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
+func (tb *TcpBackend[ServiceInfo]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
 		group.BroadMsg(ctx, msg)
@@ -153,14 +154,14 @@ func (tb *TcpBackend[T]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
 }
 
 // 向Group中的所有TcpService发送消息
-func (tb *TcpBackend[T]) BroadGroup(ctx context.Context, serviceName string, buf []byte) {
+func (tb *TcpBackend[ServiceInfo]) BroadGroup(ctx context.Context, serviceName string, buf []byte) {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
 		group.Broad(ctx, buf)
 	}
 }
 
-func (tb *TcpBackend[T]) BroadGroupMsg(ctx context.Context, serviceName string, msg utils.SendMsger) {
+func (tb *TcpBackend[ServiceInfo]) BroadGroupMsg(ctx context.Context, serviceName string, msg utils.SendMsger) {
 	group := tb.GetGroup(serviceName)
 	if group != nil {
 		group.BroadMsg(ctx, msg)
@@ -168,7 +169,7 @@ func (tb *TcpBackend[T]) BroadGroupMsg(ctx context.Context, serviceName string, 
 }
 
 // 向每个组中的其中一个TcpService发消息，使用哈希获取service
-func (tb *TcpBackend[T]) BroadMsgByHash(ctx context.Context, hash string, msg utils.SendMsger) {
+func (tb *TcpBackend[ServiceInfo]) BroadMsgByHash(ctx context.Context, hash string, msg utils.SendMsger) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
 		service := group.GetServiceByHash(hash)
@@ -179,7 +180,7 @@ func (tb *TcpBackend[T]) BroadMsgByHash(ctx context.Context, hash string, msg ut
 }
 
 // 向每个组中的指定的tag组中的其中一个TcpService发消息，使用哈希获取service
-func (tb *TcpBackend[T]) BroadMsgByTagAndHash(ctx context.Context, tag, hash string, msg utils.SendMsger) {
+func (tb *TcpBackend[ServiceInfo]) BroadMsgByTagAndHash(ctx context.Context, tag, hash string, msg utils.SendMsger) {
 	gs := tb.GetGroups()
 	for _, group := range gs {
 		service := group.GetServiceByTagAndHash(tag, hash)
@@ -190,7 +191,7 @@ func (tb *TcpBackend[T]) BroadMsgByTagAndHash(ctx context.Context, tag, hash str
 }
 
 // 服务器发现 更新逻辑
-func (tb *TcpBackend[T]) updateServices(confs []*ServiceConfig) {
+func (tb *TcpBackend[ServiceInfo]) updateServices(confs []*ServiceConfig) {
 	// 转化成去空格的小写
 	for _, conf := range confs {
 		conf.ServiceName = strings.TrimSpace(strings.ToLower(conf.ServiceName))

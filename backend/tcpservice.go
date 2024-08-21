@@ -21,15 +21,15 @@ const CtxKey_scheme = utils.CtxKey("scheme")
 
 // 后端连接对象 协程安全对象
 // T是和业务相关的客户端信息结构
-type TcpService[T any] struct {
+type TcpService[ServiceInfo any] struct {
 	// 不可修改
-	g           *TcpGroup[T]   // 上层对象
-	conf        *ServiceConfig // 服务器发现的配置
-	confDestroy int32          // 表示将配置是否销毁了 原子操作
-	address     string         // 地址
-	seq         utils.Sequence // 消息顺序处理工具 协程安全
-	info        *T             // 客户端信息，内容修改需要外层加锁控制
-	conn        *tcp.TCPConn   // 连接对象，协程安全
+	g           *TcpGroup[ServiceInfo] // 上层对象
+	conf        *ServiceConfig         // 服务器发现的配置
+	confDestroy int32                  // 表示将配置是否销毁了 原子操作
+	address     string                 // 地址
+	seq         utils.Sequence         // 消息顺序处理工具 协程安全
+	info        *ServiceInfo           // 客户端信息，内容修改需要外层加锁控制
+	conn        *tcp.TCPConn           // 连接对象，协程安全
 
 	ctx context.Context // 本连接的上下文
 
@@ -44,13 +44,13 @@ type TcpService[T any] struct {
 
 }
 
-func NewTcpService[T any](conf *ServiceConfig, g *TcpGroup[T]) (*TcpService[T], error) {
-	ts := &TcpService[T]{
+func NewTcpService[ServiceInfo any](conf *ServiceConfig, g *TcpGroup[ServiceInfo]) (*TcpService[ServiceInfo], error) {
+	ts := &TcpService[ServiceInfo]{
 		g:           g,
 		conf:        conf,
 		confDestroy: 0,
 		address:     fmt.Sprintf("%s:%d", conf.ServiceAddr, conf.ServicePort),
-		info:        new(T),
+		info:        new(ServiceInfo),
 		ctx:         context.WithValue(context.TODO(), CtxKey_scheme, "tcp"),
 		rpc:         new(sync.Map),
 		quit:        make(chan int),
@@ -72,7 +72,7 @@ func NewTcpService[T any](conf *ServiceConfig, g *TcpGroup[T]) (*TcpService[T], 
 }
 
 // 重连或者关闭连接时调用
-func (ts *TcpService[T]) clear() {
+func (ts *TcpService[ServiceInfo]) clear() {
 	// 清空下rpc
 	ts.rpc.Range(func(key, value interface{}) bool {
 		rpc, ok := ts.rpc.LoadAndDelete(key)
@@ -86,32 +86,32 @@ func (ts *TcpService[T]) clear() {
 }
 
 // 获取配置 获取后外层要求只读
-func (ts *TcpService[T]) Conf() *ServiceConfig {
+func (ts *TcpService[ServiceInfo]) Conf() *ServiceConfig {
 	return ts.conf
 }
 
-func (ts *TcpService[T]) ServiceName() string {
+func (ts *TcpService[ServiceInfo]) ServiceName() string {
 	return ts.conf.ServiceName
 }
 
-func (ts *TcpService[T]) ServiceId() string {
+func (ts *TcpService[ServiceInfo]) ServiceId() string {
 	return ts.conf.ServiceId
 }
 
-func (ts *TcpService[T]) Info() *T {
+func (ts *TcpService[ServiceInfo]) Info() *ServiceInfo {
 	return ts.info
 }
 
 // 获取连接对象
-func (ts *TcpService[T]) Conn() *tcp.TCPConn {
+func (ts *TcpService[ServiceInfo]) Conn() *tcp.TCPConn {
 	return ts.conn
 }
 
-func (ts *TcpService[T]) ConnName() string {
+func (ts *TcpService[ServiceInfo]) ConnName() string {
 	return ts.conf.ServiceName + ":" + ts.conf.ServiceId
 }
 
-func (ts *TcpService[T]) Send(ctx context.Context, data []byte) error {
+func (ts *TcpService[ServiceInfo]) Send(ctx context.Context, data []byte) error {
 	var err error
 	if len(data) == 0 {
 		err = errors.New("data is empty")
@@ -129,7 +129,7 @@ func (ts *TcpService[T]) Send(ctx context.Context, data []byte) error {
 
 // SendMsg 发送消息对象，会调用消息对象的MsgMarshal来编码消息
 // 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
-func (ts *TcpService[T]) SendMsg(ctx context.Context, msg utils.SendMsger) error {
+func (ts *TcpService[ServiceInfo]) SendMsg(ctx context.Context, msg utils.SendMsger) error {
 	if msg == nil {
 		err := errors.New("msg is empty")
 		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Msg("SendMsg error")
@@ -160,7 +160,7 @@ func (ts *TcpService[T]) SendMsg(ctx context.Context, msg utils.SendMsger) error
 // SendRPCMsg 发送RPC消息并等待消息回复，需要依赖event.CheckRPCResp来判断是否rpc调用
 // 成功返回解析后的消息
 // 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
-func (ts *TcpService[T]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg utils.SendMsger, timeout time.Duration) (interface{}, error) {
+func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg utils.SendMsger, timeout time.Duration) (interface{}, error) {
 	if msg == nil {
 		err := errors.New("msg is empty")
 		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Msg("SendRPCMsg error")
@@ -225,7 +225,7 @@ func (ts *TcpService[T]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg 
 	return resp, err
 }
 
-func (ts *TcpService[T]) loopTick() {
+func (ts *TcpService[ServiceInfo]) loopTick() {
 	for {
 		// 每秒tick下
 		timer := time.NewTimer(time.Second)
@@ -259,7 +259,7 @@ func (ts *TcpService[T]) loopTick() {
 	ts.quit <- 1 // 反写让Close退出
 }
 
-func (ts *TcpService[T]) close() {
+func (ts *TcpService[ServiceInfo]) close() {
 	// 先从哈希环中移除
 	ts.g.removeHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
 	// 关闭网络
@@ -271,7 +271,7 @@ func (ts *TcpService[T]) close() {
 	}
 }
 
-func (ts *TcpService[T]) OnDialFail(err error, t *tcp.TCPConn) error {
+func (ts *TcpService[ServiceInfo]) OnDialFail(err error, t *tcp.TCPConn) error {
 	log.Error().Str("Name", ts.ConnName()).Err(err).Str("DialAddr", ts.address).Int32("ConfDestroy", atomic.LoadInt32(&ts.confDestroy)).Msg("Connect fail")
 	if atomic.LoadInt32(&ts.confDestroy) == 1 {
 		// 服务器发现配置已经不存在了，停止loop，直接从group中删除
@@ -285,7 +285,7 @@ func (ts *TcpService[T]) OnDialFail(err error, t *tcp.TCPConn) error {
 	return nil
 }
 
-func (ts *TcpService[T]) OnDialSuccess(t *tcp.TCPConn) {
+func (ts *TcpService[ServiceInfo]) OnDialSuccess(t *tcp.TCPConn) {
 	log.Info().Str("Name", ts.ConnName()).Str("RemoteAddr", t.RemoteAddr().String()).Str("LocalAddr", t.LocalAddr().String()).Msg("Connect success")
 
 	// 添加到哈希环中
@@ -302,7 +302,7 @@ func (ts *TcpService[T]) OnDialSuccess(t *tcp.TCPConn) {
 	}
 }
 
-func (ts *TcpService[T]) OnDisConnect(err error, t *tcp.TCPConn) error {
+func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error {
 	log.Error().Str("Name", ts.ConnName()).
 		Str("ServiceId", ts.conf.ServiceId).
 		Err(err).
@@ -336,7 +336,7 @@ func (ts *TcpService[T]) OnDisConnect(err error, t *tcp.TCPConn) error {
 	return nil
 }
 
-func (ts *TcpService[T]) OnClose(tc *tcp.TCPConn) {
+func (ts *TcpService[ServiceInfo]) OnClose(tc *tcp.TCPConn) {
 	// 调用close主动关闭的
 	log.Info().Str("Name", ts.ConnName()).Str("addr", ts.address).Msg("Onlose")
 
@@ -348,7 +348,7 @@ func (ts *TcpService[T]) OnClose(tc *tcp.TCPConn) {
 	}
 }
 
-func (ts *TcpService[T]) OnRecv(data []byte, tc *tcp.TCPConn) (int, error) {
+func (ts *TcpService[ServiceInfo]) OnRecv(data []byte, tc *tcp.TCPConn) (int, error) {
 	// 回调
 	for _, h := range ts.g.tb.hook {
 		h.OnRecv(ts, len(data))
@@ -360,7 +360,7 @@ func (ts *TcpService[T]) OnRecv(data []byte, tc *tcp.TCPConn) (int, error) {
 	return len, err
 }
 
-func (ts *TcpService[T]) OnSend(data []byte, tc *tcp.TCPConn) ([]byte, error) {
+func (ts *TcpService[ServiceInfo]) OnSend(data []byte, tc *tcp.TCPConn) ([]byte, error) {
 	// 回调
 	for _, h := range ts.g.tb.hook {
 		h.OnSend(ts, len(data))
@@ -368,7 +368,7 @@ func (ts *TcpService[T]) OnSend(data []byte, tc *tcp.TCPConn) ([]byte, error) {
 	return data, nil
 }
 
-func (ts *TcpService[T]) recv(data []byte) (int, error) {
+func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 	if ts.g.tb.event == nil {
 		return len(data), nil
 	}

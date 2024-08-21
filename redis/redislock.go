@@ -26,13 +26,17 @@ var deleteLockKeyScript = NewScript(1, `
 
 // 只尝试一次加锁，失败直接返回
 func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) (func(), error) {
-	caller := utils.GetCallerDesc(1)
+	caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
+	if !ok {
+		caller = utils.GetCallerDesc(1)
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, caller)
+	}
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + caller.Pos() + "-" + utils.RandString(8)
 	redisCmd := &RedisCommond{
+		ctx:     ctx,
 		Cmd:     "SET",
 		Args:    []interface{}{key, uuid, "PX", timeout.Milliseconds(), "NX"},
 		CmdDesc: "TryLock",
-		Caller:  caller,
 	}
 
 	logOut := true
@@ -52,7 +56,6 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 	if redisCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Msg("Redis TryLock fail")
 		return nil, redisCmd.Err
 	}
@@ -67,7 +70,6 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 			// Debug就行 毕竟是try
 			utils.LogCtx(log.Debug(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
-				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).
 				Msg("Redis TryLock fail")
 		}
@@ -76,15 +78,15 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
-				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).
 				Msg("Redis TryLock success")
 		}
 		return func() {
+			ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1)) // 重新写一个，位置变了
 			redisCmd := &RedisCommond{
+				ctx:     ctx,
 				Cmd:     "SCRIPT",
 				Args:    []interface{}{key, uuid},
-				Caller:  utils.GetCallerDesc(1),
 				CmdDesc: "TryLock",
 			}
 			r.doScriptCmd(ctx, deleteLockKeyScript, redisCmd)
@@ -94,13 +96,17 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 
 // 只尝试多次加锁，超时后，返回失败
 func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (func(), error) {
-	caller := utils.GetCallerDesc(1)
+	caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
+	if !ok {
+		caller = utils.GetCallerDesc(1)
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, caller)
+	}
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + caller.Pos() + "-" + utils.RandString(8)
 	redisCmd := &RedisCommond{
+		ctx:     ctx,
 		Cmd:     "SET",
 		Args:    []interface{}{key, uuid, "PX", timeout.Milliseconds(), "NX"},
 		CmdDesc: "Lock",
-		Caller:  caller,
 	}
 
 	logOut := true
@@ -140,7 +146,6 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 			lock, _ := r.DoCmdString(ctx, "GET", key)
 			utils.LogCtx(log.Error(), ctx).Int32("elapsed", int32(elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
-				Str("pos", redisCmd.Caller.Pos()).
 				Str("lock", lock).
 				Msg("Redis Lock wait")
 		}
@@ -157,7 +162,6 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 	if redisCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Int("spinCnt", spinCnt).
 			Msg("Redis Lock fail")
@@ -166,16 +170,16 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
-				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).
 				Int("spinCnt", spinCnt).
 				Msg("Redis Lock success")
 		}
 		return func() {
+			ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1)) // 重新写一个，位置变了
 			redisCmd := &RedisCommond{
+				ctx:     ctx,
 				Cmd:     "SCRIPT",
 				Args:    []interface{}{key, uuid},
-				Caller:  utils.GetCallerDesc(1),
 				CmdDesc: "Lock",
 			}
 			r.doScriptCmd(ctx, deleteLockKeyScript, redisCmd)

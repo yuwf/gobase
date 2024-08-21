@@ -1,6 +1,9 @@
 package utils
 
+import "math"
+
 // https://github.com/yuwf/gobase
+// 泛型参考库 参考https://github.com/samber/lo/
 
 // 下面几种约束 参考https://cs.opensource.google/go/x/exp
 type Signed interface {
@@ -22,7 +25,19 @@ type Ordered interface {
 	Integer | Float | ~string
 }
 
-// 泛型参考库 参考https://github.com/samber/lo/
+func If[T any](condition bool, trueVal, falseVal T) T {
+	if condition {
+		return trueVal
+	} else {
+		return falseVal
+	}
+}
+
+const epsilon float64 = 1e-10
+
+func FloatEqual[T Float](a, b T) bool {
+	return math.Abs(float64(a-b)) < epsilon
+}
 
 func IndexOf[T comparable](collection []T, element T) int {
 	for i, item := range collection {
@@ -30,19 +45,16 @@ func IndexOf[T comparable](collection []T, element T) int {
 			return i
 		}
 	}
-
 	return -1
 }
 
 func LastIndexOf[T comparable](collection []T, element T) int {
 	length := len(collection)
-
 	for i := length - 1; i >= 0; i-- {
 		if collection[i] == element {
 			return i
 		}
 	}
-
 	return -1
 }
 
@@ -91,12 +103,10 @@ func Min[T Ordered](collection []T) T {
 func Reverse[T any](collection []T) []T {
 	length := len(collection)
 	half := length / 2
-
 	for i := 0; i < half; i = i + 1 {
 		j := length - 1 - i
 		collection[i], collection[j] = collection[j], collection[i]
 	}
-
 	return collection
 }
 
@@ -106,55 +116,46 @@ func Count[T comparable](collection []T, value T) (count int) {
 			count++
 		}
 	}
-
 	return count
 }
 
 func CountValues[T comparable](collection []T) map[T]int {
 	result := make(map[T]int)
-
 	for _, item := range collection {
 		result[item]++
 	}
-
 	return result
 }
 
 func Slice[T any](collection []T, start int, end int) []T {
 	size := len(collection)
-
 	if start >= end {
 		return []T{}
 	}
-
 	if start > size {
 		start = size
 	}
 	if start < 0 {
 		start = 0
 	}
-
 	if end > size {
 		end = size
 	}
 	if end < 0 {
 		end = 0
 	}
-
 	return collection[start:end]
 }
 
 func Replace[T comparable](collection []T, old T, new T, n int) []T {
 	result := make([]T, len(collection))
 	copy(result, collection)
-
 	for i := range result {
 		if result[i] == old && n != 0 {
 			result[i] = new
 			n--
 		}
 	}
-
 	return result
 }
 
@@ -164,9 +165,7 @@ func ReplaceAll[T comparable](collection []T, old T, new T) []T {
 
 func Compact[T comparable](collection []T) []T {
 	var zero T
-
 	result := make([]T, 0, len(collection))
-
 	for _, item := range collection {
 		if item != zero {
 			result = append(result, item)

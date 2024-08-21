@@ -14,12 +14,12 @@ type CallerDesc struct {
 	line     int
 }
 
-//返回 文件名:函数名:行号  用作日志
+// 返回 文件名:函数名:行号  用作日志
 func (c *CallerDesc) Pos() string {
 	return c.filename + ":" + c.funname + ":" + strconv.Itoa(c.line)
 }
 
-//返回 文件名:函数名 用作指标统计
+// 返回 文件名:函数名 用作指标统计
 func (c *CallerDesc) Name() string {
 	return c.filename + ":" + c.funname
 }

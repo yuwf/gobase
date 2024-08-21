@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/apolloconfig/agollo/v4"
 	"github.com/apolloconfig/agollo/v4/env/config"
@@ -101,7 +102,7 @@ func (c *Client) Watch(namespace, key string, loader loader.Loader, immediately 
 		if conf != nil {
 			value, err := conf.GetCache().Get(key)
 			if err == nil {
-				loader.Load([]byte(value.(string)), namespace+"/"+key)
+				loader.Load(utils.StringToBytes(value.(string)), namespace+"/"+key)
 			}
 		}
 	}
@@ -110,7 +111,7 @@ func (c *Client) Watch(namespace, key string, loader loader.Loader, immediately 
 		if value == nil {
 			loader.Load(nil, namespace+"/"+key)
 		} else {
-			loader.Load([]byte(value.(string)), namespace+"/"+key)
+			loader.Load(utils.StringToBytes(value.(string)), namespace+"/"+key)
 		}
 	})
 	return nil
@@ -122,7 +123,7 @@ func (c *Client) Load(namespace, key string, loader loader.Loader) error {
 	if err != nil {
 		return err
 	}
-	err = loader.Load([]byte(value), namespace+"/"+key)
+	err = loader.Load(utils.StringToBytes(value), namespace+"/"+key)
 	if err != nil {
 		return err
 	}

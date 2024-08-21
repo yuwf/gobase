@@ -5,6 +5,7 @@ package backend
 import (
 	"github.com/yuwf/gobase/consul"
 	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/redis"
 )
 
@@ -21,13 +22,13 @@ type ServiceIdConfMap = map[string]*ServiceConfig
 type ServiceNameConfMap = map[string]ServiceIdConfMap
 
 // 创建TcpBackend，使用Consul做服务器发现
-func NewTcpBackendWithConsul[T any](consulAddr, tag string, event TcpEvent[T]) (*TcpBackend[T], error) {
+func NewTcpBackendWithConsul[ServiceInfo any](consulAddr, tag string, event TcpEvent[ServiceInfo]) (*TcpBackend[ServiceInfo], error) {
 	watcher, err := consul.CreateClient(consulAddr, "http")
 	if err != nil {
 		return nil, err
 	}
-	tb := &TcpBackend[T]{
-		group:   map[string]*TcpGroup[T]{},
+	tb := &TcpBackend[ServiceInfo]{
+		group:   map[string]*TcpGroup[ServiceInfo]{},
 		event:   event,
 		watcher: watcher,
 	}
@@ -41,16 +42,48 @@ func NewTcpBackendWithConsul[T any](consulAddr, tag string, event TcpEvent[T]) (
 	return tb, nil
 }
 
+// 创建TcpBackend，使用Nacos做服务器发现
+func NewTcpBackendWithNacos[ServiceInfo any](nacosCli *nacos.Client, serviceName, groupName string, clusters []string, event TcpEvent[ServiceInfo]) (*TcpBackend[ServiceInfo], error) {
+	tb := &TcpBackend[ServiceInfo]{
+		group:   map[string]*TcpGroup[ServiceInfo]{},
+		event:   event,
+		watcher: nacosCli,
+	}
+	// 服务发现部分
+	nacosCli.ListenService(serviceName, groupName, clusters, func(infos []*nacos.RegistryInfo) {
+		if tb.event != nil {
+			confs := tb.event.NacosFilter(infos)
+			tb.updateServices(confs)
+		}
+	})
+	return tb, nil
+}
+func NewTcpBackendWithNacos2[ServiceInfo any](nacosCli *nacos.Client, serviceNames []string, groupName string, clusters []string, event TcpEvent[ServiceInfo]) (*TcpBackend[ServiceInfo], error) {
+	tb := &TcpBackend[ServiceInfo]{
+		group:   map[string]*TcpGroup[ServiceInfo]{},
+		event:   event,
+		watcher: nacosCli,
+	}
+	// 服务发现部分
+	nacosCli.ListenServices(serviceNames, groupName, clusters, func(infos []*nacos.RegistryInfo) {
+		if tb.event != nil {
+			confs := tb.event.NacosFilter(infos)
+			tb.updateServices(confs)
+		}
+	})
+	return tb, nil
+}
+
 // 创建TcpBackend，使用Redis做服务器发现
 // key 表示服务器发现的key
 // serverName 表示监听哪些服务器 为空表示监听全部的服务器
-func NewTcpBackendWithRedis[T any](cfg *redis.Config, key string, serverNames []string, event TcpEvent[T]) (*TcpBackend[T], error) {
+func NewTcpBackendWithRedis[ServiceInfo any](cfg *redis.Config, key string, serverNames []string, event TcpEvent[ServiceInfo]) (*TcpBackend[ServiceInfo], error) {
 	watcher, err := redis.NewRedis(cfg)
 	if err != nil {
 		return nil, err
 	}
-	tb := &TcpBackend[T]{
-		group:   map[string]*TcpGroup[T]{},
+	tb := &TcpBackend[ServiceInfo]{
+		group:   map[string]*TcpGroup[ServiceInfo]{},
 		event:   event,
 		watcher: watcher,
 	}
@@ -63,13 +96,13 @@ func NewTcpBackendWithRedis[T any](cfg *redis.Config, key string, serverNames []
 	})
 	return tb, nil
 }
-func NewTcpBackendWithGoRedis[T any](cfg *goredis.Config, key string, serverNames []string, event TcpEvent[T]) (*TcpBackend[T], error) {
+func NewTcpBackendWithGoRedis[ServiceInfo any](cfg *goredis.Config, key string, serverNames []string, event TcpEvent[ServiceInfo]) (*TcpBackend[ServiceInfo], error) {
 	watcher, err := goredis.NewRedis(cfg)
 	if err != nil {
 		return nil, err
 	}
-	tb := &TcpBackend[T]{
-		group:   map[string]*TcpGroup[T]{},
+	tb := &TcpBackend[ServiceInfo]{
+		group:   map[string]*TcpGroup[ServiceInfo]{},
 		event:   event,
 		watcher: watcher,
 	}
@@ -84,13 +117,13 @@ func NewTcpBackendWithGoRedis[T any](cfg *goredis.Config, key string, serverName
 }
 
 // 创建HttpBackend，使用Redis做服务器发现
-func NewHttpBackendWithConsul[T any](consulAddr, tag string, event HttpEvent[T]) (*HttpBackend[T], error) {
+func NewHttpBackendWithConsul[ServiceInfo any](consulAddr, tag string, event HttpEvent[ServiceInfo]) (*HttpBackend[ServiceInfo], error) {
 	watcher, err := consul.CreateClient(consulAddr, "http")
 	if err != nil {
 		return nil, err
 	}
-	hb := &HttpBackend[T]{
-		group:   map[string]*HttpGroup[T]{},
+	hb := &HttpBackend[ServiceInfo]{
+		group:   map[string]*HttpGroup[ServiceInfo]{},
 		event:   event,
 		watcher: watcher,
 	}
@@ -107,13 +140,13 @@ func NewHttpBackendWithConsul[T any](consulAddr, tag string, event HttpEvent[T])
 // 创建HttpBackend，使用Redis做服务器发现
 // key 表示服务器发现的key
 // serverName 表示监听哪些服务器 为空表示监听全部的服务器
-func NewHttpBackendWithRedis[T any](cfg *redis.Config, key string, serverNames []string, event HttpEvent[T]) (*HttpBackend[T], error) {
+func NewHttpBackendWithRedis[ServiceInfo any](cfg *redis.Config, key string, serverNames []string, event HttpEvent[ServiceInfo]) (*HttpBackend[ServiceInfo], error) {
 	watcher, err := redis.NewRedis(cfg)
 	if err != nil {
 		return nil, err
 	}
-	hb := &HttpBackend[T]{
-		group:   map[string]*HttpGroup[T]{},
+	hb := &HttpBackend[ServiceInfo]{
+		group:   map[string]*HttpGroup[ServiceInfo]{},
 		event:   event,
 		watcher: watcher,
 	}
@@ -126,13 +159,13 @@ func NewHttpBackendWithRedis[T any](cfg *redis.Config, key string, serverNames [
 	})
 	return hb, nil
 }
-func NewHttpBackendWithGoRedis[T any](cfg *goredis.Config, key string, serverNames []string, event HttpEvent[T]) (*HttpBackend[T], error) {
+func NewHttpBackendWithGoRedis[ServiceInfo any](cfg *goredis.Config, key string, serverNames []string, event HttpEvent[ServiceInfo]) (*HttpBackend[ServiceInfo], error) {
 	watcher, err := goredis.NewRedis(cfg)
 	if err != nil {
 		return nil, err
 	}
-	hb := &HttpBackend[T]{
-		group:   map[string]*HttpGroup[T]{},
+	hb := &HttpBackend[ServiceInfo]{
+		group:   map[string]*HttpGroup[ServiceInfo]{},
 		event:   event,
 		watcher: watcher,
 	}
@@ -140,6 +173,38 @@ func NewHttpBackendWithGoRedis[T any](cfg *goredis.Config, key string, serverNam
 	watcher.WatchServices(key, serverNames, func(infos []*goredis.RegistryInfo) {
 		if hb.event != nil {
 			confs := hb.event.GoRedisFilter(infos)
+			hb.updateServices(confs)
+		}
+	})
+	return hb, nil
+}
+
+// 创建HttpBackend，使用Nacos做服务器发现
+func NewHttpBackendWithNacos[ServiceInfo any](nacosCli *nacos.Client, serviceName, groupName string, clusters []string, event HttpEvent[ServiceInfo]) (*HttpBackend[ServiceInfo], error) {
+	hb := &HttpBackend[ServiceInfo]{
+		group:   map[string]*HttpGroup[ServiceInfo]{},
+		event:   event,
+		watcher: nacosCli,
+	}
+	// 服务发现部分
+	nacosCli.ListenService(serviceName, groupName, clusters, func(infos []*nacos.RegistryInfo) {
+		if hb.event != nil {
+			confs := hb.event.NacosFilter(infos)
+			hb.updateServices(confs)
+		}
+	})
+	return hb, nil
+}
+func NewHttpBackendWithNacos2[ServiceInfo any](nacosCli *nacos.Client, serviceNames []string, groupName string, clusters []string, event HttpEvent[ServiceInfo]) (*HttpBackend[ServiceInfo], error) {
+	hb := &HttpBackend[ServiceInfo]{
+		group:   map[string]*HttpGroup[ServiceInfo]{},
+		event:   event,
+		watcher: nacosCli,
+	}
+	// 服务发现部分
+	nacosCli.ListenServices(serviceNames, groupName, clusters, func(infos []*nacos.RegistryInfo) {
+		if hb.event != nil {
+			confs := hb.event.NacosFilter(infos)
 			hb.updateServices(confs)
 		}
 	})

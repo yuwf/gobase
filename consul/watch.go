@@ -302,7 +302,7 @@ func isSame(last, new []*RegistryInfo) bool {
 	return true
 }
 
-//比较新旧列表，返回：new相比last，增加列表，删除的列表
+// 比较新旧列表，返回：new相比last，增加列表，删除的列表
 func diff(last, new []*RegistryInfo) ([]*RegistryInfo, []*RegistryInfo) {
 	addInfos, delInfos := make([]*RegistryInfo, 0), make([]*RegistryInfo, 0)
 	for i := range new {

@@ -62,8 +62,8 @@ func BenchmarkRedisHMSetObj(b *testing.B) {
 
 	t3 := &Test{}
 	pipe := redis.NewPipeline()
-	pipe.HMSetObj("pipett", t1)
-	pipe.HMGetObj("pipett", t3)
+	pipe.HMSetObj(context.TODO(), "pipett", t1)
+	pipe.HMGetObj(context.TODO(), "pipett", t3)
 	pipe.Do(context.TODO())
 	fmt.Printf("%v\n", t3)
 }

@@ -8,35 +8,36 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/rs/zerolog/log"
 	"github.com/yuwf/gobase/utils"
+
+	"github.com/rs/zerolog/log"
 	"stathat.com/c/consistent"
 )
 
 // 功能相同的一组服务器
 // T是和业务相关的客户端信息结构 透传给TcpService
-type TcpGroup[T any] struct {
+type TcpGroup[ServiceInfo any] struct {
 	sync.RWMutex
-	tb          *TcpBackend[T]            // 上层对象
-	serviceName string                    // 不可修改
-	services    map[string]*TcpService[T] // 锁保护
+	tb          *TcpBackend[ServiceInfo]            // 上层对象
+	serviceName string                              // 不可修改
+	services    map[string]*TcpService[ServiceInfo] // 锁保护
 	// 线程安全
 	hashring    *consistent.Consistent // 哈希环，填充serviceId, 协程安全，交给TcpService来填充，他有连接和熔断策略
-	tagHashring *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
+	tagHashring *sync.Map              // 按tag分组的哈希环 [ServiceInfoag:*consistent.Consistent]
 }
 
-func NewTcpGroup[T any](serviceName string, tb *TcpBackend[T]) *TcpGroup[T] {
-	g := &TcpGroup[T]{
+func NewTcpGroup[ServiceInfo any](serviceName string, tb *TcpBackend[ServiceInfo]) *TcpGroup[ServiceInfo] {
+	g := &TcpGroup[ServiceInfo]{
 		tb:          tb,
 		serviceName: serviceName,
-		services:    map[string]*TcpService[T]{},
+		services:    map[string]*TcpService[ServiceInfo]{},
 		hashring:    consistent.New(),
 		tagHashring: new(sync.Map),
 	}
 	return g
 }
 
-func (g *TcpGroup[T]) GetService(serviceId string) *TcpService[T] {
+func (g *TcpGroup[ServiceInfo]) GetService(serviceId string) *TcpService[ServiceInfo] {
 	serviceId = strings.ToLower(serviceId)
 	serviceId = strings.TrimSpace(serviceId)
 	g.RLock()
@@ -48,10 +49,10 @@ func (g *TcpGroup[T]) GetService(serviceId string) *TcpService[T] {
 	return nil
 }
 
-func (g *TcpGroup[T]) GetServices() map[string]*TcpService[T] {
+func (g *TcpGroup[ServiceInfo]) GetServices() map[string]*TcpService[ServiceInfo] {
 	g.RLock()
 	defer g.RUnlock()
-	ss := map[string]*TcpService[T]{}
+	ss := map[string]*TcpService[ServiceInfo]{}
 	for serviceId, service := range g.services {
 		ss[serviceId] = service
 	}
@@ -59,7 +60,7 @@ func (g *TcpGroup[T]) GetServices() map[string]*TcpService[T] {
 }
 
 // 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
-func (g *TcpGroup[T]) GetServiceByHash(hash string) *TcpService[T] {
+func (g *TcpGroup[ServiceInfo]) GetServiceByHash(hash string) *TcpService[ServiceInfo] {
 	serviceId, err := g.hashring.Get(hash)
 	if err != nil {
 		return nil
@@ -74,7 +75,7 @@ func (g *TcpGroup[T]) GetServiceByHash(hash string) *TcpService[T] {
 }
 
 // 根据tag和哈希环获取对象 hash可以用用户id或者其他稳定的数据
-func (g *TcpGroup[T]) GetServiceByTagAndHash(tag, hash string) *TcpService[T] {
+func (g *TcpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *TcpService[ServiceInfo] {
 	tag = strings.TrimSpace(strings.ToLower(tag))
 	hasrhing, ok := g.tagHashring.Load(tag)
 	if !ok {
@@ -94,14 +95,14 @@ func (g *TcpGroup[T]) GetServiceByTagAndHash(tag, hash string) *TcpService[T] {
 }
 
 // 广播消息
-func (g *TcpGroup[T]) Broad(ctx context.Context, buf []byte) {
+func (g *TcpGroup[ServiceInfo]) Broad(ctx context.Context, buf []byte) {
 	ss := g.GetServices()
 	for _, service := range ss {
 		service.Send(ctx, buf)
 	}
 }
 
-func (g *TcpGroup[T]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
+func (g *TcpGroup[ServiceInfo]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
 	ss := g.GetServices()
 	for _, service := range ss {
 		service.SendMsg(ctx, msg)
@@ -109,9 +110,9 @@ func (g *TcpGroup[T]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
 }
 
 // 更新组，返回剩余个数
-func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
-	var remove []*TcpService[T]
-	var add []*TcpService[T]
+func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
+	var remove []*TcpService[ServiceInfo]
+	var add []*TcpService[ServiceInfo]
 
 	g.Lock()
 	// 先删除不存在的
@@ -198,7 +199,7 @@ func (g *TcpGroup[T]) update(serviceConfs ServiceIdConfMap) int {
 
 // 内部使用
 // 添加到哈希环
-func (g *TcpGroup[T]) addHashring(serviceId, routingTag string) {
+func (g *TcpGroup[ServiceInfo]) addHashring(serviceId, routingTag string) {
 	g.hashring.Add(serviceId)
 	if len(routingTag) > 0 {
 		hashring, ok := g.tagHashring.Load(routingTag)
@@ -213,7 +214,7 @@ func (g *TcpGroup[T]) addHashring(serviceId, routingTag string) {
 }
 
 // 从哈希环中移除
-func (g *TcpGroup[T]) removeHashring(serviceId, routingTag string) {
+func (g *TcpGroup[ServiceInfo]) removeHashring(serviceId, routingTag string) {
 	g.hashring.Remove(serviceId)
 	hashring, ok := g.tagHashring.Load(routingTag)
 	if ok {
@@ -225,7 +226,7 @@ func (g *TcpGroup[T]) removeHashring(serviceId, routingTag string) {
 }
 
 // 删除Service
-func (g *TcpGroup[T]) removeSevice(serviceId string) {
+func (g *TcpGroup[ServiceInfo]) removeSevice(serviceId string) {
 	g.Lock()
 	service, ok := g.services[serviceId]
 	if ok {

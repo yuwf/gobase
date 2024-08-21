@@ -72,12 +72,12 @@ func newGNetClient[ClientInfo any](conn gnet.Conn, event GNetEvent[ClientInfo], 
 	return gc
 }
 
-func (gc *GNetClient[ClientInfo]) RemoteAddr() string {
-	return gc.removeAddr.String()
+func (gc *GNetClient[ClientInfo]) RemoteAddr() net.TCPAddr {
+	return gc.removeAddr
 }
 
-func (gc *GNetClient[ClientInfo]) LocalAddr() string {
-	return gc.localAddr.String()
+func (gc *GNetClient[ClientInfo]) LocalAddr() net.TCPAddr {
+	return gc.localAddr
 }
 
 func (gc *GNetClient[ClientInfo]) Info() *ClientInfo {
@@ -172,7 +172,7 @@ func (gc *GNetClient[ClientInfo]) Close(err error) {
 	gc.conn.Close()
 }
 
-//收到数据时调用
+// 收到数据时调用
 func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, error) {
 	if gc.event == nil {
 		return len(buf), nil

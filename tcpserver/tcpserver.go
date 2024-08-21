@@ -314,7 +314,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnShutdown() {
 func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	logOut := !ParamConf.Get().IsIgnoreIp(c.RemoteAddr().String())
 	if logOut {
-		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Msg("OnAccept")
+		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Str("LocalAddr", c.LocalAddr().String()).Msg("OnAccept")
 	}
 
 	conn, _ := tcp.NewTCPConned(c, s)

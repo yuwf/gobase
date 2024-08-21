@@ -29,23 +29,18 @@ func (r *Redis) DoScript(ctx context.Context, script *RedisScript, keysAndArgs .
 	return redisCmd.Reply, redisCmd.Err
 }
 
-func (r *Redis) DoScript2(ctx context.Context, script *RedisScript, keysAndArgs ...interface{}) RedisResultBind {
+func (r *Redis) DoScript2(ctx context.Context, script *RedisScript, keysAndArgs ...interface{}) *RedisCommond {
 	return r.doScript(ctx, script, keysAndArgs...)
 }
 
 func (r *Redis) doScript(ctx context.Context, script *RedisScript, keysAndArgs ...interface{}) *RedisCommond {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(2))
+	}
 	redisCmd := &RedisCommond{
+		ctx:  ctx,
 		Cmd:  "SCRIPT",
 		Args: keysAndArgs,
-	}
-	if ctx != nil {
-		caller := ctx.Value(CtxKey_caller)
-		if caller != nil {
-			redisCmd.Caller, _ = caller.(*utils.CallerDesc)
-		}
-	}
-	if redisCmd.Caller == nil {
-		redisCmd.Caller = utils.GetCallerDesc(2)
 	}
 	r.doScriptCmd(ctx, script, redisCmd)
 	return redisCmd
@@ -53,7 +48,7 @@ func (r *Redis) doScript(ctx context.Context, script *RedisScript, keysAndArgs .
 
 func (r *Redis) doScriptCmd(ctx context.Context, script *RedisScript, redisCmd *RedisCommond) {
 	if r.pool == nil {
-		log.Error().Str("pos", redisCmd.Caller.Pos()).Msg("Redis pool is nil")
+		utils.LogCtx(log.Error(), ctx).Msg("Redis pool is nil")
 		redisCmd.Err = errors.New("Redis pool is nil")
 		return
 	}
@@ -74,7 +69,6 @@ func (r *Redis) doScriptCmd(ctx context.Context, script *RedisScript, redisCmd *
 	if redisCmd.Err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Msg("Redis doScript fail")
 	} else {
 		logOut := true
@@ -87,7 +81,6 @@ func (r *Redis) doScriptCmd(ctx context.Context, script *RedisScript, redisCmd *
 		if logOut {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", redisCmd.CmdString()).
-				Str("pos", redisCmd.Caller.Pos()).
 				Str("reply", redisCmd.ReplyString()).
 				Msg("Redis doScript success")
 		}
@@ -109,7 +102,6 @@ func (r *Redis) DoScriptInt(ctx context.Context, script *RedisScript, keysAndArg
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptInt fail")
 	}
@@ -126,7 +118,6 @@ func (r *Redis) DoScriptInt64(ctx context.Context, script *RedisScript, keysAndA
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptInt64 fail")
 	}
@@ -143,7 +134,6 @@ func (r *Redis) DoScriptUint64(ctx context.Context, script *RedisScript, keysAnd
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptUint64 fail")
 	}
@@ -160,7 +150,6 @@ func (r *Redis) DoScriptFloat64(ctx context.Context, script *RedisScript, keysAn
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptFloat64 fail")
 	}
@@ -177,7 +166,6 @@ func (r *Redis) DoScriptString(ctx context.Context, script *RedisScript, keysAnd
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptString fail")
 	}
@@ -194,7 +182,6 @@ func (r *Redis) DoScriptBytes(ctx context.Context, script *RedisScript, keysAndA
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptBytes fail")
 	}
@@ -211,7 +198,6 @@ func (r *Redis) DoScriptBool(ctx context.Context, script *RedisScript, keysAndAr
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptBool fail")
 	}
@@ -228,7 +214,6 @@ func (r *Redis) DoScriptFloat64s(ctx context.Context, script *RedisScript, keysA
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptFloat64s fail")
 	}
@@ -245,7 +230,6 @@ func (r *Redis) DoScriptStrings(ctx context.Context, script *RedisScript, keysAn
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptStrings fail")
 	}
@@ -262,7 +246,6 @@ func (r *Redis) DoScriptByteSlices(ctx context.Context, script *RedisScript, key
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptByteSlices fail")
 	}
@@ -279,7 +262,6 @@ func (r *Redis) DoScriptInt64s(ctx context.Context, script *RedisScript, keysAnd
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptInt64s fail")
 	}
@@ -296,7 +278,6 @@ func (r *Redis) DoScriptInts(ctx context.Context, script *RedisScript, keysAndAr
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptInts fail")
 	}
@@ -313,7 +294,6 @@ func (r *Redis) DoScriptStringMap(ctx context.Context, script *RedisScript, keys
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptStringMap fail")
 	}
@@ -330,7 +310,6 @@ func (r *Redis) DoScriptIntMap(ctx context.Context, script *RedisScript, keysAnd
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptIntMap fail")
 	}
@@ -347,7 +326,6 @@ func (r *Redis) DoScriptInt64Map(ctx context.Context, script *RedisScript, keysA
 	if redisCmd.Err != nil && redisCmd.Err != redis.ErrNil {
 		utils.LogCtx(log.Error(), ctx).Err(redisCmd.Err).
 			Str("cmd", redisCmd.CmdString()).
-			Str("pos", redisCmd.Caller.Pos()).
 			Str("reply", redisCmd.ReplyString()).
 			Msg("Redis DoScriptInt64Map fail")
 	}

@@ -4,6 +4,7 @@ package goredis
 
 import (
 	"context"
+	"errors"
 
 	"github.com/yuwf/gobase/utils"
 
@@ -14,19 +15,24 @@ import (
 // 支持绑定的管道
 type RedisPipeline struct {
 	redis.Pipeliner
+	r *Redis
 }
 
 func (r *Redis) NewPipeline() *RedisPipeline {
 	pipeline := &RedisPipeline{
 		Pipeliner: r.Pipeline(),
+		r:         r,
 	}
 	return pipeline
 }
 
 // 统一的命令
-func (p *RedisPipeline) Cmd(ctx context.Context, args ...interface{}) RedisResultBind {
+func (p *RedisPipeline) Cmd(ctx context.Context, args ...interface{}) *RedisCommond {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	redisCmd := &RedisCommond{
-		Caller: utils.GetCallerDesc(1),
+		ctx: ctx,
 	}
 	p.Pipeliner.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), args...)
 	return redisCmd
@@ -37,36 +43,103 @@ func (p *RedisPipeline) ExecNoNil(ctx context.Context) ([]redis.Cmder, error) {
 	return p.Pipeliner.Exec(context.WithValue(ctx, CtxKey_nonilerr, 1))
 }
 
+// 管道结合脚本，管道先按evalsha执行，管道中所有命令执行完之后，如果有脚本未加载的错误就再执行一次，所以这种管道无法保证命令顺序
+func (p *RedisPipeline) Script(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *redis.Cmd {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	redisCmd := &RedisCommond{
+		ctx: ctx,
+	}
+	redisCmd.nscallback = func() *redis.Cmd {
+		// 直接同步调用
+		return script.script.Eval(ctx, p.r, keys, args...)
+	}
+
+	param := make([]interface{}, 0, 3+len(keys)+len(args))
+	param = append(param, "evalsha")
+	param = append(param, script.script.Hash())
+	param = append(param, len(keys))
+	for _, key := range keys {
+		param = append(param, key)
+	}
+	param = append(param, args...)
+
+	return p.Pipeliner.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), param...)
+}
+
+func (p *RedisPipeline) Script2(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *RedisCommond {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	redisCmd := &RedisCommond{
+		ctx: ctx,
+	}
+	redisCmd.nscallback = func() *redis.Cmd {
+		// 直接同步调用
+		return script.script.Eval(ctx, p.r, keys, args...)
+	}
+
+	param := make([]interface{}, 0, 3+len(keys)+len(args))
+	param = append(param, "evalsha")
+	param = append(param, script.script.Hash())
+	param = append(param, len(keys))
+	for _, key := range keys {
+		param = append(param, key)
+	}
+	param = append(param, args...)
+
+	p.Pipeliner.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), param...)
+	return redisCmd
+}
+
 // 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMGetObj(ctx context.Context, key string, v interface{}) error {
-	redisCmd := &RedisCommond{
-		Caller: utils.GetCallerDesc(1),
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
 	}
-	// 组织参数
-	fargs, elemts, structtype, err := hmgetObjArgs(v)
+	redisCmd := &RedisCommond{
+		ctx: ctx,
+	}
+	// 获取结构数据
+	sInfo, err := utils.GetStructInfoByTag(v, RedisTag)
 	if err != nil {
-		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("RedisPipeline HMGetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMSetObj Param error")
 		return err
 	}
-	redisCmd.hmgetCallback(elemts, structtype) // 管道里这个不会返回错误
+	if len(sInfo.Tags) == 0 {
+		err := errors.New("structmem invalid")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMSetObj Param error")
+		return err
+	}
+
+	redisCmd.BindValues(sInfo.Elemts) // 管道里这个不会返回错误
 
 	args := []interface{}{"hmget", key}
-	args = append(args, fargs...)
+	args = append(args, sInfo.Tags...)
 	cmd := p.Pipeliner.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), args...)
 	return cmd.Err()
 }
 
 // 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMSetObj(ctx context.Context, key string, v interface{}) error {
-	caller := utils.GetCallerDesc(1)
-	// 组织参数
-	fargs, err := hmsetObjArgs(v)
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	sInfo, err := utils.GetStructInfoByTag(v, RedisTag)
 	if err != nil {
-		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", caller.Pos()).Msg("RedisPipeline HMSetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMSetObj Param error")
 		return err
 	}
+	fargs := sInfo.TagElemtNoNilFmt()
+	if len(fargs) == 0 {
+		err := errors.New("structmem invalid")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMSetObj Param error")
+		return err
+	}
+	// 组织参数
 	args := []interface{}{"hmset", key}
 	args = append(args, fargs...)
-	cmd := p.Pipeliner.Do(context.WithValue(ctx, CtxKey_caller, caller), args...)
+	cmd := p.Pipeliner.Do(ctx, args...)
 	return cmd.Err()
 }

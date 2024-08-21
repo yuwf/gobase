@@ -5,10 +5,11 @@ package ginserver
 import (
 	"strings"
 
-	"github.com/afex/hystrix-go/hystrix"
 	"github.com/yuwf/gobase/alert"
 	"github.com/yuwf/gobase/loader"
 	"github.com/yuwf/gobase/utils"
+
+	"github.com/afex/hystrix-go/hystrix"
 )
 
 func init() {

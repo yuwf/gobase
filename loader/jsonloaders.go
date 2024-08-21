@@ -16,12 +16,12 @@ import (
 // 如果T有成员函数Normalize， 会加载完配置后调用
 type JsonLoaders[T any] struct {
 	sync.RWMutex
-	confs      map[string]*T                  // 配置对象
-	src        map[string][]byte              // 原始值
+	confs      map[string]*T                  // 配置对象 每次修改都重新make出一个来
+	src        map[string][]byte              // 原始值 每次修改都重新make出一个来
 	updateHook []func(old, new map[string]*T) // 配置更新后的回调
 }
 
-// Get 返回的map对象一定不为nil 外层不需要再判断
+// Get 返回的map对象一定不为nil 外层不需要再判断，外部只读不可修改
 func (l *JsonLoaders[T]) Get() map[string]*T {
 	if l.confs == nil {
 		l.Lock()
@@ -84,6 +84,7 @@ func (l *JsonLoaders[T]) RegHook(hook func(old, new map[string]*T)) {
 	l.updateHook = append(l.updateHook, hook)
 }
 
+// 返回的对象可能会为nil，外部只读不可修改
 func (l *JsonLoaders[T]) GetSrc() map[string][]byte {
 	l.RLock()
 	defer l.RUnlock()
@@ -129,7 +130,11 @@ func (l *JsonLoaders[T]) Load(src map[string][]byte, path string) error {
 
 		confs[k] = conf
 	}
-	log.Info().Str("path", path).Int("count", len(confs)).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoaders Success")
+	keys := make([]string, 0, len(src))
+	for k := range src {
+		keys = append(keys, k)
+	}
+	log.Info().Str("path", path).Strs("keys", keys).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoaders Success")
 
 	old := l.Get()
 	// 替换值

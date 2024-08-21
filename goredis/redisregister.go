@@ -292,7 +292,7 @@ func (r *Register) loop() {
 
 func (r *Register) zadd() error {
 	ctx := context.WithValue(r.ctx, CtxKey_cmddesc, "Register")
-	ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(1))
+	ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
 	listKey := fmt.Sprintf(regListFmt, r.key)    // 服务器列表
 	channel := fmt.Sprintf(regChannelFmt, r.key) // 广播channel
 	keys := []string{r.key, listKey}
@@ -310,7 +310,7 @@ func (r *Register) zadd() error {
 
 func (r *Register) zrem() error {
 	ctx := context.WithValue(r.ctx, CtxKey_cmddesc, "Register")
-	ctx = context.WithValue(ctx, CtxKey_caller, utils.GetCallerDesc(1))
+	ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
 	listKey := fmt.Sprintf(regListFmt, r.key)    // 服务器列表
 	channel := fmt.Sprintf(regChannelFmt, r.key) // 广播channel
 	keys := []string{r.key, listKey}

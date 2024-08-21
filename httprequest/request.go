@@ -13,10 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yuwf/gobase/utils"
+
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 type HttpRequest struct {
@@ -281,7 +282,7 @@ func (h *HttpRequest) call_(ctx context.Context) {
 	}
 }
 
-//连接池
+// 连接池
 var lock sync.RWMutex
 var httpPool map[string]*http.Client = make(map[string]*http.Client)
 

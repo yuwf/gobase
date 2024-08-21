@@ -168,11 +168,18 @@ func redisHook(ctx context.Context, cmd *redis.RedisCommond) {
 			}
 		}
 	}
-	//redisCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
-	if cmd.Err != nil {
-		redisErrorCount.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Inc()
+
+	callerName := ""
+	caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
+	if ok {
+		callerName = caller.Name()
 	}
-	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
+
+	//redisCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), key, callerName).Inc()
+	if cmd.Err != nil {
+		redisErrorCount.WithLabelValues(strings.ToUpper(cmd.Cmd), key, callerName).Inc()
+	}
+	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, callerName).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
 	if ctx != nil {
 		if msgId := ctx.Value(utils.CtxKey_msgId); msgId != nil {
 			if s, ok := msgId.(string); ok && len(s) > 0 {
@@ -203,11 +210,17 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 			}
 		}
 
-		//redisCnt.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()
-		if cmd.Cmd.Err() != nil && !goredis.IsNilError(cmd.Cmd.Err()) {
-			redisErrorCount.WithLabelValues(cmdName, key, cmd.Caller.Name()).Inc()
+		callerName := ""
+		caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
+		if ok {
+			callerName = caller.Name()
 		}
-		redisLatency.WithLabelValues(cmdName, key, cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
+
+		//redisCnt.WithLabelValues(cmdName, key, callerName).Inc()
+		if cmd.Cmd.Err() != nil && !goredis.IsNilError(cmd.Cmd.Err()) {
+			redisErrorCount.WithLabelValues(cmdName, key, callerName).Inc()
+		}
+		redisLatency.WithLabelValues(cmdName, key, callerName).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
 		if ctx != nil {
 			if msgId := ctx.Value(utils.CtxKey_msgId); msgId != nil {
 				if s, ok := msgId.(string); ok && len(s) > 0 {
@@ -230,11 +243,18 @@ func mysqlHook(ctx context.Context, cmd *mysql.MySQLCommond) {
 		mysqlMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "mysql_msg_count"}, []string{"msgid"})
 		mysqlMsgTime = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "mysql_msg_time"}, []string{"msgid"})
 	})
-	//mysqlCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Inc()
-	if cmd.Err != nil {
-		mysqlErrorCount.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Inc()
+
+	callerName := ""
+	caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
+	if ok {
+		callerName = caller.Name()
 	}
-	mysqlLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), cmd.Caller.Name()).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
+
+	//mysqlCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), callerName).Inc()
+	if cmd.Err != nil {
+		mysqlErrorCount.WithLabelValues(strings.ToUpper(cmd.Cmd), callerName).Inc()
+	}
+	mysqlLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), callerName).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
 	if ctx != nil {
 		if msgId := ctx.Value(utils.CtxKey_msgId); msgId != nil {
 			if s, ok := msgId.(string); ok && len(s) > 0 {

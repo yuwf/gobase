@@ -1,5 +1,6 @@
 .idea
 .vscode
 *.log
+.nacos
 bin
-__debug_bin.exe
+__debug_*.exe

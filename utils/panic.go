@@ -36,6 +36,6 @@ func HandlePanicWithCaller(caller *CallerDesc) {
 		buf := make([]byte, 2048)
 		l := runtime.Stack(buf, false)
 		err := fmt.Errorf("%v: %s", r, buf[:l])
-		log.Error().Str("pos", caller.Pos()).Err(err).Msg("Panic")
+		log.Error().Str("callPos", caller.Pos()).Err(err).Msg("Panic")
 	}
 }

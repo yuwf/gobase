@@ -31,7 +31,7 @@ func init() {
 	}
 
 	// 不初始化默认只有控制台输出
-	console := zerolog.ConsoleWriter{Out: os.Stderr, NoColor: false, TimeFormat: zerolog.TimeFieldFormat}
+	console := zerolog.ConsoleWriter{Out: os.Stdout, NoColor: false, TimeFormat: zerolog.TimeFieldFormat}
 	log.Logger = zerolog.New(console).With().Timestamp().Caller().Logger()
 }
 
@@ -69,7 +69,7 @@ func SetLevel(l int) {
 // 打开标准控制台输出，可以在日志初始化前调用
 func EnableStdout() {
 	if logwrite.console == nil {
-		logwrite.console = &zerolog.ConsoleWriter{Out: os.Stderr, NoColor: false, TimeFormat: zerolog.TimeFieldFormat}
+		logwrite.console = &zerolog.ConsoleWriter{Out: os.Stdout, NoColor: false, TimeFormat: zerolog.TimeFieldFormat}
 	}
 }
 

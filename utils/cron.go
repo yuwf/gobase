@@ -24,7 +24,7 @@ func CronAddFunc(spec string, cmd func()) (int, error) {
 		cmd()
 	})
 	if err != nil {
-		log.Error().Err(err).Str("pos", caller.Pos()).Str("spec", spec).Err(err).Msg("CronAddFunc")
+		log.Error().Err(err).Str("callPos", caller.Pos()).Str("spec", spec).Err(err).Msg("CronAddFunc")
 	}
 	return int(id), err
 }

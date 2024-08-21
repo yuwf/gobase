@@ -3,9 +3,10 @@ package dispatch
 // https://github.com/yuwf/gobase
 
 import (
-	"github.com/afex/hystrix-go/hystrix"
 	"github.com/yuwf/gobase/alert"
 	"github.com/yuwf/gobase/loader"
+
+	"github.com/afex/hystrix-go/hystrix"
 )
 
 func init() {

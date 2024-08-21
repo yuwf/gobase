@@ -11,27 +11,27 @@ import (
 )
 
 // 功能相同的一组服务器
-// T是和业务相关的客户端信息结构 透传给HttpService
-type HttpGroup[T any] struct {
+// ServiceInfo是和业务相关的客户端信息结构 透传给HttpService
+type HttpGroup[ServiceInfo any] struct {
 	sync.RWMutex
-	hb       *HttpBackend[T]            // 上层对象
-	services map[string]*HttpService[T] // 锁保护
+	hb       *HttpBackend[ServiceInfo]            // 上层对象
+	services map[string]*HttpService[ServiceInfo] // 锁保护
 	// 线程安全
 	hashring    *consistent.Consistent // 哈希环，填充serviceId, 交给HttpService来填充，他有健康检查和熔断机制
 	tagHashring *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
 }
 
-func NewHttpGroup[T any](hb *HttpBackend[T]) *HttpGroup[T] {
-	g := &HttpGroup[T]{
+func NewHttpGroup[ServiceInfo any](hb *HttpBackend[ServiceInfo]) *HttpGroup[ServiceInfo] {
+	g := &HttpGroup[ServiceInfo]{
 		hb:          hb,
-		services:    map[string]*HttpService[T]{},
+		services:    map[string]*HttpService[ServiceInfo]{},
 		hashring:    consistent.New(),
 		tagHashring: new(sync.Map),
 	}
 	return g
 }
 
-func (g *HttpGroup[T]) GetService(serviceId string) *HttpService[T] {
+func (g *HttpGroup[ServiceInfo]) GetService(serviceId string) *HttpService[ServiceInfo] {
 	serviceId = strings.TrimSpace(strings.ToLower(serviceId))
 	g.RLock()
 	defer g.RUnlock()
@@ -42,10 +42,10 @@ func (g *HttpGroup[T]) GetService(serviceId string) *HttpService[T] {
 	return nil
 }
 
-func (g *HttpGroup[T]) GetServices() map[string]*HttpService[T] {
+func (g *HttpGroup[ServiceInfo]) GetServices() map[string]*HttpService[ServiceInfo] {
 	g.RLock()
 	defer g.RUnlock()
-	ss := map[string]*HttpService[T]{}
+	ss := map[string]*HttpService[ServiceInfo]{}
 	for serviceId, service := range g.services {
 		ss[serviceId] = service
 	}
@@ -53,7 +53,7 @@ func (g *HttpGroup[T]) GetServices() map[string]*HttpService[T] {
 }
 
 // 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
-func (g *HttpGroup[T]) GetServiceByHash(hash string) *HttpService[T] {
+func (g *HttpGroup[ServiceInfo]) GetServiceByHash(hash string) *HttpService[ServiceInfo] {
 	serviceId, err := g.hashring.Get(hash)
 	if err != nil {
 		return nil
@@ -68,7 +68,7 @@ func (g *HttpGroup[T]) GetServiceByHash(hash string) *HttpService[T] {
 }
 
 // 根据tag和哈希环获取对象 hash可以用用户id或者其他稳定的数据
-func (g *HttpGroup[T]) GetServiceByTagAndHash(tag, hash string) *HttpService[T] {
+func (g *HttpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *HttpService[ServiceInfo] {
 	tag = strings.TrimSpace(strings.ToLower(tag))
 	hasrhing, ok := g.tagHashring.Load(tag)
 	if !ok {
@@ -88,9 +88,9 @@ func (g *HttpGroup[T]) GetServiceByTagAndHash(tag, hash string) *HttpService[T] 
 }
 
 // 更新组，返回剩余个数
-func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int {
-	var remove []*HttpService[T]
-	var add []*HttpService[T]
+func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEvent[ServiceInfo]) int {
+	var remove []*HttpService[ServiceInfo]
+	var add []*HttpService[ServiceInfo]
 
 	g.Lock()
 	// 先删除不存在的
@@ -164,7 +164,7 @@ func (g *HttpGroup[T]) update(confs ServiceIdConfMap, handler HttpEvent[T]) int 
 }
 
 // 添加到哈希环
-func (g *HttpGroup[T]) addHashring(serviceId, routingTag string) {
+func (g *HttpGroup[ServiceInfo]) addHashring(serviceId, routingTag string) {
 	g.hashring.Add(serviceId)
 	if len(routingTag) > 0 {
 		hashring, ok := g.tagHashring.Load(routingTag)
@@ -179,7 +179,7 @@ func (g *HttpGroup[T]) addHashring(serviceId, routingTag string) {
 }
 
 // 从哈希环中移除
-func (g *HttpGroup[T]) removeHashring(serviceId, routingTag string) {
+func (g *HttpGroup[ServiceInfo]) removeHashring(serviceId, routingTag string) {
 	g.hashring.Remove(serviceId)
 	hashring, ok := g.tagHashring.Load(routingTag)
 	if ok {

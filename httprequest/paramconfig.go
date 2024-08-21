@@ -5,9 +5,10 @@ package httprequest
 import (
 	"strings"
 
-	"github.com/afex/hystrix-go/hystrix"
 	"github.com/yuwf/gobase/loader"
 	"github.com/yuwf/gobase/utils"
+
+	"github.com/afex/hystrix-go/hystrix"
 )
 
 const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1

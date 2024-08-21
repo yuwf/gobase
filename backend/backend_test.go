@@ -11,6 +11,7 @@ import (
 	"github.com/yuwf/gobase/dispatch"
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/utils"
 
@@ -50,7 +51,7 @@ func NewTcpHandler() *TcpHandler {
 
 func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
 	// 过滤出tcp的配置
-	// 【目前根据业务 ServiceId是存储在meta中nodeId】
+	// 【目前根据业务 ServiceId是存储在meta中serviceId】
 	// 【目前根据业务 目前ServiceName是存储在meta中的serviceName】
 	tcp := []*ServiceConfig{}
 	for _, conf := range confs {
@@ -61,10 +62,10 @@ func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig
 			log.Error().Str("RegistryName", conf.RegistryName).Str("RegistryID", conf.RegistryID).Msg("TcpService Filter serviceName is nil")
 			continue
 		}
-		nodeId, ok := conf.RegistryMeta["nodeId"]
-		nodeId = strings.TrimSpace(strings.ToLower(nodeId))
-		if !ok || len(nodeId) == 0 {
-			log.Error().Str("RegistryName", conf.RegistryName).Str("ID", conf.RegistryID).Msg("TcpService Filter nodeId error is nil")
+		serviceId, ok := conf.RegistryMeta["serviceId"]
+		serviceId = strings.TrimSpace(strings.ToLower(serviceId))
+		if !ok || len(serviceId) == 0 {
+			log.Error().Str("RegistryName", conf.RegistryName).Str("ID", conf.RegistryID).Msg("TcpService Filter serviceId error is nil")
 			continue
 		}
 		// 根据协议过滤
@@ -72,9 +73,43 @@ func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig
 		if scheme == "tcp" {
 			c := &ServiceConfig{
 				ServiceName: serviceName,
-				ServiceId:   nodeId,
+				ServiceId:   serviceId,
 				ServiceAddr: conf.RegistryAddr,
 				ServicePort: conf.RegistryPort,
+			}
+			tcp = append(tcp, c)
+		}
+	}
+	return tcp
+}
+
+func (h *TcpHandler) NacosFilter(confs []*nacos.RegistryInfo) []*ServiceConfig {
+	// 过滤出tcp的配置
+	// 【目前根据业务 ServiceId是存储在meta中serviceId】
+	// 【目前根据业务 目前ServiceName是存储在meta中的serviceName】
+	tcp := []*ServiceConfig{}
+	for _, conf := range confs {
+		serviceName, ok := conf.Metadata["serviceName"]
+		serviceName = strings.ToLower(serviceName)
+		serviceName = strings.TrimSpace(serviceName)
+		if !ok || len(serviceName) == 0 {
+			log.Error().Str("InstanceId", conf.InstanceId).Msg("TcpService Filter serviceName is nil")
+			continue
+		}
+		serviceId, ok := conf.Metadata["serviceId"]
+		serviceId = strings.TrimSpace(strings.ToLower(serviceId))
+		if !ok || len(serviceId) == 0 {
+			log.Error().Str("InstanceId", conf.InstanceId).Msg("TcpService Filter serviceId error is nil")
+			continue
+		}
+		// 根据协议过滤
+		scheme := strings.ToLower(conf.Metadata["scheme"])
+		if scheme == "tcp" {
+			c := &ServiceConfig{
+				ServiceName: serviceName,
+				ServiceId:   serviceId,
+				ServiceAddr: conf.Ip,
+				ServicePort: conf.Port,
 			}
 			tcp = append(tcp, c)
 		}
@@ -172,6 +207,26 @@ func (h *TcpHandler) onHeatBeatResp(ctx context.Context, msg *utils.TestHeatBeat
 
 func BenchmarkTCPBackendConsul(b *testing.B) {
 	_, err := NewTcpBackendWithConsul[TcpServiceInfo]("127.0.0.1:8500", "gobase-test", NewTcpHandler())
+	if err != nil {
+		return
+	}
+
+	utils.ExitWait()
+}
+
+func BenchmarkTCPBackendNacos(b *testing.B) {
+	cfg := nacos.Config{
+		NamespaceId: "",
+		Username:    "nacos",
+		Password:    "nacos",
+		Addrs:       []string{"localhost:8848"},
+	}
+	nacosCli, err := nacos.CreateClient(&cfg)
+	if err != nil {
+		return
+	}
+
+	_, err = NewTcpBackendWithNacos[TcpServiceInfo](nacosCli, "serviceN", "groupN", []string{}, NewTcpHandler())
 	if err != nil {
 		return
 	}

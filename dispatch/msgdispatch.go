@@ -11,10 +11,11 @@ import (
 	sync "sync"
 	"time"
 
+	"github.com/yuwf/gobase/utils"
+
 	"github.com/afex/hystrix-go/hystrix"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/yuwf/gobase/utils"
 )
 
 const (
@@ -33,6 +34,7 @@ type msgHandler struct {
 	funName  string        // 处理函数名，用来输出日志，不稳定不要用来做逻辑
 	msgType  reflect.Type  // 处理消息的类型
 	respType reflect.Type  // 回复消息的类型
+	respId   string        // 回复消息的id
 }
 
 // 透传对象接口
@@ -48,7 +50,7 @@ type MsgDispatch[Mr utils.RecvMsger, Cr any] struct {
 	// 必须设置，注册时获取具体消息的msgid
 	RegMsgID func(msgType reflect.Type) string
 	// 如果使用RegReqResp注册必须设置，用来发送Resp消息
-	SendResp func(ctx context.Context, m Mr, c *Cr, resp interface{})
+	SendResp func(ctx context.Context, req Mr, c *Cr, respid string, resp interface{})
 
 	handlers sync.Map // 处理函数  [msgid:*msgHandler]
 
@@ -198,6 +200,9 @@ func getFuncName(fun reflect.Value) string {
 // (ctx context.Context, msg *具体消息, c *Cr)
 // (ctx context.Context, m *Mr, msg *具体消息, c *Cr)
 func (md *MsgDispatch[Mr, Cr]) RegMsg(fun interface{}) error {
+	return md.RegMsgI("", fun)
+}
+func (md *MsgDispatch[Mr, Cr]) RegMsgI(msgid string, fun interface{}) error {
 	md.lazyInit()
 
 	// 获取函数类型
@@ -262,13 +267,12 @@ func (md *MsgDispatch[Mr, Cr]) RegMsg(fun interface{}) error {
 		}
 	}
 
-	// 获取下他的msgid
-	var msgid string
-	if md.RegMsgID != nil {
+	if msgid == "" && md.RegMsgID != nil {
+		// 获取下他的msgid
 		msgid = md.RegMsgID(handler.msgType)
 	}
 	if msgid == "" {
-		err := errors.New("RegMsgID get msgid is nil")
+		err := errors.New("msgid is nil")
 		log.Error().Err(err).Str("Func", funName).Str("type", handler.msgType.String()).Msg("MsgDispatch RegMsg error")
 		return err
 	}
@@ -290,6 +294,9 @@ func (md *MsgDispatch[Mr, Cr]) RegMsg(fun interface{}) error {
 // (ctx context.Context, req *具体消息, resp *具体消息, c *Cr)
 // (ctx context.Context, m Mr, req *具体消息, resp *具体消息, c *Cr)
 func (md *MsgDispatch[Mr, Cr]) RegReqResp(fun interface{}) error {
+	return md.RegReqRespI("", "", fun)
+}
+func (md *MsgDispatch[Mr, Cr]) RegReqRespI(reqid, respid string, fun interface{}) error {
 	md.lazyInit()
 	// 获取函数类型和函数名
 	funType := reflect.TypeOf(fun)
@@ -361,25 +368,36 @@ func (md *MsgDispatch[Mr, Cr]) RegReqResp(fun interface{}) error {
 		}
 	}
 
-	// 获取下他的msgid
-	var msgid string
-	if md.RegMsgID != nil {
-		msgid = md.RegMsgID(handler.msgType)
+	// 获取下他的reqid
+	if reqid == "" && md.RegMsgID != nil {
+		// 获取下他的msgid
+		reqid = md.RegMsgID(handler.msgType)
 	}
-	if msgid == "" {
-		err := errors.New("RegMsgID get msgid is nil")
+	if reqid == "" {
+		err := errors.New("reqid is nil")
 		log.Error().Err(err).Str("Func", funName).Str("type", handler.msgType.String()).Msg("MsgDispatch RegReqResp error")
 		return err
 	}
 
-	// 保存
-	old, ok := md.handlers.Load(msgid)
-	if ok {
-		err := errors.New("already exist")
-		log.Error().Err(err).Str("Exist", old.(*msgHandler).funName).Str("Func", funName).Str("MsgID", msgid).Msg("MsgDispatch RegReqResp error")
+	if respid == "" && md.RegMsgID != nil {
+		// 获取下他的msgid
+		respid = md.RegMsgID(handler.respType)
+	}
+	if respid == "" {
+		err := errors.New("respid is nil")
+		log.Error().Err(err).Str("Func", funName).Str("type", handler.msgType.String()).Msg("MsgDispatch RegReqResp error")
 		return err
 	}
-	md.handlers.Store(msgid, handler)
+	handler.respId = respid
+
+	// 保存
+	old, ok := md.handlers.Load(reqid)
+	if ok {
+		err := errors.New("already exist")
+		log.Error().Err(err).Str("Exist", old.(*msgHandler).funName).Str("Func", funName).Str("MsgID", reqid).Msg("MsgDispatch RegReqResp error")
+		return err
+	}
+	md.handlers.Store(reqid, handler)
 	log.Debug().Str("Func", funName).Msg("MsgDispatch RegReqResp")
 	return nil
 }
@@ -457,7 +475,7 @@ func (r *MsgDispatch[Mr, Cr]) handle(ctx context.Context, handler *msgHandler, m
 	// rpc回复
 	if resp != nil {
 		if r.SendResp != nil {
-			r.SendResp(ctx, m, c, resp)
+			r.SendResp(ctx, m, c, handler.respId, resp)
 		} else {
 			utils.LogCtx(log.Error(), ctx).Str("MsgID", msgid).Interface("Resp", resp).Msg("MsgDispatch Dispatch SendResp is nil")
 		}

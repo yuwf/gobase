@@ -5,6 +5,7 @@ package goredis
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"reflect"
 	"strings"
 	"time"
@@ -19,8 +20,8 @@ import (
 const CtxKey_nonilerr = utils.CtxKey("nonilerr") // 命令移除空错误 值：不受限制 一般写1
 const CtxKey_nolog = utils.CtxKey_nolog          // 不打印日志，错误日志还会打印 值：不受限制 一般写1
 
-const CtxKey_rediscmd = utils.CtxKey("rediscmd")     // 值：RedisCommand对象 一般情况内部使用
-const CtxKey_caller = utils.CtxKey("caller")         // 值：CallerDesc对象 一般情况内部使用
+const CtxKey_rediscmd = utils.CtxKey("rediscmd") // 值：RedisCommand对象 一般情况内部使用
+
 const CtxKey_cmddesc = utils.CtxKey("cmddesc")       // 值：字符串 命令描述 一般情况内部使用
 const CtxKey_noscript = utils.CtxKey("noscript")     // 屏蔽NOSCRIPT的错误提示(在使用Reids.Run命令时建议使用)， 值：不受限制 一般情况内部使用
 const CtxKey_scriptname = utils.CtxKey("scriptname") // 值：字符串 优化日志输出 一般情况内部使用
@@ -39,6 +40,18 @@ type Redis struct {
 
 	// 执行命令时的回调 不使用锁，默认要求提前注册好
 	hook []func(ctx context.Context, cmd *RedisCommond)
+}
+
+var defaultRedis *Redis
+
+func DefaultRedis() *Redis {
+	return defaultRedis
+}
+
+func InitDefaultRedis(cfg *Config) (*Redis, error) {
+	var err error
+	defaultRedis, err = NewRedis(cfg)
+	return defaultRedis, err
 }
 
 func NewRedis(cfg *Config) (*Redis, error) {
@@ -102,9 +115,12 @@ func (r *Redis) RegHook(f func(ctx context.Context, cmd *RedisCommond)) {
 }
 
 // 支持返回值绑定的函数
-func (r *Redis) Do2(ctx context.Context, args ...interface{}) RedisResultBind {
+func (r *Redis) Do2(ctx context.Context, args ...interface{}) *RedisCommond {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
 	redisCmd := &RedisCommond{
-		Caller: utils.GetCallerDesc(1),
+		ctx: ctx,
 	}
 	r.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), args...)
 	return redisCmd
@@ -115,44 +131,63 @@ func (r *Redis) Do2(ctx context.Context, args ...interface{}) RedisResultBind {
 // 结构成员类型 : Bool, Int, Int8, Int16, Int32, Int64, Uint, Uint8, Uint16, Uint32, Uint64, Uintptr, Float32, Float64, String, []byte
 // 结构成员其他类型 : 通过Json转化
 // 传入的参数为结构的地址
-// 参数组织调用 hmsetObjArgs hmgetObjArgs
 func (r *Redis) HMGetObj(ctx context.Context, key string, v interface{}) error {
-	redisCmd := &RedisCommond{
-		Caller: utils.GetCallerDesc(1),
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
 	}
-	// 组织参数
-	fargs, elemts, structtype, err := hmgetObjArgs(v)
+	redisCmd := &RedisCommond{
+		ctx: ctx,
+	}
+	// 获取结构数据
+	sInfo, err := utils.GetStructInfoByTag(v, RedisTag)
 	if err != nil {
-		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", redisCmd.Caller.Pos()).Msg("Redis HMGetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("Redis HMSetObj Param error")
 		return err
 	}
+	if len(sInfo.Tags) == 0 {
+		err := errors.New("structmem invalid")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("Redis HMSetObj Param error")
+		return err
+	}
+
 	args := []interface{}{"hmget", key}
-	args = append(args, fargs...)
+	args = append(args, sInfo.Tags...)
 	rst := r.Do(context.WithValue(ctx, CtxKey_rediscmd, redisCmd), args...)
 	if rst.Err() != nil {
 		return rst.Err()
 	}
 	// 回调
-	err = redisCmd.hmgetCallback(elemts, structtype)
+	err = redisCmd.BindValues(sInfo.Elemts)
 	return err
 }
 
 // 参数v 参考Redis.HMGetObj的说明
 func (r *Redis) HMSetObj(ctx context.Context, key string, v interface{}) error {
-	caller := utils.GetCallerDesc(1)
-	// 组织参数
-	fargs, err := hmsetObjArgs(v)
+	_, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
+	if !ok {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	sInfo, err := utils.GetStructInfoByTag(v, RedisTag)
 	if err != nil {
-		utils.LogCtx(log.Error(), ctx).Err(err).Str("pos", caller.Pos()).Msg("Redis HMSetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("Redis HMSetObj Param error")
+		return err
+	}
+	fargs := sInfo.TagElemtNoNilFmt()
+	if len(fargs) == 0 {
+		err := errors.New("structmem invalid")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("Redis HMSetObj Param error")
 		return err
 	}
 	args := []interface{}{"hmset", key}
 	args = append(args, fargs...)
-	rst := r.Do(context.WithValue(ctx, CtxKey_caller, caller), args...)
+	rst := r.Do(ctx, args...)
 	return rst.Err()
 }
 
 func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Time) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(5)) // 有些命令不准确
+	}
 	// 构造或查找RedisCommond
 	var redisCmd *RedisCommond
 	rediscmd, ok := ctx.Value(CtxKey_rediscmd).(*RedisCommond)
@@ -160,22 +195,12 @@ func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Tim
 		redisCmd = rediscmd
 	}
 	if redisCmd == nil {
-		redisCmd = &RedisCommond{}
+		redisCmd = &RedisCommond{ctx: ctx}
 	}
 
 	// 命令赋值
 	redisCmd.Cmd = cmd
 	redisCmd.Elapsed = time.Since(entry)
-
-	// 填充redisCmd.Caller 优先使用ctx中的
-	caller, ok := ctx.Value(CtxKey_caller).(*utils.CallerDesc)
-	if ok {
-		redisCmd.Caller = caller
-	}
-	if redisCmd.Caller == nil {
-		redisCmd.Caller = utils.GetCallerDesc(5) // 有些命令不准确
-	}
-
 	// 填充cmddesc 优先使用ctx中的
 	cmddesc, ok := ctx.Value(CtxKey_cmddesc).(string)
 	if ok {
@@ -203,29 +228,19 @@ func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Tim
 
 	if cmd.Err() != nil && redis.HasErrorPrefix(cmd.Err(), "NOSCRIPT") {
 		noscript := ctx.Value(CtxKey_noscript)
-		if noscript != nil {
-			if logOut {
-				utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
-					Str("cmd", cmdStr).
-					Str("pos", redisCmd.Caller.Pos()).
-					Msg("Redis NOSCRIPT")
-			}
-		} else {
+		if noscript == nil {
 			utils.LogCtx(log.Error(), ctx).Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 				Str("cmd", cmdStr).
-				Str("pos", redisCmd.Caller.Pos()).
 				Msg("Redis NOSCRIPT")
 		}
 	} else if cmd.Err() != nil && cmd.Err() != redis.Nil {
 		utils.LogCtx(log.Error(), ctx).Err(cmd.Err()).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
-			Str("pos", redisCmd.Caller.Pos()).
 			Msg("Redis cmd fail")
 	} else if logOut {
 		utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("reply", replyStr).
-			Str("pos", redisCmd.Caller.Pos()).
 			Msg("Redis cmd success")
 	}
 
@@ -236,6 +251,9 @@ func (r *Redis) cmdCallback(ctx context.Context, cmd redis.Cmder, entry time.Tim
 }
 
 func (r *Redis) pipelineCallback(ctx context.Context, cmds []redis.Cmder, err error, entry time.Time) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(4))
+	}
 	// 构造或查找RedisCommond
 	var redisCmd *RedisCommond
 	rediscmd, ok := ctx.Value(CtxKey_rediscmd).(*RedisCommond)
@@ -243,19 +261,11 @@ func (r *Redis) pipelineCallback(ctx context.Context, cmds []redis.Cmder, err er
 		redisCmd = rediscmd
 	}
 	if redisCmd == nil {
-		redisCmd = &RedisCommond{}
+		redisCmd = &RedisCommond{ctx: ctx}
 	}
 	// 命令赋值
 	redisCmd.Cmds = cmds
 	redisCmd.Elapsed = time.Since(entry)
-	// 填充redisCmd.Caller 优先使用ctx中的
-	caller, ok := ctx.Value(CtxKey_caller).(*utils.CallerDesc)
-	if ok {
-		redisCmd.Caller = caller
-	}
-	if redisCmd.Caller == nil {
-		redisCmd.Caller = utils.GetCallerDesc(4)
-	}
 	// 填充cmddesc 优先使用ctx中的
 	cmddesc, ok := ctx.Value(CtxKey_cmddesc).(string)
 	if ok {
@@ -264,10 +274,6 @@ func (r *Redis) pipelineCallback(ctx context.Context, cmds []redis.Cmder, err er
 
 	// 回调绑定的
 	for _, cmd := range cmds {
-		if cmd.Err() != nil {
-			continue
-		}
-
 		c, _ := cmd.(*redis.Cmd) // 能绑定的都是redis.Cmd类型的命令
 		if c == nil {
 			continue
@@ -277,11 +283,36 @@ func (r *Redis) pipelineCallback(ctx context.Context, cmds []redis.Cmder, err er
 		cctx := cvo.FieldByName("ctx")
 		tx, _ := reflect.NewAt(cctx.Type(), unsafe.Pointer(cctx.UnsafeAddr())).Elem().Interface().(context.Context)
 		if tx != nil {
-			rediscmd, _ := tx.Value(CtxKey_rediscmd).(*RedisCommond)
-			if rediscmd != nil && rediscmd.callback != nil {
-				rediscmd.Cmd = cmd
-				rediscmd.callback(c.Val())
+			rcmd, _ := tx.Value(CtxKey_rediscmd).(*RedisCommond)
+			if rcmd == nil {
+				continue
 			}
+			if rcmd.nscallback != nil && redis.HasErrorPrefix(cmd.Err(), "NOSCRIPT") {
+				r := rcmd.nscallback()
+				c.SetVal(r.Val()) // 修改命令结果
+				c.SetErr(r.Err())
+			}
+			if cmd.Err() != nil {
+				utils.LogCtx(log.Error(), ctx).Err(cmd.Err()).Str("cmd", rcmd.CmdString()).Msg("RedisCommond Error")
+				continue
+			}
+			if rcmd.callback != nil {
+				rcmd.Cmd = cmd
+				err := rcmd.callback(c.Val())
+				if err != nil {
+					c.SetErr(err)
+					utils.LogCtx(log.Error(), ctx).Err(err).Str("cmd", rcmd.CmdString()).Msg("RedisCommond Bind Error")
+				}
+			}
+		}
+	}
+
+	// 因为上面的回调绑定可能会重新刷新结果 给重新找一个错误，go-redis也是这样找的
+	err = nil
+	for _, cmd := range cmds {
+		if r := cmd.Err(); r != nil {
+			err = r
+			break
 		}
 	}
 
@@ -334,13 +365,11 @@ func (r *Redis) pipelineCallback(ctx context.Context, cmds []redis.Cmder, err er
 		utils.LogCtx(log.Error(), ctx).Err(err).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("reply", replyStr).
-			Str("pos", redisCmd.Caller.Pos()).
 			Msg("RedisPipeline cmd fail")
 	} else if logOut {
 		utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(redisCmd.Elapsed/time.Millisecond)).
 			Str("cmd", cmdStr).
 			Str("reply", replyStr).
-			Str("pos", redisCmd.Caller.Pos()).
 			Msg("RedisPipeline cmd success")
 	}
 

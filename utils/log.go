@@ -22,6 +22,9 @@ func LogCtx(e *zerolog.Event, ctx context.Context) *zerolog.Event {
 		if traceId := ctx.Value(CtxKey_traceId); traceId != nil {
 			e = e.Interface("TID", traceId)
 		}
+		if caller, ok := ctx.Value(CtxKey_caller).(*CallerDesc); ok {
+			e = e.Str("callPos", caller.Pos())
+		}
 	}
 	return e
 }

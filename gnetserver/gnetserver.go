@@ -262,18 +262,18 @@ func (s *GNetServer[ClientId, ClientInfo]) Decode(c gnet.Conn) ([]byte, error) {
 }
 
 func (s *GNetServer[ClientId, ClientInfo]) OnInitComplete(server gnet.Server) (action gnet.Action) {
-	log.Info().Str("addr", server.Addr.String()).Msg("GNetServer InitComplete")
+	log.Info().Str("Addr", server.Addr.String()).Msg("GNetServer InitComplete")
 	return
 }
 
 func (s *GNetServer[ClientId, ClientInfo]) OnShutdown(server gnet.Server) {
-	log.Info().Str("addr", server.Addr.String()).Msg("GNetServer Shutdown")
+	log.Info().Str("Addr", server.Addr.String()).Msg("GNetServer Shutdown")
 }
 
 func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	logOut := !ParamConf.Get().IsIgnoreIp(c.RemoteAddr().String())
 	if logOut {
-		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Msg("OnOpened")
+		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Str("LocalAddr", c.LocalAddr().String()).Msg("OnOpened")
 	}
 
 	gc := newGNetClient(c, s.event, s.hook)

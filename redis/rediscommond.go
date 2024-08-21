@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,19 +14,21 @@ import (
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/context"
 )
 
 const typeErrFmt = "%v(%v) not to %v"
 
-// Redis命令封装 并实现RedisResultBind接口
+var RedisTag = "redis"
+
+// Redis命令封装
 // 注意Redis执行结果为空时(ErrNil)，并不认为是错误
 type RedisCommond struct {
 	// 命令名和参数
+	ctx     context.Context
 	Cmd     string
 	Args    []interface{}
 	CmdDesc string // 命令的描述
-
-	Caller *utils.CallerDesc
 
 	// 绑定回调
 	callback func(reply interface{}) error
@@ -138,18 +139,18 @@ func (c *RedisCommond) Bind(v interface{}) error {
 	vo := reflect.ValueOf(v)
 	if vo.Kind() != reflect.Ptr {
 		err := errors.New("bind param kind must be pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult Bind fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
 		return err
 	}
 	if vo.IsNil() {
 		err := errors.New("bind param pointer is nil")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult Bind fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
 		return err
 	}
 	elem := vo.Elem()
 	if !elem.CanSet() {
 		err := errors.New("bind param kind must be canset")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult Bind fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
 		return err
 	}
 	// 初始化默认值
@@ -167,33 +168,21 @@ func (c *RedisCommond) Bind(v interface{}) error {
 	case reflect.Slice:
 		if elem.Type().Elem().Kind() != reflect.Uint8 {
 			err := errors.New("sliceelem kind must be Uint8(byte)")
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
 			return err
 		}
 		elem.SetBytes([]byte{})
 	default:
 		err := errors.New("param not support " + fmt.Sprint(elem.Type()))
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult Bind fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
 		return err
 	}
 	// 绑定回到函数
 	c.callback = func(reply interface{}) error {
-		switch r := reply.(type) {
-		case int64:
-			return int64Helper(r, elem)
-		case string:
-			return stringHelper(r, elem)
-		case []byte:
-			return bytesHelper(r, elem)
-		case []interface{}:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, elem.Type())
-		case nil:
-			// 空值 也认为ok 绑定的值上面已设置为空了
+		if reply == nil {
 			return nil
-		case redis.Error:
-			return r
 		}
-		return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, elem.Type())
+		return utils.InterfaceToValue(reply, elem)
 	}
 	// 直接调用的Redis 此时已经有结果值了
 	if c.Reply != nil || c.Err != nil {
@@ -202,7 +191,7 @@ func (c *RedisCommond) Bind(v interface{}) error {
 		}
 		err := c.callback(c.Reply)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
 			return err
 		}
 	}
@@ -214,12 +203,12 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 	vt := reflect.TypeOf(v)
 	if vt.Kind() != reflect.Ptr {
 		err := errors.New("bind param kind must be slice Pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindSlice fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindSlice fail")
 		return err
 	}
 	if vt.Elem().Kind() != reflect.Slice {
 		err := errors.New("bind param kind must be slice Pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindSlice fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindSlice fail")
 		return err
 	}
 	elemtype := vt.Elem().Elem() // 第一层是slice，第二层是slice中的元素
@@ -232,6 +221,9 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 	}
 	// 绑定回调函数
 	c.callback = func(reply interface{}) error {
+		if reply == nil {
+			return nil
+		}
 		// 因为slice的地址在追加时一直变化最后给v重新赋值
 		defer func() {
 			ind := reflect.Indirect(vo)
@@ -241,21 +233,21 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 		switch r := reply.(type) {
 		case int64:
 			v := reflect.New(elemtype).Elem()
-			err := int64Helper(r, v)
+			err := utils.InterfaceToValue(r, v)
 			if err != nil {
 				return err
 			}
 			sli = reflect.Append(sli, v)
 		case string:
 			v := reflect.New(elemtype).Elem()
-			err := stringHelper(r, v)
+			err := utils.InterfaceToValue(r, v)
 			if err != nil {
 				return err
 			}
 			sli = reflect.Append(sli, v)
 		case []byte:
 			v := reflect.New(elemtype).Elem()
-			err := bytesHelper(r, v)
+			err := utils.InterfaceToValue(r, v)
 			if err != nil {
 				return err
 			}
@@ -263,10 +255,9 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 		case []interface{}:
 			for i := range r {
 				v := reflect.New(elemtype).Elem()
-				err := interfaceHelper(r[i], v)
+				err := utils.InterfaceToValue(r[i], v)
 				if err != nil {
-					// 只打印一个错误日志，不返回，后面继续往sli里面写入
-					log.Error().Err(err).Str("pos", c.Caller.Pos()).Msg("SliceElem Bind Error")
+					return err
 				}
 				sli = reflect.Append(sli, v)
 			}
@@ -286,7 +277,7 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 		}
 		err := c.callback(c.Reply)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindSlice fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindSlice fail")
 			return err
 		}
 	}
@@ -298,12 +289,12 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 	vt := reflect.TypeOf(v)
 	if vt.Kind() != reflect.Ptr {
 		err := errors.New("bind param kind must be map pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindMap fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindMap fail")
 		return err
 	}
 	if vt.Elem().Kind() != reflect.Map {
 		err := errors.New("bind param kind must be map pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindMap fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindMap fail")
 		return err
 	}
 	keytype := vt.Elem().Key()
@@ -323,18 +314,20 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 		case []byte:
 		case []interface{}:
 			for i := 0; i+1 < len(r); i += 2 {
-				key := reflect.New(keytype).Elem()
-				okKey := interfaceHelper(r[i], key)
-				if okKey != nil {
-					// 只打印一个错误日志，不返回
-					log.Error().Err(okKey).Str("pos", c.Caller.Pos()).Msg("MapKey Bind Error")
+				if r[i] == nil {
 					continue
 				}
+				key := reflect.New(keytype).Elem()
+				err := utils.InterfaceToValue(r[i], key)
+				if err != nil {
+					return err
+				}
 				value := reflect.New(elemtype).Elem()
-				okValue := interfaceHelper(r[i+1], value)
-				if okValue != nil {
-					// 只打印一个错误日志，不返回，后面继续往m里面写入
-					log.Error().Err(okValue).Str("pos", c.Caller.Pos()).Msg("MapElem Bind Error")
+				if r[i+1] == nil {
+					err = utils.InterfaceToValue(r[i+1], value)
+					if err != nil {
+						return err
+					}
 				}
 				m.SetMapIndex(key, value)
 			}
@@ -354,35 +347,34 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 		}
 		err := c.callback(c.Reply)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindMap fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindMap fail")
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *RedisCommond) hmgetCallback(elemts []reflect.Value, structtype reflect.Type) error {
+func (c *RedisCommond) BindValues(values []reflect.Value) error {
 	c.callback = func(reply interface{}) error {
 		switch r := reply.(type) {
 		case int64:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
 		case string:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
 		case []byte:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
 		case []interface{}:
 			rlen := len(r)
-			elen := len(elemts)
+			elen := len(values)
 			if rlen < elen {
-				return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
+				return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, reflect.TypeOf(values))
 			}
 			rindex := rlen
 			for i := elen - 1; i >= 0; i -= 1 {
 				rindex -= 1
-				err := interfaceHelper(r[rindex], elemts[i])
+				if r[rindex] == nil {
+					continue
+				}
+				err := utils.InterfaceToValue(r[rindex], values[i])
 				if err != nil {
-					//只打印一个错误日志，不返回
-					log.Error().Err(err).Str("pos", c.Caller.Pos()).Msg("StructElem Bind Error")
+					return err
 				}
 			}
 			return nil
@@ -392,7 +384,7 @@ func (c *RedisCommond) hmgetCallback(elemts []reflect.Value, structtype reflect.
 		case redis.Error:
 			return r
 		}
-		return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
+		return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, reflect.TypeOf(values))
 	}
 	// 直接调用的Redis 此时已经有结果值了
 	if c.Reply != nil || c.Err != nil {
@@ -401,135 +393,11 @@ func (c *RedisCommond) hmgetCallback(elemts []reflect.Value, structtype reflect.
 		}
 		err := c.callback(c.Reply)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult HMGetObj fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond HMGetObj fail")
 			return err
 		}
 	}
 	return nil
-}
-
-// 把v对象的tag数据 写到args中
-/*
-type Test struct {
-	F1 int `redis:"f1"`
-	F2 int `redis:"f2"`
-}
-上面的对象写入args中的格式为  "f1" "f2"
-*/
-func hmgetObjArgs(v interface{}) ([]interface{}, []reflect.Value, reflect.Type, error) {
-	var args []interface{}
-	// 参数检查
-	vo := reflect.ValueOf(v)
-	if vo.Kind() != reflect.Ptr {
-		err := errors.New("bind param kind must be pointer")
-		return args, nil, nil, err
-	}
-	if vo.IsNil() {
-		err := errors.New("bind param pointer is nil")
-		return args, nil, nil, err
-	}
-	structtype := vo.Elem().Type() // 第一层是指针，第二层是结构
-	structvalue := vo.Elem()
-	if structtype.Kind() != reflect.Struct {
-		err := errors.New("bind param kind must be struct")
-		return args, nil, nil, err
-	}
-
-	argsNum := len(args) // 先记录下进来时的参数个数
-	// 组织参数
-	numfield := structtype.NumField()
-	elemts := []reflect.Value{} // 结构中成员的变量地址
-	for i := 0; i < numfield; i += 1 {
-		tag := structtype.Field(i).Tag.Get("redis")
-		if tag == "-" || tag == "" {
-			continue
-		}
-		v := structvalue.Field(i)
-		if v.CanSet() {
-			elemts = append(elemts, v)
-			args = append(args, tag)
-		}
-	}
-	if len(args) == argsNum {
-		err := errors.New("structmem invalid")
-		return args, nil, nil, err
-	}
-	return args, elemts, structtype, nil
-}
-
-// 把v对象的数据和tag数据 写到args中
-/*
-type Test struct {
-	F1 int `redis:"f1"`
-	F2 int `redis:"f2"`
-}
-上面的对象写入args中的格式为  "f1" F1 "f2" F2
-*/
-func hmsetObjArgs(v interface{}) ([]interface{}, error) {
-	var args []interface{}
-	// 验证参数
-	vo := reflect.ValueOf(v)
-	if vo.Kind() != reflect.Ptr {
-		return args, errors.New("param kind must be pointer")
-	}
-	if vo.IsNil() {
-		return args, errors.New("param pointer is nil")
-	}
-	structtype := vo.Elem().Type() // 第一层是指针，第二层是结构
-	structvalue := vo.Elem()
-	if structtype.Kind() != reflect.Struct {
-		return args, errors.New("param kind must be struct")
-	}
-
-	argsNum := len(args) // 先记录下进来时的参数个数
-	// 组织参数
-	numfield := structtype.NumField()
-	for i := 0; i < numfield; i += 1 {
-		tag := structtype.Field(i).Tag.Get("redis")
-		if tag == "-" || tag == "" {
-			continue
-		}
-		v := structvalue.Field(i)
-		if !v.CanAddr() {
-			continue
-		}
-		switch v.Kind() {
-		case reflect.Bool:
-			fallthrough
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			fallthrough
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-			fallthrough
-		case reflect.Float32, reflect.Float64:
-			fallthrough
-		case reflect.String:
-			args = append(args, tag)
-			args = append(args, v.Interface())
-		case reflect.Slice:
-			if v.Type().Elem().Kind() == reflect.Uint8 {
-				args = append(args, tag)
-				args = append(args, v.Interface())
-				break
-			}
-			fallthrough
-		default:
-			if v.CanInterface() {
-				data, err := json.Marshal(v.Interface())
-				if err != nil {
-					return args, err
-				}
-				args = append(args, tag)
-				args = append(args, data)
-				break
-			}
-			// 对象转化成json
-			return args, errors.New("param not support " + fmt.Sprint(v.Type()))
-		}
-	}
-	if len(args) == argsNum {
-		return args, errors.New("structmem invalid")
-	}
-	return args, nil
 }
 
 func (c *RedisCommond) BindJsonObj(v interface{}) error {
@@ -537,31 +405,29 @@ func (c *RedisCommond) BindJsonObj(v interface{}) error {
 	vo := reflect.ValueOf(v)
 	if vo.Kind() != reflect.Ptr {
 		err := errors.New("bind param kind must be pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObj fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObj fail")
 		return err
 	}
 	if vo.IsNil() {
 		err := errors.New("bind param pointer is nil")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObj fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObj fail")
 		return err
 	}
 	structtype := vo.Elem().Type() // 第一层是指针，第二层是结构
 	if structtype.Kind() != reflect.Struct {
 		err := errors.New("bind param kind must be struct")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObj fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObj fail")
 		return err
 	}
 
 	c.callback = func(reply interface{}) error {
 		switch r := reply.(type) {
 		case int64:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
 		case string:
-			return json.Unmarshal([]byte(r), v)
+			return json.Unmarshal(utils.StringToBytes(r), v)
 		case []byte:
 			return json.Unmarshal(r, v)
 		case []interface{}:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, structtype)
 		case nil:
 			// 空值
 			return nil
@@ -577,7 +443,7 @@ func (c *RedisCommond) BindJsonObj(v interface{}) error {
 		}
 		err := c.callback(c.Reply)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObj fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObj fail")
 			return err
 		}
 	}
@@ -589,12 +455,12 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 	vt := reflect.TypeOf(v)
 	if vt.Kind() != reflect.Ptr {
 		err := errors.New("bind param kind must be pointer")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObjSlice fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjSlice fail")
 		return err
 	}
 	if vt.Elem().Kind() != reflect.Slice {
 		err := errors.New("bind param kind must be slice")
-		log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObjSlice fail")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjSlice fail")
 		return err
 	}
 	elemtype := vt.Elem().Elem() // 第一层是slice，第二层是slice中的元素
@@ -602,12 +468,12 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 		// 元素是指针，指针指向的类型必须是结构
 		if elemtype.Elem().Kind() != reflect.Struct {
 			err := errors.New("bind param elem kind must be struct or *struct")
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisPipeline BindJsonObjSlice bind param kind must be struct or *Struct")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisPipeline BindJsonObjSlice bind param kind must be struct or *Struct")
 			return err
 		}
 	} else if elemtype.Kind() != reflect.Struct {
 		err := errors.New("bind param elem kind must be struct or *struct")
-		log.Error().Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObjSlice fail")
+		utils.LogCtx(log.Error(), c.ctx).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjSlice fail")
 		return err
 	}
 
@@ -629,11 +495,8 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 
 		switch r := reply.(type) {
 		case int64:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, sli.Type())
 		case string:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, sli.Type())
 		case []byte:
-			return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, sli.Type())
 		case []interface{}:
 			for i := range r {
 				var v reflect.Value
@@ -680,165 +543,9 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 		}
 		err := c.callback(c.Reply)
 		if err != nil {
-			log.Error().Err(err).Str("cmd", c.CmdString()).Str("pos", c.Caller.Pos()).Msg("RedisResult BindJsonObjSlice fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjSlice fail")
 			return err
 		}
 	}
 	return nil
-}
-
-func int64Helper(r int64, v reflect.Value) error {
-	switch v.Kind() {
-	case reflect.Bool:
-		v.SetBool(r != 0)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		v.SetInt(r)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		v.SetUint(uint64(r))
-	case reflect.Float32, reflect.Float64:
-		v.SetFloat(float64(r))
-	case reflect.String:
-		v.SetString(strconv.FormatInt(r, 10))
-	default:
-		return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
-	}
-	return nil
-}
-
-func stringHelper(r string, v reflect.Value) error {
-	switch v.Kind() {
-	case reflect.Bool:
-		b, err := strconv.ParseBool(r)
-		if err != nil {
-			return errors.New(fmt.Sprintf(typeErrFmt, reflect.TypeOf(r), r, v.Type()) + " parse:" + err.Error())
-		}
-		v.SetBool(b)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, err := strconv.ParseInt(r, 10, 0)
-		if err != nil {
-			return errors.New(fmt.Sprintf(typeErrFmt, reflect.TypeOf(r), r, v.Type()) + " parse:" + err.Error())
-		}
-		v.SetInt(n)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		n, err := strconv.ParseUint(r, 10, 0)
-		if err != nil {
-			return errors.New("parse:" + err.Error())
-		}
-		v.SetUint(n)
-	case reflect.Float32, reflect.Float64:
-		n, err := strconv.ParseFloat(r, 64)
-		if err != nil {
-			return errors.New(fmt.Sprintf(typeErrFmt, reflect.TypeOf(r), r, v.Type()) + " parse:" + err.Error())
-		}
-		v.SetFloat(n)
-	case reflect.String:
-		v.SetString(r)
-	case reflect.Slice:
-		// 接受类型是否[]byte
-		if v.Type().Elem().Kind() == reflect.Uint8 {
-			v.SetBytes([]byte(r))
-			break
-		}
-		fallthrough
-	default:
-		// 其他对象向json上转化
-		if v.Kind() == reflect.Pointer {
-			if v.CanInterface() && v.CanSet() {
-				v.Set(reflect.New(v.Type().Elem()))
-				err := json.Unmarshal([]byte(r), v.Interface())
-				if err != nil {
-					return err
-				}
-				break
-			}
-		} else {
-			if v.Addr().CanInterface() {
-				err := json.Unmarshal([]byte(r), v.Addr().Interface())
-				if err != nil {
-					return err
-				}
-				break
-			}
-		}
-		return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
-	}
-	return nil
-}
-
-func bytesHelper(r []byte, v reflect.Value) error {
-	switch v.Kind() {
-	case reflect.Bool:
-		b, err := strconv.ParseBool(string(r))
-		if err != nil {
-			return errors.New(fmt.Sprintf(typeErrFmt, reflect.TypeOf(r), r, v.Type()) + " parse:" + err.Error())
-		}
-		v.SetBool(b)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, err := strconv.ParseInt(string(r), 10, 0)
-		if err != nil {
-			return errors.New(fmt.Sprintf(typeErrFmt, reflect.TypeOf(r), r, v.Type()) + " parse:" + err.Error())
-		}
-		v.SetInt(n)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		n, err := strconv.ParseUint(string(r), 10, 0)
-		if err != nil {
-			return errors.New("parse:" + err.Error())
-		}
-		v.SetUint(n)
-	case reflect.Float32, reflect.Float64:
-		n, err := strconv.ParseFloat(string(r), 64)
-		if err != nil {
-			return errors.New(fmt.Sprintf(typeErrFmt, reflect.TypeOf(r), r, v.Type()) + " parse:" + err.Error())
-		}
-		v.SetFloat(n)
-	case reflect.String:
-		v.SetString(string(r))
-	case reflect.Slice:
-		// 接受类型是否[]byte
-		if v.Type().Elem().Kind() == reflect.Uint8 {
-			v.SetBytes(r)
-			break
-		}
-		fallthrough
-	default:
-		// 其他对象向json上转化
-		if v.Kind() == reflect.Pointer {
-			if v.CanInterface() && v.CanSet() {
-				v.Set(reflect.New(v.Type().Elem()))
-				err := json.Unmarshal(r, v.Interface())
-				if err != nil {
-					return err
-				}
-				break
-			}
-		} else {
-			if v.Addr().CanInterface() {
-				err := json.Unmarshal(r, v.Addr().Interface())
-				if err != nil {
-					return err
-				}
-				break
-			}
-		}
-		return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
-	}
-	return nil
-}
-
-func interfaceHelper(r interface{}, v reflect.Value) error {
-	switch r2 := r.(type) {
-	case int64:
-		return int64Helper(r2, v)
-	case string:
-		return stringHelper(r2, v)
-	case []byte:
-		return bytesHelper(r2, v)
-	case []interface{}:
-		// 两层 类似SCAN这么的命令 待完善
-	case nil:
-		return nil
-	case redis.Error:
-		return r2
-	}
-	return fmt.Errorf(typeErrFmt, reflect.TypeOf(r), r, v.Type())
 }
