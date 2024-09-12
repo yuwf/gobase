@@ -3,6 +3,7 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ type HttpService[ServiceInfo any] struct {
 	conf    *ServiceConfig          // 服务器发现的配置
 	address string                  // 地址
 	info    *ServiceInfo            // 客户端信息 内容修改需要外层加锁控制
+	state   int32                   // 状态检查 0：未连接 1：检查OK 原子操作
 
 	// 外部要求退出
 	quit     chan int // 退出chan 外部写 内部读
@@ -60,11 +62,35 @@ func (hs *HttpService[ServiceInfo]) Info() *ServiceInfo {
 	return hs.info
 }
 
+// 0:健康 1:没连接成功
+func (hs *HttpService[ServiceInfo]) HealthState() int {
+	if atomic.LoadInt32(&hs.state) != 1 {
+		return 1
+	}
+	return 0
+}
+
 func (hs *HttpService[ServiceInfo]) loopTick() {
 	cheackAddr := fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)
 	add := false
 	for {
-		// 每秒tick下
+		// 健康检查 只是检查端口能不能通
+		err := tcp.TcpPortCheck(cheackAddr, time.Second*3)
+		if err == nil {
+			atomic.StoreInt32(&hs.state, 1)
+			// 能连通
+			if !add {
+				add = true
+				hs.onDialSuccess()
+			}
+		} else {
+			atomic.StoreInt32(&hs.state, 0)
+			if add {
+				add = false
+				hs.onDisConnect(err)
+			}
+		}
+		// 每秒tick下 tick放下面，先上面检查下端口
 		timer := time.NewTimer(time.Second)
 		select {
 		case <-hs.quit:
@@ -77,57 +103,53 @@ func (hs *HttpService[ServiceInfo]) loopTick() {
 		case <-timer.C:
 		}
 		if atomic.LoadInt32(&hs.quitFlag) != 0 {
+			if add {
+				hs.onDisConnect(errors.New("quit"))
+			}
 			break
 		}
-		// 健康检查 只是检查端口能不能通
-		err := tcp.TcpPortCheck(cheackAddr, time.Second*3)
-		if err == nil {
-			// 能连通
-			if !add {
-				log.Info().Str("ServiceName", hs.conf.ServiceName).
-					Str("ServiceId", hs.conf.ServiceId).
-					Str("RoutingTag", hs.conf.RoutingTag).
-					Err(err).
-					Str("Addr", cheackAddr).
-					Msg("HttpService connect success")
-				add = true
-				hs.g.addHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
-
-				// 回调
-				for _, h := range hs.g.hb.hook {
-					h.OnConnected(hs)
-				}
-			}
-		} else {
-			log.Error().Str("ServiceName", hs.conf.ServiceName).
-				Str("ServiceId", hs.conf.ServiceId).
-				Str("RoutingTag", hs.conf.RoutingTag).
-				Err(err).
-				Str("Addr", cheackAddr).
-				Msg("HttpService connect fail")
-			if add {
-				add = false
-				hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
-
-				// 回调
-				for _, h := range hs.g.hb.hook {
-					h.OnDisConnect(hs)
-				}
-			}
-		}
 	}
-	hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag) // 保证移除掉
-	hs.quit <- 1                                               // 反写让Close退出
+	hs.quit <- 1 // 反写让Close退出
 }
 
 func (hs *HttpService[ServiceInfo]) close() {
-	// 先从哈希环中移除
+	// 退出循环
+	if atomic.CompareAndSwapInt32(&hs.quitFlag, 0, 1) {
+		hs.quit <- 1
+		<-hs.quit
+	}
+}
+
+func (hs *HttpService[ServiceInfo]) onDialSuccess() {
+	log.Info().Str("ServiceName", hs.conf.ServiceName).
+		Str("ServiceId", hs.conf.ServiceId).
+		Str("RoutingTag", hs.conf.RoutingTag).
+		Str("Addr", fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)).
+		Msg("HttpService connect success")
+
+	// 添加到哈希环中
+	if hs.HealthState() == 0 {
+		hs.g.addHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
+	}
+
+	// 回调
+	for _, h := range hs.g.hb.hook {
+		h.OnConnected(hs)
+	}
+}
+
+func (hs *HttpService[ServiceInfo]) onDisConnect(err error) {
+	log.Error().Str("ServiceName", hs.conf.ServiceName).
+		Str("ServiceId", hs.conf.ServiceId).
+		Str("RoutingTag", hs.conf.RoutingTag).
+		Err(err).
+		Str("Addr", fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)).
+		Msg("HttpService connect fail")
+
 	hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
-	// 异步关闭
-	go func() {
-		if atomic.CompareAndSwapInt32(&hs.quitFlag, 0, 1) {
-			hs.quit <- 1
-			<-hs.quit
-		}
-	}()
+
+	// 回调
+	for _, h := range hs.g.hb.hook {
+		h.OnDisConnect(hs)
+	}
 }

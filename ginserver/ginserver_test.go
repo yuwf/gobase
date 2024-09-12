@@ -67,7 +67,6 @@ func BenchmarkGinServerRawData(b *testing.B) {
 
 func BenchmarkGinServerTimeOut(b *testing.B) {
 	ParamConf.Get().TimeOutCheck = 2
-	ParamConf.Get().Normalize()
 	server := NewGinServer(1234)
 	server.RegJsonHandler("", "/getnametimeout", getNameTimeOut)
 	server.Start()
@@ -82,7 +81,6 @@ func BenchmarkGinServerHystrix(b *testing.B) {
 	ParamConf.Get().Hystrix = map[string]*hystrix.CommandConfig{
 		"/hystrix": {Timeout: 5 * 1000, MaxConcurrentRequests: 1, RequestVolumeThreshold: 1, SleepWindow: 10 * 1000},
 	}
-	ParamConf.Get().Normalize()
 	server := NewGinServer(1234)
 	server.RegHandler("GET", "/hystrix", func(c *gin.Context) {
 		time.Sleep(6 * time.Second)

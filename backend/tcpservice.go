@@ -25,7 +25,7 @@ type TcpService[ServiceInfo any] struct {
 	// 不可修改
 	g           *TcpGroup[ServiceInfo] // 上层对象
 	conf        *ServiceConfig         // 服务器发现的配置
-	confDestroy int32                  // 表示将配置是否销毁了 原子操作
+	confDestroy int32                  // 表示配置是否已经销毁了 原子操作
 	address     string                 // 地址
 	seq         utils.Sequence         // 消息顺序处理工具 协程安全
 	info        *ServiceInfo           // 客户端信息，内容修改需要外层加锁控制
@@ -111,6 +111,17 @@ func (ts *TcpService[ServiceInfo]) ConnName() string {
 	return ts.conf.ServiceName + ":" + ts.conf.ServiceId
 }
 
+// 0:健康 1:没连接成功 2:发现配置已经不存在了，还保持连接
+func (ts *TcpService[ServiceInfo]) HealthState() int {
+	if !ts.conn.Connected() {
+		return 1
+	}
+	if atomic.LoadInt32(&ts.confDestroy) != 0 {
+		return 2
+	}
+	return 0
+}
+
 func (ts *TcpService[ServiceInfo]) Send(ctx context.Context, data []byte) error {
 	var err error
 	if len(data) == 0 {
@@ -157,7 +168,7 @@ func (ts *TcpService[ServiceInfo]) SendMsg(ctx context.Context, msg utils.SendMs
 	return nil
 }
 
-// SendRPCMsg 发送RPC消息并等待消息回复，需要依赖event.CheckRPCResp来判断是否rpc调用
+// SendRPCMsg 发送RPC消息并等待消息回复，需要依赖event.DecodeMsg返回的rpcId来判断是否rpc调用
 // 成功返回解析后的消息
 // 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
 func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg utils.SendMsger, timeout time.Duration) (interface{}, error) {
@@ -245,23 +256,15 @@ func (ts *TcpService[ServiceInfo]) loopTick() {
 		if ts.g.tb.event != nil {
 			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
 			ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
-			if TcpParamConf.Get().MsgSeq {
-				ts.seq.Submit(func() {
-					ts.g.tb.event.OnTick(ctx, ts)
-				})
-			} else {
-				utils.Submit(func() {
-					ts.g.tb.event.OnTick(ctx, ts)
-				})
-			}
+			ts.seq.Submit(func() {
+				ts.g.tb.event.OnTick(ctx, ts)
+			})
 		}
 	}
 	ts.quit <- 1 // 反写让Close退出
 }
 
 func (ts *TcpService[ServiceInfo]) close() {
-	// 先从哈希环中移除
-	ts.g.removeHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
 	// 关闭网络
 	ts.conn.Close(true)
 	// 退出循环
@@ -289,11 +292,15 @@ func (ts *TcpService[ServiceInfo]) OnDialSuccess(t *tcp.TCPConn) {
 	log.Info().Str("Name", ts.ConnName()).Str("RemoteAddr", t.RemoteAddr().String()).Str("LocalAddr", t.LocalAddr().String()).Msg("Connect success")
 
 	// 添加到哈希环中
-	ts.g.addHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
+	if ts.HealthState() == 0 {
+		ts.g.addHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
+	}
 
 	if ts.g.tb.event != nil {
-		ctx := context.TODO()
-		ts.g.tb.event.OnConnected(ctx, ts)
+		ts.seq.Submit(func() {
+			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ts.g.tb.event.OnConnected(ctx, ts)
+		})
 	}
 
 	// 回调
@@ -326,7 +333,10 @@ func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error
 		return errors.New("config destroy")
 	}
 	if ts.g.tb.event != nil {
-		ts.g.tb.event.OnDisConnect(ts.ctx, ts)
+		ts.seq.Submit(func() {
+			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ts.g.tb.event.OnDisConnect(ctx, ts)
+		})
 	}
 
 	// 回调
@@ -374,7 +384,7 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 	}
 	decodeLen := 0
 	for {
-		msg, l, err := ts.g.tb.event.DecodeMsg(ts.ctx, data[decodeLen:], ts)
+		msg, l, rpcId, err := ts.g.tb.event.DecodeMsg(ts.ctx, data[decodeLen:], ts)
 		if err != nil {
 			return 0, err
 		}
@@ -391,12 +401,6 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 		if msg != nil {
 			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
 			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
-			// rpc消息检查
-			rpcId := ts.g.tb.event.CheckRPCResp(msg)
-			// 回调
-			for _, h := range ts.g.tb.hook {
-				h.OnRecvMsg(ts, msg.MsgID(), l)
-			}
 			// 日志
 			logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
 			if logLevel >= int(log.Logger.GetLevel()) {
@@ -414,7 +418,7 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 					ch <- msg
 					close(ch) // 删除的地方负责关闭
 				} else {
-					// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
+					// 没找到可能是超时了也可能是DecodeMsg没正确返回 也交给OnMsg执行
 					if TcpParamConf.Get().MsgSeq {
 						ts.seq.Submit(func() {
 							ts.g.tb.event.OnMsg(ctx, msg, ts)
@@ -436,6 +440,10 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 						ts.g.tb.event.OnMsg(ctx, msg, ts)
 					})
 				}
+			}
+			// 回调
+			for _, h := range ts.g.tb.hook {
+				h.OnRecvMsg(ts, msg.MsgID(), l)
 			}
 		}
 		if decodeLen >= len(data) {

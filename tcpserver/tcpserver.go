@@ -50,8 +50,6 @@ type TCPServer[ClientId any, ClientInfo any] struct {
 type tClient[ClientId any, ClientInfo any] struct {
 	tc *TCPClient[ClientInfo]
 	id ClientId // 调用GNetServer.AddClient设置的id 目前无锁 不存在复杂使用
-	// 回调修改，目前认为回调对单个连接对象是协程安全的
-	lastActiveTime time.Time // 最近一次活跃的时间
 }
 
 // 创建服务器
@@ -324,8 +322,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 		tc.wsh = newTCPWSHandler(tc)
 	}
 	client := &tClient[ClientId, ClientInfo]{
-		tc:             tc,
-		lastActiveTime: time.Now(),
+		tc: tc,
 	}
 	// 如果clientName还为空 就用client里面的id来表示
 	if client.tc.connName == nil {
@@ -339,7 +336,10 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	}
 	s.connMap.Store(conn, client)
 	if s.event != nil {
-		s.event.OnConnected(tc.ctx, tc)
+		tc.seq.Submit(func() {
+			ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			s.event.OnConnected(ctx, tc)
+		})
 	}
 
 	// 回调
@@ -363,7 +363,10 @@ func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn
 		_, delClient := s.clientMap.LoadAndDelete(client.(*tClient[ClientId, ClientInfo]).id)
 		tc.clear()
 		if s.event != nil {
-			s.event.OnDisConnect(tc.ctx, tc)
+			tc.seq.Submit(func() {
+				ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+				s.event.OnDisConnect(ctx, tc)
+			})
 		}
 
 		// 回调
@@ -386,7 +389,10 @@ func (s *TCPServer[ClientId, ClientInfo]) OnClose(c *tcp.TCPConn) {
 		_, delClient := s.clientMap.LoadAndDelete(client.(*tClient[ClientId, ClientInfo]).id)
 		tc.clear()
 		if s.event != nil {
-			s.event.OnDisConnect(tc.ctx, tc)
+			tc.seq.Submit(func() {
+				ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+				s.event.OnDisConnect(ctx, tc)
+			})
 		}
 
 		// 回调
@@ -401,7 +407,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnRecv(data []byte, c *tcp.TCPConn) (i
 	if ok {
 		tclient := client.(*tClient[ClientId, ClientInfo])
 		tc := tclient.tc
-		tclient.lastActiveTime = time.Now()
+		atomic.StoreInt64(&tc.lastRecvTime, time.Now().UnixMicro())
 		// 回调
 		for _, h := range s.hook {
 			h.OnRecv(tc, len(data))
@@ -464,25 +470,11 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 			s.connMap.Range(func(key, value interface{}) bool {
 				tclient := value.(*tClient[ClientId, ClientInfo])
 				tc := tclient.tc
-				timeout := 0
-				if ParamConf.Get().ActiveTimeout > 0 {
-					timeout = ParamConf.Get().ActiveTimeout
-				}
-				if timeout > 0 && time.Since(tclient.lastActiveTime) > time.Second*time.Duration(timeout) {
-					tc.Close(errors.New("activetimeout"))
-				} else {
-					ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
-					ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
-					if ParamConf.Get().MsgSeq {
-						tc.seq.Submit(func() {
-							s.event.OnTick(ctx, tc)
-						})
-					} else {
-						utils.Submit(func() {
-							s.event.OnTick(ctx, tc)
-						})
-					}
-				}
+				ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+				ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
+				tc.seq.Submit(func() {
+					s.event.OnTick(ctx, tc)
+				})
 				return true
 			})
 		}

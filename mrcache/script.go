@@ -23,6 +23,18 @@ var rowGetScript = goredis.NewScript(`
 	return redis.call('HMGET', KEYS[1], select(2,unpack(ARGV)))
 `)
 
+// 读取数据
+// key：生成的key key不存在返回值为空
+// 参数：第一个是有效期
+// 返回值：err=nil时 1:空 数据为空   2:1 数据存在
+var rowExistScript = goredis.NewScript(`
+	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
+	if rst == 0 then
+		return
+	end
+	return 1
+`)
+
 // row 新增数据，直接保存
 // key：生成的key
 // 参数：第一个是有效期 其他: field value field value ..
@@ -40,6 +52,9 @@ var rowSetScript = goredis.NewScript(`
 	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
 	if rst == 0 then
 		return
+	end
+	if #ARGV == 1 then -- 只有一个过期时间
+		return 'OK'
 	end
 	redis.call('HMSET', KEYS[1], select(2,unpack(ARGV)))
 	return 'OK'
@@ -69,6 +84,9 @@ var rowModifyScript = goredis.NewScript(`
 	end
 	if #setkv > 0 then
 		redis.call('HMSET', KEYS[1], unpack(setkv))
+	end
+	if #fields == 0 then
+		return {}
 	end
 	-- 返回最新的值
 	return redis.call('HMGET', KEYS[1], unpack(fields))
@@ -112,6 +130,20 @@ var rowsGetScript = goredis.NewScript(`
 	return redis.call('HMGET', KEYS[2], select(2,unpack(ARGV)))
 `)
 
+// rows 读取数据
+// key：第一个key为索引key，第二个为数据key, datakey不存在返回值为空
+// 参数：第一个是有效期
+// 返回值：err=nil时 1:空 数据为空   2:1 数据存在
+var rowsExistScript = goredis.NewScript(`
+	local rst = redis.call('EXPIRE', KEYS[2], ARGV[1])
+	if rst == 0 then
+		return
+	end
+	-- 设置索引key的倒计时
+	redis.call('EXPIRE', KEYS[1], ARGV[1])
+	return 1
+`)
+
 // rows 新增数据
 // key：第一个key为索引key 其他数据key列表
 // 参数：第一个是有效期 其他：num(后面field value的个数) field value field value ..  num field value field value ..
@@ -134,6 +166,22 @@ var rowsAddScript = goredis.NewScript(`
 	return 'OK'
 `)
 
+// rows 删除数据
+// key：第一个key为索引key
+// 参数：第一个是有效期 其他：field field ..
+// 返回值：err=nil时 OK
+var rowsDelScript = goredis.NewScript(`
+	local datakeys = redis.call('HVALS', KEYS[1])
+	-- 删除主key
+	local rst = redis.call('DEL', KEYS[1])
+	if rst == 0 then
+		return 'OK'
+	end
+	-- 删除数据key
+	redis.call('DEL', unpack(datakeys))
+	return 'OK'
+`)
+
 // row 设置数据
 // key：第一个key为索引key，第二个为数据key, 数据key不存在返回值为空
 // 参数：第一个是有效期 其他: field value field value ..
@@ -142,6 +190,9 @@ var rowsSetScript = goredis.NewScript(`
 	local rst = redis.call('EXPIRE', KEYS[2], ARGV[1])
 	if rst == 0 then
 		return
+	end
+	if #ARGV == 1 then -- 只有一个过期时间
+		return 'OK'
 	end
 	redis.call('HMSET', KEYS[2], select(2,unpack(ARGV)))
 	-- 设置索引key的倒计时

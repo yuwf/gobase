@@ -27,30 +27,30 @@ type TcpEvent[ServiceInfo any] interface {
 	GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConfig
 
 	// 网络连接成功
+	// 异步顺序调用
 	OnConnected(ctx context.Context, ts *TcpService[ServiceInfo])
 
 	// 网络失去连接
+	// 异步顺序调用
 	OnDisConnect(ctx context.Context, ts *TcpService[ServiceInfo])
 
 	// DecodeMsg 解码实现
+	// 网络协程调用
 	// ctx       包括 CtxKey_scheme
 	// 返回值为   msg,len,err
 	// msg       解码出的消息体
 	// len       解码消息的数据长度，内部根据len来删除已解码的数据
+	// rpcid     对应请求SendRPC的id， 返回nil表示非rpc调用
 	// err       解码错误，若发生error，服务器将重连
-	DecodeMsg(ctx context.Context, data []byte, ts *TcpService[ServiceInfo]) (utils.RecvMsger, int, error)
+	DecodeMsg(ctx context.Context, data []byte, ts *TcpService[ServiceInfo]) (utils.RecvMsger, int, interface{}, error)
 
-	// CheckRPCResp 判断是否RPC返回消息，如果使用SendRPCMsg需要实现此函数
-	// ctx          包括 CtxKey_scheme
-	// 返回值为      rpcid
-	// rpcid        对应请求SendRPC的id， 返回nil表示非rpc调用
-	CheckRPCResp(msg utils.RecvMsger) interface{}
-
-	// OnRecv 收到消息，解码成功后调用 异步调用
+	// OnRecv 收到消息，解码成功后调用
+	// 异步顺序调用 or 异步调用
 	// ctx    包括 CtxKey_scheme,CtxKey_traceId,CtxKey_msgId
 	OnMsg(ctx context.Context, msg utils.RecvMsger, ts *TcpService[ServiceInfo])
 
-	// OnTick 每秒tick下 异步调用
+	// OnTick 每秒tick下
+	// 异步顺序调用
 	// ctx    包括 CtxKey_scheme,CtxKey_traceId,CtxKey_msgId(固定为：_tick_)
 	OnTick(ctx context.Context, ts *TcpService[ServiceInfo])
 }
@@ -76,11 +76,8 @@ func (*TcpEventHandler[ServiceInfo]) OnConnected(ctx context.Context, ts *TcpSer
 }
 func (*TcpEventHandler[ServiceInfo]) OnDisConnect(ctx context.Context, ts *TcpService[ServiceInfo]) {
 }
-func (*TcpEventHandler[ServiceInfo]) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[ServiceInfo]) (utils.RecvMsger, int, error) {
-	return nil, len(data), errors.New("DecodeMsg not Implementation")
-}
-func (*TcpEventHandler[ServiceInfo]) CheckRPCResp(msg utils.RecvMsger) interface{} {
-	return nil
+func (*TcpEventHandler[ServiceInfo]) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[ServiceInfo]) (utils.RecvMsger, int, interface{}, error) {
+	return nil, len(data), nil, errors.New("DecodeMsg not Implementation")
 }
 func (*TcpEventHandler[ServiceInfo]) OnMsg(ctx context.Context, msg utils.RecvMsger, ts *TcpService[ServiceInfo]) {
 }

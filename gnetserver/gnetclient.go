@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
+	"time"
 
 	"github.com/yuwf/gobase/utils"
 
@@ -38,20 +40,23 @@ type GNetClient[ClientInfo any] struct {
 	connName   func() string              // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
 	wsh        *gnetWSHandler[ClientInfo] // websocket处理
 
-	ctx context.Context // 本连接的上下文
+	ctx          context.Context // 本连接的上下文
+	lastRecvTime int64           // 最近一次接受数据的时间戳 微妙 原子访问
+	lastSendTime int64           // 最近一次接受数据的时间戳 微妙 原子访问
 
 	closeReason error // 关闭原因
 }
 
 func newGNetClient[ClientInfo any](conn gnet.Conn, event GNetEvent[ClientInfo], hook []GNetHook[ClientInfo]) *GNetClient[ClientInfo] {
 	gc := &GNetClient[ClientInfo]{
-		conn:       conn,
-		removeAddr: *conn.RemoteAddr().(*net.TCPAddr),
-		localAddr:  *conn.LocalAddr().(*net.TCPAddr),
-		event:      event,
-		hook:       hook,
-		info:       new(ClientInfo),
-		ctx:        context.TODO(),
+		conn:         conn,
+		removeAddr:   *conn.RemoteAddr().(*net.TCPAddr),
+		localAddr:    *conn.LocalAddr().(*net.TCPAddr),
+		event:        event,
+		hook:         hook,
+		info:         new(ClientInfo),
+		ctx:          context.TODO(),
+		lastRecvTime: time.Now().UnixMicro(),
 	}
 	// 调用对象的ClientName函数
 	namer, ok := any(gc.info).(ClientNamer)
@@ -88,6 +93,14 @@ func (gc *GNetClient[ClientInfo]) ConnName() string {
 	return gc.connName()
 }
 
+func (gc *GNetClient[ClientInfo]) LastRecvTime() time.Time {
+	return time.UnixMicro(atomic.LoadInt64(&gc.lastRecvTime))
+}
+
+func (gc *GNetClient[ClientInfo]) LastSendTime() time.Time {
+	return time.UnixMicro(atomic.LoadInt64(&gc.lastSendTime))
+}
+
 func (gc *GNetClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 	var err error
 	if len(data) == 0 {
@@ -103,6 +116,11 @@ func (gc *GNetClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Int("Size", len(data)).Msg("Send error")
 		return err
+	}
+	atomic.StoreInt64(&gc.lastSendTime, time.Now().UnixMicro())
+	// 回调
+	for _, h := range gc.hook {
+		h.OnSendMsg(gc, "_send_", len(data))
 	}
 	utils.LogCtx(log.Debug(), ctx).Str("Name", gc.ConnName()).Int("Size", len(data)).Msg("Send")
 	return nil
@@ -130,6 +148,7 @@ func (gc *GNetClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsg
 		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 		return err
 	}
+	atomic.StoreInt64(&gc.lastSendTime, time.Now().UnixMicro())
 	// 回调
 	for _, h := range gc.hook {
 		h.OnSendMsg(gc, msg.MsgID(), len(data))
@@ -157,6 +176,11 @@ func (gc *GNetClient[ClientInfo]) SendText(ctx context.Context, data []byte) err
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Str("Name", gc.ConnName()).Err(err).Int("Size", len(data)).Msg("SendText error")
 		return err
+	}
+	atomic.StoreInt64(&gc.lastSendTime, time.Now().UnixMicro())
+	// 回调
+	for _, h := range gc.hook {
+		h.OnSendMsg(gc, "_sendtext_", len(data))
 	}
 	utils.LogCtx(log.Debug(), ctx).Str("Name", gc.ConnName()).Int("Size", len(data)).Msg("SendText")
 	return nil

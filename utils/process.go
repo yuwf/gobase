@@ -94,14 +94,14 @@ func ExitWait() {
 			case sig = <-sigchan:
 				switch sig {
 				case syscall.SIGHUP:
-					log.Warn().Msg("Caught SIGHUP. Ignoring") // 终端关闭
+					log.Warn().Msg("Process Caught SIGHUP. Ignoring") // 终端关闭
 					continue
 				case os.Interrupt:
-					log.Warn().Msg("Caught SIGINT. Exiting")
+					log.Warn().Msg("Process Caught SIGINT. Exiting")
 				case syscall.SIGTERM:
-					log.Warn().Msg("Caught SIGTERM. Exiting")
+					log.Warn().Msg("Process Caught SIGTERM. Exiting")
 				default:
-					log.Warn().Msgf("Caught signal %v. Exiting", sig)
+					log.Warn().Msgf("Process Caught signal %v. Exiting", sig)
 				}
 			case <-processQuit:
 				log.Info().Msg("Process Exiting")
@@ -122,6 +122,7 @@ func ExitWait() {
 
 	processWG.Wait()
 
+	log.Info().Msg("Process Exited")
 	// 移除pid文件
 	os.Remove("pid")
 }

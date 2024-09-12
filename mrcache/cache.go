@@ -7,12 +7,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/mysql"
 	"github.com/yuwf/gobase/utils"
-	"reflect"
-	"strconv"
-	"strings"
 )
 
 // 基础类
@@ -43,6 +45,10 @@ type Cache struct {
 	oneCondField      string // 该字段名必须在结果表中存在  区分大小写
 	oneCondFieldIndex int
 
+	// 设置key前后缀时，不需要添加 _ 下划线，程序判断不为空时自动添加前后下划线
+	keyPrefix string // key的前缀
+	keySuffix string // key的后缀
+
 	queryCond TableConds // 查找数据总过滤条件
 
 	// 运行时数据，结构表数据
@@ -60,7 +66,7 @@ func (c *Cache) ConfigHashTag(hashTagField string) error {
 	return nil
 }
 
-// 配置过期
+// 总过滤条件
 func (c *Cache) ConfigQueryCond(cond TableConds) error {
 	c.queryCond = cond
 	return nil
@@ -159,9 +165,45 @@ func (c *Cache) ConfigOneCondField(oneCondField string) error {
 	return nil
 }
 
+// 配置后缀
+func (c *Cache) ConfigKeyAffix(prefix, suffix string) error {
+	c.keyPrefix = prefix
+	c.keySuffix = suffix
+	return nil
+}
+
 func (c *Cache) ConfigExpire(expire int) error {
 	c.expire = expire
 	return nil
+}
+
+// 生成Key
+// key的命名 keyPrefix_表名_keySuffix_{condValue1}_condValue2 如果hashTagField == condField condValue1会添加上{}
+func (c *Cache) genKey(cond TableConds) string {
+	temp := cond
+	if len(cond) > 1 {
+		// 根据field排序，不要影响cond，拷贝一份
+		temp = make(TableConds, len(cond))
+		copy(temp, cond)
+		sort.Slice(temp, func(i, j int) bool { return temp[i].field < temp[j].field })
+	}
+
+	var key strings.Builder
+	if len(c.keyPrefix) > 0 {
+		key.WriteString(c.keyPrefix + "_")
+	}
+	key.WriteString(c.tableName)
+	if len(c.keySuffix) > 0 {
+		key.WriteString("_" + c.keySuffix)
+	}
+	for _, v := range temp {
+		if v.field == c.hashTagField {
+			key.WriteString(fmt.Sprintf("_{%v}", v.value))
+		} else {
+			key.WriteString(fmt.Sprintf("_%v", v.value))
+		}
+	}
+	return key.String()
 }
 
 // 检查结构数据
@@ -188,6 +230,37 @@ func (c *Cache) checkData(data interface{}) (*utils.StructInfo, error) {
 	return dataInfo, nil
 }
 
+// 检查Map数据
+// 可以是结构或者结构指针 data.tags名称需要和T一致，可以是T的一部分
+// 如果合理 通过map组织一个StructInfo信息
+func (c *Cache) checkDataM(data map[string]interface{}) (*utils.StructInfo, error) {
+	o := reflect.ValueOf(data)
+	dataInfo := &utils.StructInfo{
+		I:      data,
+		T:      o.Type(),
+		V:      o,
+		Tags:   []interface{}{},
+		Elemts: []reflect.Value{},
+	}
+	// 结构中的字段必须都存在，且类型还要一致
+	for tag, v := range data {
+		at := c.tableInfo.FindIndexByTag(tag)
+		if at == -1 {
+			err := fmt.Errorf("tag:%s not find in %s", tag, c.tableInfo.T.String())
+			return nil, err
+		}
+		vo := reflect.ValueOf(v)
+		if !(c.tableInfo.ElemtsType[at] == vo.Type() ||
+			(c.tableInfo.ElemtsType[at].Kind() == reflect.Pointer && c.tableInfo.ElemtsType[at].Elem() == vo.Type())) {
+			err := fmt.Errorf("tag:%s(%s) type err, should be %s", tag, vo.Type().String(), c.tableInfo.ElemtsType[at].String())
+			return nil, err
+		}
+		dataInfo.Tags = append(dataInfo.Tags, tag)
+		dataInfo.Elemts = append(dataInfo.Elemts, vo)
+	}
+	return dataInfo, nil
+}
+
 // 往MySQL中添加一条数据，返回自增值，如果条件是=的，会设置为默认值
 func (c *Cache) addToMySQL(ctx context.Context, cond TableConds, dataInfo *utils.StructInfo) (int64, error) {
 	var incrementId int64
@@ -205,44 +278,46 @@ func (c *Cache) addToMySQL(ctx context.Context, cond TableConds, dataInfo *utils
 		}
 	}
 
-	var sqlStr strings.Builder
-	sqlStr.WriteString("INSERT INTO ")
-	sqlStr.WriteString(c.tableName)
-
-	sqlStr.WriteString(" (")
-	for i, tag := range c.tableInfo.Tags {
-		if i > 0 {
-			sqlStr.WriteString(",")
-		}
-		sqlStr.WriteString(tag.(string))
-	}
-	sqlStr.WriteString(") VALUES(")
-
-	args := make([]interface{}, 0, len(c.tableInfo.Tags))
-	for i, tag := range c.tableInfo.Tags {
-		if len(args) > 0 {
-			sqlStr.WriteString(",")
-		}
-		sqlStr.WriteString("?")
-
+	fields := make([]interface{}, 0, len(c.tableInfo.MySQLTags))
+	args := make([]interface{}, 0, len(c.tableInfo.MySQLTags))
+	for _, tag := range c.tableInfo.MySQLTags {
 		if tag == c.incrementField {
+			fields = append(fields, tag)
 			args = append(args, &incrementId) // 这里填充地址，下面如果自增主键冲突了，会再次修改，mysql内部支持*int的转化操作，Redis不会
 			continue
 		}
 		// 从条件变量中查找
 		if v := cond.Find(tag.(string)); v != nil {
+			fields = append(fields, tag)
 			args = append(args, v.value)
 			continue
 		}
 		// 从结构数据中查找
 		if dataInfo != nil {
 			if at := dataInfo.FindIndexByTag(tag); at != -1 && dataInfo.Elemts[at].CanInterface() {
+				fields = append(fields, tag)
 				args = append(args, dataInfo.Elemts[at].Interface())
 				continue
 			}
 		}
-		// 都没有就创建一个空的
-		args = append(args, reflect.New(c.tableInfo.ElemtsType[i]).Interface())
+	}
+
+	var sqlStr strings.Builder
+	sqlStr.WriteString("INSERT INTO ")
+	sqlStr.WriteString(c.tableName)
+	sqlStr.WriteString(" (")
+	for i, tag := range fields {
+		if i > 0 {
+			sqlStr.WriteString(",")
+		}
+		sqlStr.WriteString(tag.(string))
+	}
+	sqlStr.WriteString(") VALUES(")
+	for i, _ := range fields {
+		if i > 0 {
+			sqlStr.WriteString(",")
+		}
+		sqlStr.WriteString("?")
 	}
 	sqlStr.WriteString(")")
 
@@ -265,6 +340,41 @@ func (c *Cache) addToMySQL(ctx context.Context, cond TableConds, dataInfo *utils
 		return 0, err
 	}
 	return incrementId, nil
+}
+
+// 删除MYSQL数据
+func (c *Cache) delToMySQL(ctx context.Context, cond TableConds) error {
+	var sqlStr strings.Builder
+	sqlStr.WriteString("DELETE FROM ")
+	sqlStr.WriteString(c.tableName)
+	sqlStr.WriteString(" WHERE ")
+
+	args := make([]interface{}, 0, len(cond)+len(c.queryCond))
+	for i, v := range cond {
+		if i > 0 {
+			if len(cond[i-1].link) > 0 {
+				sqlStr.WriteString(" " + cond[i-1].link + " ")
+			} else {
+				sqlStr.WriteString(" AND ")
+			}
+		}
+		sqlStr.WriteString(v.field)
+		sqlStr.WriteString(v.op + "?")
+		args = append(args, v.value)
+	}
+	for _, v := range c.queryCond {
+		sqlStr.WriteString(" AND ")
+		sqlStr.WriteString(v.field)
+		sqlStr.WriteString(v.op + "?")
+		args = append(args, v.value)
+	}
+
+	_, err := c.mysql.Exec(ctx, sqlStr.String(), args...)
+
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // 读取mysql数据 返回的是 *T
@@ -402,6 +512,7 @@ func (c *Cache) saveToMySQL(ctx context.Context, cond TableConds, destInfo *util
 		args = append(args, v.value)
 	}
 
+	// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
 	_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
 
 	if err == sql.ErrNoRows {
@@ -423,13 +534,30 @@ func (c *Cache) saveIgnoreTag(tag string, cond TableConds) bool {
 	return false
 }
 
-// 组织redis数据，第一个是过期时间，其他就是 field op value field op value ..
-// 返回值是真个T结构的值
-func (c *Cache) redisModifyParam1(cond TableConds, dataInfo *utils.StructInfo, numIncr bool) []interface{} {
-	redisParams := make([]interface{}, 0, 1+len(c.tableInfo.Tags)*3)
+// 按dataInfo.Elemts组织redis数据，第一个是过期时间，其他就是 field value field value ..
+func (c *CacheRow[T]) redisSetParam(cond TableConds, dataInfo *utils.StructInfo) []interface{} {
+	redisParams := make([]interface{}, 0, 1+len(dataInfo.Elemts)*2)
 	redisParams = append(redisParams, c.expire)
-	for _, tag := range c.tableInfo.Tags {
-		redisParams = append(redisParams, tag)
+	for i, v := range dataInfo.Elemts {
+		if c.saveIgnoreTag(dataInfo.Tags[i].(string), cond) {
+			continue
+		}
+		vfmt := utils.ValueFmt(v)
+		if vfmt == nil {
+			continue // 空的不填充，redis处理空会写成string类型，后续incr会出错
+		}
+		redisParams = append(redisParams, c.tableInfo.GetRedisTagByTag(dataInfo.Tags[i])) // 真实填充的是redistag
+		redisParams = append(redisParams, vfmt)
+	}
+	return redisParams
+}
+
+// 按c.tableInfo.MySQLTags组织redis数据，第一个是过期时间，其他就是 field op value field op value ..
+func (c *Cache) redisSetGetParam1(cond TableConds, dataInfo *utils.StructInfo, numIncr bool) []interface{} {
+	redisParams := make([]interface{}, 0, 1+len(c.tableInfo.MySQLTags)*3)
+	redisParams = append(redisParams, c.expire)
+	for i, tag := range c.tableInfo.MySQLTags {
+		redisParams = append(redisParams, c.tableInfo.RedisTags[i]) // 真实填充的是redistag
 		if c.saveIgnoreTag(tag.(string), cond) {
 			redisParams = append(redisParams, "get") // 忽略的字段 只读取
 			redisParams = append(redisParams, nil)
@@ -466,19 +594,96 @@ func (c *Cache) redisModifyParam1(cond TableConds, dataInfo *utils.StructInfo, n
 	return redisParams
 }
 
-// 组织redis数据，第一个是过期时间，其他就是 field op value field op value ..
-// 返回值是dataInfo.T结构的值
-func (c *Cache) redisModifyParam2(cond TableConds, dataInfo *utils.StructInfo, numIncr bool) []interface{} {
+// 按dataInfo.Elemts组织redis数据，第一个是过期时间，其他就是 field op value field op value ..
+func (c *Cache) redisSetGetParam2(cond TableConds, dataInfo *utils.StructInfo, numIncr bool) []interface{} {
 	redisParams := make([]interface{}, 0, 1+len(dataInfo.Elemts)*3)
 	redisParams = append(redisParams, c.expire)
 	for i, v := range dataInfo.Elemts {
-		redisParams = append(redisParams, dataInfo.Tags[i])
+		redisParams = append(redisParams, c.tableInfo.GetRedisTagByTag(dataInfo.Tags[i])) // 真实填充的是redistag
 		if c.saveIgnoreTag(dataInfo.Tags[i].(string), cond) {
 			redisParams = append(redisParams, "get") // 忽略的字段 只读取
 			redisParams = append(redisParams, nil)
 			continue
 		}
 		vfmt := utils.ValueFmt(v)
+		if vfmt == nil {
+			redisParams = append(redisParams, "get") // 空的不填充 读取下
+			redisParams = append(redisParams, nil)
+			continue
+		}
+		if numIncr {
+			switch reflect.ValueOf(vfmt).Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				fallthrough
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+				redisParams = append(redisParams, "incr") // 数值都是增量
+			case reflect.Float32, reflect.Float64:
+				redisParams = append(redisParams, "fincr") // 数值都是增量
+			default:
+				redisParams = append(redisParams, "set") // 其他都是直接设置
+			}
+		} else {
+			redisParams = append(redisParams, "set")
+		}
+		redisParams = append(redisParams, vfmt)
+	}
+	return redisParams
+}
+
+// 按c.tableInfo.MySQLTags组织redis数据，第一个是过期时间，其他就是 field op value field op value ..
+func (c *Cache) redisParamM1(cond TableConds, data map[string]interface{}, numIncr bool) []interface{} {
+	redisParams := make([]interface{}, 0, 1+len(c.tableInfo.MySQLTags)*3)
+	redisParams = append(redisParams, c.expire)
+	for i, tag := range c.tableInfo.MySQLTags {
+		redisParams = append(redisParams, c.tableInfo.RedisTags[i]) // 真实填充的是redistag
+		if c.saveIgnoreTag(tag.(string), cond) {
+			redisParams = append(redisParams, "get") // 忽略的字段 只读取
+			redisParams = append(redisParams, nil)
+			continue
+		}
+		v, ok := data[tag.(string)]
+		if !ok {
+			redisParams = append(redisParams, "get") // 只读取
+			redisParams = append(redisParams, nil)
+			continue
+		}
+		vfmt := utils.ValueFmt(reflect.ValueOf(v))
+		if vfmt == nil {
+			redisParams = append(redisParams, "get") // 只读取
+			redisParams = append(redisParams, nil)
+			continue // 空的不填充，redis处理空会写成string类型，后续incr会出错
+		}
+		if numIncr {
+			switch reflect.ValueOf(vfmt).Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				fallthrough
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+				redisParams = append(redisParams, "incr") // 数值都是增量
+			case reflect.Float32, reflect.Float64:
+				redisParams = append(redisParams, "fincr") // 数值都是增量
+			default:
+				redisParams = append(redisParams, "set") // 其他都是直接设置
+			}
+		} else {
+			redisParams = append(redisParams, "set")
+		}
+		redisParams = append(redisParams, vfmt)
+	}
+	return redisParams
+}
+
+// 按data组织redis数据，第一个是过期时间，其他就是 field op value field op value ..
+func (c *Cache) redisParamM2(cond TableConds, data map[string]interface{}, numIncr bool) []interface{} {
+	redisParams := make([]interface{}, 0, 1+len(data)*3)
+	redisParams = append(redisParams, c.expire)
+	for tag, v := range data {
+		redisParams = append(redisParams, c.tableInfo.GetRedisTagByTag(tag)) // 真实填充的是redistag
+		if c.saveIgnoreTag(tag, cond) {
+			redisParams = append(redisParams, "get") // 忽略的字段 只读取
+			redisParams = append(redisParams, nil)
+			continue
+		}
+		vfmt := utils.ValueFmt(reflect.ValueOf(v))
 		if vfmt == nil {
 			redisParams = append(redisParams, "get") // 空的不填充 读取下
 			redisParams = append(redisParams, nil)

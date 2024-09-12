@@ -21,9 +21,9 @@ type TcpGroup[ServiceInfo any] struct {
 	tb          *TcpBackend[ServiceInfo]            // 上层对象
 	serviceName string                              // 不可修改
 	services    map[string]*TcpService[ServiceInfo] // 锁保护
-	// 线程安全
-	hashring    *consistent.Consistent // 哈希环，填充serviceId, 协程安全，交给TcpService来填充，他有连接和熔断策略
-	tagHashring *sync.Map              // 按tag分组的哈希环 [ServiceInfoag:*consistent.Consistent]
+	// 线程安全，哈希环 只填充连接状态和配置都OK的
+	hashring    *consistent.Consistent //
+	tagHashring *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
 }
 
 func NewTcpGroup[ServiceInfo any](serviceName string, tb *TcpBackend[ServiceInfo]) *TcpGroup[ServiceInfo] {
@@ -60,6 +60,7 @@ func (g *TcpGroup[ServiceInfo]) GetServices() map[string]*TcpService[ServiceInfo
 }
 
 // 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
+// 只返回连接状态和发现配置都正常的服务对象
 func (g *TcpGroup[ServiceInfo]) GetServiceByHash(hash string) *TcpService[ServiceInfo] {
 	serviceId, err := g.hashring.Get(hash)
 	if err != nil {
@@ -75,6 +76,7 @@ func (g *TcpGroup[ServiceInfo]) GetServiceByHash(hash string) *TcpService[Servic
 }
 
 // 根据tag和哈希环获取对象 hash可以用用户id或者其他稳定的数据
+// 只返回连接状态和发现配置都正常的服务对象
 func (g *TcpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *TcpService[ServiceInfo] {
 	tag = strings.TrimSpace(strings.ToLower(tag))
 	hasrhing, ok := g.tagHashring.Load(tag)
@@ -124,6 +126,9 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
 				Str("RoutingTag", service.conf.RoutingTag)
+
+			// 从哈希环中移除
+			g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
 			if TcpParamConf.Get().Immediately {
 				l.Msg("TcpBackend Update Lost And Del")
 				delete(g.services, serviceId) // 先删
@@ -148,6 +153,8 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 					Str("RoutingTag", service.conf.RoutingTag).
 					Msg("TcpBackend Update Change")
 
+				// 从哈希环中移除
+				g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
 				service.close() // 先关闭
 				// 创建
 				var err error
@@ -163,6 +170,10 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 					Int("RegistryPort", service.conf.ServicePort).
 					Str("RoutingTag", service.conf.RoutingTag).
 					Msg("TcpBackend Update Recover")
+				// 添加到哈希环中
+				if service.HealthState() == 0 {
+					service.g.addHashring(service.conf.ServiceId, service.conf.RoutingTag)
+				}
 			}
 		} else {
 			// 新增

@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+func BenchmarkRandStr(b *testing.B) {
+	fmt.Println(RandString(32))
+	time.Sleep(time.Second * 10)
+}
+
 func BenchmarkAnts(b *testing.B) {
 	for i := 0; i < 20; i++ {
 		n := i

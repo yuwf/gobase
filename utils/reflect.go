@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -196,6 +197,10 @@ func ValueFmt(v reflect.Value) interface{} {
 	case reflect.String:
 		return v.Interface()
 	case reflect.Struct:
+		t, ok := v.Interface().(time.Time) // Time类型 存时间戳,毫秒级别
+		if ok {
+			return t.UnixMilli()
+		}
 		return valueFmtJson(v)
 	case reflect.UnsafePointer:
 		return nil
@@ -586,6 +591,34 @@ func stringToValue(src reflect.Value, dst reflect.Value) (bool, error) {
 		return true, nil
 	case reflect.Complex64, reflect.Complex128, reflect.Chan, reflect.Func, reflect.UnsafePointer:
 		return false, nil // json不支持这些类型
+	case reflect.Struct:
+		if dst.CanAddr() && dst.Addr().CanInterface() {
+			t, ok := dst.Addr().Interface().(*time.Time)
+			if ok {
+				r, err := strconv.ParseInt(src.String(), 10, 0)
+				if err == nil {
+					l := len(src.String())
+					if l == 10 {
+						*t = time.Unix(r, 0)
+						return true, nil
+					} else if l == 13 {
+						*t = time.UnixMilli(r)
+						return true, nil
+					} else if l == 16 {
+						*t = time.UnixMicro(r)
+						return true, nil
+					} else if l == 19 {
+						*t = time.Unix(r/1e9, r%1e9)
+						return true, nil
+					}
+				} else {
+					err := t.UnmarshalText(StringToBytes(src.String()))
+					if err != nil {
+						return true, nil
+					}
+				}
+			}
+		}
 	}
 	// 其他对象尝试通过json转化 必须指针，否则没有写的必要
 	if dst.CanAddr() && dst.Addr().CanInterface() {

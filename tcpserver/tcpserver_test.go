@@ -55,7 +55,7 @@ func (h *Handler) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 func (h *Handler) OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 
-func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (utils.RecvMsger, int, error) {
+func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (utils.RecvMsger, int, interface{}, error) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
 		return &utils.TestMsg{
@@ -64,13 +64,10 @@ func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[Clie
 				Len:   uint32(len(data)),
 			},
 			RecvData: data,
-		}, len(data), nil
+		}, len(data), nil, nil
 	}
-	return utils.TestDecodeMsg(data)
-}
-
-func (h *Handler) CheckRPCResp(msg utils.RecvMsger) interface{} {
-	return nil
+	m, l, err := utils.TestDecodeMsg(data)
+	return m, l, nil, err
 }
 
 func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo]) {

@@ -35,6 +35,11 @@ func (l *JsonLoader[T]) Get() *T {
 			if ok {
 				creater.Create()
 			}
+			// 调用对象的Normalize函数
+			normalizer, ok := any(conf).(Normalizer)
+			if ok {
+				normalizer.Normalize()
+			}
 			l.conf = conf
 		}
 		return l.conf

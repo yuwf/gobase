@@ -6,13 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"time"
+
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/mysql"
 	"github.com/yuwf/gobase/utils"
-	"reflect"
-	"sort"
-	"strings"
-	"time"
 )
 
 // T 为数据库结构类型，可重复多协程使用
@@ -24,29 +23,19 @@ type CacheRow[T any] struct {
 }
 
 func NewCacheRow[T any](redis *goredis.Redis, mysql *mysql.MySQL, tableName string) *CacheRow[T] {
-	dest := new(T)
-	sInfo, _ := utils.GetStructInfoByTag(dest, DBTag) // 不需要判断err，后续的查询中都会通过checkCond判断
-	elemtsType := make([]reflect.Type, 0, len(sInfo.Elemts))
-	for _, e := range sInfo.Elemts {
-		elemtsType = append(elemtsType, e.Type())
-	}
+	table := GetTableStruct[T]()
 	c := &CacheRow[T]{
 		Cache: &Cache{
 			redis:     redis,
 			mysql:     mysql,
 			tableName: tableName,
 			expire:    Expire,
-			tableInfo: &TableStruct{
-				T:          sInfo.T,
-				TS:         reflect.ValueOf([]*T{}).Type(),
-				Tags:       sInfo.Tags,
-				ElemtsType: elemtsType,
-			},
+			tableInfo: table,
 		},
 	}
 	// 默认配置第一个Key为自增
-	if len(sInfo.Tags) > 0 {
-		c.ConfigIncrement(redis, sInfo.Tags[0].(string), tableName)
+	if len(table.MySQLTags) > 0 {
+		c.ConfigIncrement(redis, table.MySQLTags[0].(string), tableName)
 	}
 	return c
 }
@@ -76,9 +65,9 @@ func (c *CacheRow[T]) Get(ctx context.Context, cond TableConds) (*T, error) {
 	}
 
 	// 从Redis中读取
-	redisParams := make([]interface{}, 0, 1+len(c.tableInfo.Tags))
+	redisParams := make([]interface{}, 0, 1+len(c.tableInfo.MySQLTags))
 	redisParams = append(redisParams, c.expire)
-	redisParams = append(redisParams, c.tableInfo.Tags...)
+	redisParams = append(redisParams, c.tableInfo.RedisTags...)
 
 	dest := new(T)
 	destInfo, _ := utils.GetStructInfoByTag(dest, DBTag) // 这里不用判断err了
@@ -86,8 +75,8 @@ func (c *CacheRow[T]) Get(ctx context.Context, cond TableConds) (*T, error) {
 	if err == nil {
 		return dest, nil
 	} else if goredis.IsNilError(err) {
-		if IsPass(key) {
-			return nil, fmt.Errorf("%s is pass", key)
+		if GetPass(key) {
+			return nil, ErrNullData
 		}
 		// 不处理执行下面的预加载
 	} else {
@@ -117,6 +106,71 @@ func (c *CacheRow[T]) Get(ctx context.Context, cond TableConds) (*T, error) {
 		return nil, ErrNullData
 	} else {
 		return nil, err
+	}
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+func (c *CacheRow[T]) ExistOC(ctx context.Context, condValue interface{}) (bool, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return false, errors.New("need config oneCondField")
+	}
+	return c.Exist(ctx, NewConds().Eq(c.oneCondField, condValue))
+}
+
+// 读取数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// 返回值：是否存在
+func (c *CacheRow[T]) Exist(ctx context.Context, cond TableConds) (bool, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return false, err
+	}
+
+	// 从Redis中读取
+	redisParams := make([]interface{}, 0, 1+len(c.tableInfo.MySQLTags))
+	redisParams = append(redisParams, c.expire)
+
+	var rst int
+	err = c.redis.DoScript2(ctx, rowExistScript, []string{key}, redisParams).Bind(&rst)
+	if err == nil {
+		return rst == 1, nil
+	} else if goredis.IsNilError(err) {
+		if GetPass(key) {
+			return false, nil
+		}
+		// 不处理执行下面的预加载
+	} else {
+		return false, err
+	}
+
+	// 预加载 尝试从数据库中读取
+	preData, _, err := c.preLoad(ctx, cond, key, false, nil)
+	if err == ErrNullData {
+		return false, nil // 空数据 返回false
+	}
+	if err != nil {
+		return false, err
+	}
+	// 预加载的数据就是新增的
+	if preData != nil {
+		return true, nil
+	}
+
+	// 如果不是自己执行的预加载，这里重新读取下
+	err = c.redis.DoScript2(ctx, rowExistScript, []string{key}, redisParams).Bind(&rst)
+	if err == nil {
+		return rst == 1, nil
+	} else if err == ErrNullData {
+		return false, nil
+	} else {
+		return false, err
 	}
 }
 
@@ -162,8 +216,9 @@ func (c *CacheRow[T]) Add(ctx context.Context, cond TableConds, data interface{}
 	if err != nil {
 		return nil, nil, err
 	}
+	DelPass(key)
 	// 重新加载下
-	t, err := c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.Tags, cond)
+	t, err := c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.MySQLTags, cond)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -175,6 +230,73 @@ func (c *CacheRow[T]) Add(ctx context.Context, cond TableConds, data interface{}
 		return nil, nil, err
 	}
 	return resp, incrValue, nil
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+func (c *CacheRow[T]) DelOC(ctx context.Context, condValue interface{}) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return errors.New("need config oneCondField")
+	}
+	return c.Del(ctx, NewConds().Eq(c.oneCondField, condValue))
+}
+
+// 删除数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// 返回值：error
+func (c *CacheRow[T]) Del(ctx context.Context, cond TableConds) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return err
+	}
+
+	c.redis.Del(ctx, key)         // 删缓存
+	err = c.delToMySQL(ctx, cond) // 删mysql
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+func (c *CacheRow[T]) DelCacheOC(ctx context.Context, condValue interface{}) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return errors.New("need config oneCondField")
+	}
+	return c.DelCache(ctx, NewConds().Eq(c.oneCondField, condValue))
+}
+
+// 只Cache删除数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// 返回值：error
+func (c *CacheRow[T]) DelCache(ctx context.Context, cond TableConds) error {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return err
+	}
+
+	cmd := c.redis.Del(ctx, key) // 删缓存
+
+	if cmd.Err() != nil {
+		return cmd.Err()
+	}
+	return nil
 }
 
 // 使用该函数需要提前使用ConfigOneCondField配置相关内容
@@ -194,36 +316,63 @@ func (c *CacheRow[T]) SetOC(ctx context.Context, condValue interface{}, data int
 // data：修改内容
 // -     可以是结构或者结构指针，内部的数据是要保存的数据
 // -     data.tags名称需要和T一致，可以是T的一部分
-// -     若data.tags中含有设置的自增自增字段 或者 条件字段 会忽略掉
+// -     若data.tags中含有设置的自增字段 或者 条件字段 会忽略掉
 // nc：表示不存在是否创建
 // 返回值：是T结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
 func (c *CacheRow[T]) Set(ctx context.Context, cond TableConds, data interface{}, nc bool) (*T, interface{}, error) {
 	if ctx.Value(utils.CtxKey_caller) == nil {
 		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
 	}
+	// 检查data数据
+	dataInfo, err := c.checkData(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c._Set(ctx, cond, dataInfo, nc)
+}
 
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见SetM说明
+func (c *CacheRow[T]) SetMOC(ctx context.Context, condValue interface{}, data map[string]interface{}, nc bool) (*T, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, nil, errors.New("need config oneCondField")
+	}
+	return c.SetM(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 写数据
+// cond：查询条件变量
+// data：修改内容
+// -     data中key名称需要和T的tag一致，可以是T的一部分
+// -     若data中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：是T结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
+func (c *CacheRow[T]) SetM(ctx context.Context, cond TableConds, data map[string]interface{}, nc bool) (*T, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	// 检查data数据
+	dataInfo, err := c.checkDataM(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c._Set(ctx, cond, dataInfo, nc)
+}
+
+func (c *CacheRow[T]) _Set(ctx context.Context, cond TableConds, dataInfo *utils.StructInfo, nc bool) (*T, interface{}, error) {
 	// 检查条件变量
 	key, err := c.checkCond(cond)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// 检查data数据
-	dataInfo, err := c.checkData(data)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// redis参数
-	redisParams := c.redisModifyParam1(cond, dataInfo, false)
-
-	dest, err := c.redisSetToMysql(ctx, cond, key, redisParams, dataInfo)
+	dest, err := c.redisSetGetToMysql1(ctx, cond, key, dataInfo)
 	if err == nil {
 		return dest, nil, nil
 	} else if err == ErrNullData {
-		if IsPass(key) {
-			return nil, nil, fmt.Errorf("%s is pass", key)
-		}
 		// 不处理执行下面的预加载
 	} else {
 		return nil, nil, err
@@ -240,7 +389,7 @@ func (c *CacheRow[T]) Set(ctx context.Context, cond TableConds, data interface{}
 	}
 
 	// 再次写数据
-	dest, err = c.redisSetToMysql(ctx, cond, key, redisParams, dataInfo)
+	dest, err = c.redisSetGetToMysql1(ctx, cond, key, dataInfo)
 	if err == nil {
 		return dest, nil, nil
 	} else {
@@ -248,7 +397,405 @@ func (c *CacheRow[T]) Set(ctx context.Context, cond TableConds, data interface{}
 	}
 }
 
-func (c *CacheRow[T]) redisSetToMysql(ctx context.Context, cond TableConds, key string, redisParams []interface{}, dataInfo *utils.StructInfo) (*T, error) {
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见Set2说明
+func (c *CacheRow[T]) Set2OC(ctx context.Context, condValue interface{}, data interface{}, nc bool) (interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, errors.New("need config oneCondField")
+	}
+	return c.Set2(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 写数据
+// cond：查询条件变量
+// data：修改内容
+// -     可以是结构或者结构指针，内部的数据是要保存的数据
+// -     data.tags名称需要和T一致，可以是T的一部分
+// -     若data.tags中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：如果有自增，返回自增ID interface是int64类型 =nil表示没有新增
+func (c *CacheRow[T]) Set2(ctx context.Context, cond TableConds, data interface{}, nc bool) (interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	// 检查data数据
+	dataInfo, err := c.checkData(data)
+	if err != nil {
+		return nil, err
+	}
+	return c._Set2(ctx, cond, dataInfo, nc)
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见Set2说明
+func (c *CacheRow[T]) SetM2OC(ctx context.Context, condValue interface{}, data map[string]interface{}, nc bool) (interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, errors.New("need config oneCondField")
+	}
+	return c.SetM2(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 写数据
+// cond：查询条件变量
+// data：修改内容
+// -     data中key名称需要和T的tag一致，可以是T的一部分
+// -     若data中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：如果有自增，返回自增ID interface是int64类型 =nil表示没有新增
+func (c *CacheRow[T]) SetM2(ctx context.Context, cond TableConds, data map[string]interface{}, nc bool) (interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	// 检查data数据
+	dataInfo, err := c.checkDataM(data)
+	if err != nil {
+		return nil, err
+	}
+	return c._Set2(ctx, cond, dataInfo, nc)
+}
+
+func (c *CacheRow[T]) _Set2(ctx context.Context, cond TableConds, dataInfo *utils.StructInfo, nc bool) (interface{}, error) {
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return nil, err
+	}
+	err = c.redisSetToMysql(ctx, cond, key, dataInfo)
+	if err == nil {
+		return nil, nil
+	} else if err == ErrNullData {
+		// 不处理执行下面的预加载
+	} else {
+		return nil, err
+	}
+
+	// 预加载 尝试从数据库中读取
+	_, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
+	if err != nil {
+		return nil, err
+	}
+	// 返回了自增，数据添加已经完成了，预加载的数据就是新增的
+	if incrValue != nil {
+		return incrValue, nil
+	}
+
+	// 再次写数据
+	err = c.redisSetToMysql(ctx, cond, key, dataInfo)
+	if err == nil {
+		return incrValue, nil
+	} else {
+		return nil, err
+	}
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见Modify说明
+func (c *CacheRow[T]) ModifyOC(ctx context.Context, condValue interface{}, data interface{}, nc bool) (*T, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, nil, errors.New("need config oneCondField")
+	}
+	return c.Modify(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 增量修改数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// data：修改内容
+// -     可以是结构或者结构指针，内部的数据是要保存的数据
+// -     data.tags名称需要和T一致，可以是T的一部分
+// -     若data.tags中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：是T结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
+func (c *CacheRow[T]) Modify(ctx context.Context, cond TableConds, data interface{}, nc bool) (*T, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	// 检查data数据
+	dataInfo, err := c.checkData(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 修改后的值
+	res := reflect.New(dataInfo.T).Interface()
+	resInfo, _ := utils.GetStructInfoByTag(res, DBTag)
+
+	return c._Modify(ctx, cond, dataInfo, resInfo, nc)
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见ModifyM说明
+func (c *CacheRow[T]) ModifyMOC(ctx context.Context, condValue interface{}, data map[string]interface{}, nc bool) (*T, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, nil, errors.New("need config oneCondField")
+	}
+	return c.ModifyM(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 增量修改数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// data：修改内容
+// -     data中key名称需要和T的tag一致，可以是T的一部分
+// -     若data.tags中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：是T结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
+func (c *CacheRow[T]) ModifyM(ctx context.Context, cond TableConds, data map[string]interface{}, nc bool) (*T, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	// 检查data数据
+	dataInfo, err := c.checkDataM(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 修改后的值
+	resInfo := &utils.StructInfo{
+		T:      dataInfo.T,
+		V:      dataInfo.V,
+		Tags:   dataInfo.Tags,
+		Elemts: []reflect.Value{},
+	}
+	for _, e := range dataInfo.Elemts {
+		resInfo.Elemts = append(resInfo.Elemts, reflect.New(e.Type()).Elem()) // 用来接受修改后的值
+	}
+
+	return c._Modify(ctx, cond, dataInfo, resInfo, nc)
+}
+
+func (c *CacheRow[T]) _Modify(ctx context.Context, cond TableConds, dataInfo, resInfo *utils.StructInfo, nc bool) (*T, interface{}, error) {
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 写数据
+	dest, err := c.redisModifyGetToMysql1(ctx, cond, key, dataInfo, resInfo)
+	if err == nil {
+		return dest, nil, nil
+	} else if err == ErrNullData {
+		// 不处理执行下面的预加载
+	} else {
+		return nil, nil, err
+	}
+
+	// 预加载 尝试从数据库中读取
+	preData, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 返回了自增，数据添加已经完成了，预加载的数据就是新增的
+	if incrValue != nil {
+		return preData, incrValue, nil
+	}
+
+	// 再次写数据
+	dest, err = c.redisModifyGetToMysql1(ctx, cond, key, dataInfo, resInfo)
+	if err == nil {
+		return dest, nil, nil
+	} else {
+		return nil, nil, err
+	}
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见Modify2说明
+func (c *CacheRow[T]) Modify2OC(ctx context.Context, condValue interface{}, data interface{}, nc bool) (interface{}, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, nil, errors.New("need config oneCondField")
+	}
+	return c.Modify2(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 增量修改数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// data：修改内容
+// -     可以是结构或者结构指针，内部的数据是要保存的数据
+// -     data.tags名称需要和T一致，可以是T的一部分
+// -     若data.tags中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：是data结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
+func (c *CacheRow[T]) Modify2(ctx context.Context, cond TableConds, data interface{}, nc bool) (interface{}, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 检查data数据
+	dataInfo, err := c.checkData(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 修改后的值
+	res := reflect.New(dataInfo.T).Interface()
+	resInfo, _ := utils.GetStructInfoByTag(res, DBTag)
+
+	// 写数据
+	err = c.redisModifyGetToMysql2(ctx, cond, key, dataInfo, resInfo)
+	if err == nil {
+		return res, nil, nil
+	} else if err == ErrNullData {
+		// 不处理执行下面的预加载
+	} else {
+		return nil, nil, err
+	}
+
+	// 预加载 尝试从数据库中读取
+	preData, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 返回了自增，数据添加已经完成了，从预加载数据中拷贝返回值
+	if incrValue != nil {
+		dInfo, _ := utils.GetStructInfoByTag(preData, DBTag)
+		dInfo.CopyTo(resInfo)
+		return res, incrValue, nil
+	}
+
+	// 再次写数据，这种情况很少
+	err = c.redisModifyGetToMysql2(ctx, cond, key, dataInfo, resInfo)
+	if err == nil {
+		return res, nil, nil
+	} else {
+		return nil, nil, err
+	}
+}
+
+// 使用该函数需要提前使用ConfigOneCondField配置相关内容
+// 见ModifyM2说明
+func (c *CacheRow[T]) ModifyM2OC(ctx context.Context, condValue interface{}, data map[string]interface{}, nc bool) (map[string]interface{}, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+	if len(c.oneCondField) == 0 {
+		return nil, nil, errors.New("need config oneCondField")
+	}
+	return c.ModifyM2(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
+}
+
+// 增量修改数据
+// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
+// data：修改内容
+// -     data中key名称需要和T的tag一致，可以是T的一部分
+// -     若data.tags中含有设置的自增字段 或者 条件字段 会忽略掉
+// nc：表示不存在是否创建
+// 返回值：是data结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
+func (c *CacheRow[T]) ModifyM2(ctx context.Context, cond TableConds, data map[string]interface{}, nc bool) (map[string]interface{}, interface{}, error) {
+	if ctx.Value(utils.CtxKey_caller) == nil {
+		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
+	}
+
+	// 检查条件变量
+	key, err := c.checkCond(cond)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 检查data数据
+	dataInfo, err := c.checkDataM(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 修改后的值
+	resInfo := &utils.StructInfo{
+		T:      dataInfo.T,
+		V:      dataInfo.V,
+		Tags:   dataInfo.Tags,
+		Elemts: []reflect.Value{},
+	}
+	for _, e := range dataInfo.Elemts {
+		resInfo.Elemts = append(resInfo.Elemts, reflect.New(e.Type()).Elem()) // 用来接受修改后的值
+	}
+
+	// 写数据
+	err = c.redisModifyGetToMysql2(ctx, cond, key, dataInfo, resInfo)
+	if err == nil {
+		res := map[string]interface{}{}
+		for i, e := range resInfo.Elemts {
+			res[resInfo.Tags[i].(string)] = e.Interface()
+		}
+		return res, nil, nil
+	} else if err == ErrNullData {
+		// 不处理执行下面的预加载
+	} else {
+		return nil, nil, err
+	}
+
+	// 预加载 尝试从数据库中读取
+	preData, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 返回了自增，数据添加已经完成了，从预加载数据中拷贝返回值
+	if incrValue != nil {
+		dInfo, _ := utils.GetStructInfoByTag(preData, DBTag)
+		dInfo.CopyTo(resInfo)
+		res := map[string]interface{}{}
+		for i, e := range resInfo.Elemts {
+			res[resInfo.Tags[i].(string)] = e.Interface()
+		}
+		return res, incrValue, nil
+	}
+
+	// 再次写数据，这种情况很少
+	err = c.redisModifyGetToMysql2(ctx, cond, key, dataInfo, resInfo)
+	if err == nil {
+		res := map[string]interface{}{}
+		for i, e := range resInfo.Elemts {
+			res[resInfo.Tags[i].(string)] = e.Interface()
+		}
+		return res, nil, nil
+	} else {
+		return nil, nil, err
+	}
+}
+
+// 没有返回值
+func (c *CacheRow[T]) redisSetToMysql(ctx context.Context, cond TableConds, key string, dataInfo *utils.StructInfo) error {
+	// redis参数
+	redisParams := c.redisSetParam(cond, dataInfo)
+	cmd := c.redis.DoScript2(ctx, rowSetScript, []string{key}, redisParams...)
+	if cmd.Cmd.Err() == nil {
+		// 同步mysql
+		err := c.saveToMySQL(ctx, cond, dataInfo)
+		if err != nil {
+			c.redis.Del(ctx, key) // mysql错了 要删缓存
+			return err
+		}
+		return nil
+	} else {
+		if goredis.IsNilError(cmd.Cmd.Err()) {
+			return ErrNullData
+		}
+		return cmd.Cmd.Err()
+	}
+}
+
+// 返回值*T
+func (c *CacheRow[T]) redisSetGetToMysql1(ctx context.Context, cond TableConds, key string, dataInfo *utils.StructInfo) (*T, error) {
+	// redis参数
+	redisParams := c.redisSetGetParam1(cond, dataInfo, false)
 	cmd := c.redis.DoScript2(ctx, rowModifyScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		dest := new(T)
@@ -275,179 +822,20 @@ func (c *CacheRow[T]) redisSetToMysql(ctx context.Context, cond TableConds, key 
 	}
 }
 
-// 使用该函数需要提前使用ConfigOneCondField配置相关内容
-// 见Set2说明
-func (c *CacheRow[T]) Set2OC(ctx context.Context, condValue interface{}, data interface{}, nc bool) (interface{}, error) {
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
-	if len(c.oneCondField) == 0 {
-		return nil, errors.New("need config oneCondField")
-	}
-	return c.Set2(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
-}
-
-// 写数据
-// cond：查询条件变量
-// data：修改内容
-// -     可以是结构或者结构指针，内部的数据是要保存的数据
-// -     data.tags名称需要和T一致，可以是T的一部分
-// -     若data.tags中含有设置的自增自增字段 或者 条件字段 会忽略掉
-// nc：表示不存在是否创建
-// 返回值：如果有自增，返回自增ID interface是int64类型 =nil表示没有新增
-func (c *CacheRow[T]) Set2(ctx context.Context, cond TableConds, data interface{}, nc bool) (interface{}, error) {
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
-
-	// 检查条件变量
-	key, err := c.checkCond(cond)
-	if err != nil {
-		return nil, err
-	}
-
-	// 检查data数据
-	dataInfo, err := c.checkData(data)
-	if err != nil {
-		return nil, err
-	}
-
+// 返回值*T 值数据自增
+// resInfo 是修改后的数据 和 dataInfo类型一致
+func (c *CacheRow[T]) redisModifyGetToMysql1(ctx context.Context, cond TableConds, key string, dataInfo, resInfo *utils.StructInfo) (*T, error) {
 	// redis参数
-	redisParams := c.redisSetParam(cond, dataInfo)
-
-	err = c.redisSet2ToMysql(ctx, cond, key, redisParams, dataInfo)
-	if err == nil {
-		return nil, nil
-	} else if err == ErrNullData {
-		if IsPass(key) {
-			return nil, fmt.Errorf("%s is pass", key)
-		}
-		// 不处理执行下面的预加载
-	} else {
-		return nil, err
-	}
-
-	// 预加载 尝试从数据库中读取
-	_, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
-	if err != nil {
-		return nil, err
-	}
-	// 返回了自增，数据添加已经完成了，预加载的数据就是新增的
-	if incrValue != nil {
-		return incrValue, nil
-	}
-
-	// 再次写数据
-	err = c.redisSet2ToMysql(ctx, cond, key, redisParams, dataInfo)
-	if err == nil {
-		return incrValue, nil
-	} else {
-		return nil, err
-	}
-}
-
-func (c *CacheRow[T]) redisSet2ToMysql(ctx context.Context, cond TableConds, key string, redisParams []interface{}, dataInfo *utils.StructInfo) error {
-	cmd := c.redis.DoScript2(ctx, rowSetScript, []string{key}, redisParams...)
-	if cmd.Cmd.Err() == nil {
-		// 同步mysql
-		err := c.saveToMySQL(ctx, cond, dataInfo)
-		if err != nil {
-			c.redis.Del(ctx, key) // mysql错了 要删缓存
-			return err
-		}
-		return nil
-	} else {
-		if goredis.IsNilError(cmd.Cmd.Err()) {
-			return ErrNullData
-		}
-		return cmd.Cmd.Err()
-	}
-}
-
-// 使用该函数需要提前使用ConfigOneCondField配置相关内容
-// 见Modify说明
-func (c *CacheRow[T]) ModifyOC(ctx context.Context, condValue interface{}, data interface{}, nc bool) (*T, interface{}, error) {
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
-	if len(c.oneCondField) == 0 {
-		return nil, nil, errors.New("need config oneCondField")
-	}
-	return c.Modify(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
-}
-
-// 增量修改数据
-// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
-// data：修改内容
-// -     可以是结构或者结构指针，内部的数据是要保存的数据
-// -     data.tags名称需要和T一致，可以是T的一部分
-// -     若data.tags中含有设置的自增自增字段 或者 条件字段 会忽略掉
-// nc：表示不存在是否创建
-// 返回值：是T结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
-func (c *CacheRow[T]) Modify(ctx context.Context, cond TableConds, data interface{}, nc bool) (*T, interface{}, error) {
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
-
-	// 检查条件变量
-	key, err := c.checkCond(cond)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// 检查data数据
-	dataInfo, err := c.checkData(data)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// redis参数
-	redisParams := c.redisModifyParam1(cond, dataInfo, true)
-
-	// 写数据
-	dest, err := c.redisModifyToMysql(ctx, cond, key, redisParams, dataInfo)
-	if err == nil {
-		return dest, nil, nil
-	} else if err == ErrNullData {
-		if IsPass(key) {
-			return nil, nil, fmt.Errorf("%s is pass", key)
-		}
-		// 不处理执行下面的预加载
-	} else {
-		return nil, nil, err
-	}
-
-	// 预加载 尝试从数据库中读取
-	preData, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
-	if err != nil {
-		return nil, nil, err
-	}
-	// 返回了自增，数据添加已经完成了，预加载的数据就是新增的
-	if incrValue != nil {
-		return preData, incrValue, nil
-	}
-
-	// 再次写数据
-	dest, err = c.redisModifyToMysql(ctx, cond, key, redisParams, dataInfo)
-	if err == nil {
-		return dest, nil, nil
-	} else {
-		return nil, nil, err
-	}
-}
-
-func (c *CacheRow[T]) redisModifyToMysql(ctx context.Context, cond TableConds, key string, redisParams []interface{}, dataInfo *utils.StructInfo) (*T, error) {
+	redisParams := c.redisSetGetParam1(cond, dataInfo, true)
 	cmd := c.redis.DoScript2(ctx, rowModifyScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		dest := new(T)
 		destInfo, _ := utils.GetStructInfoByTag(dest, DBTag)
 		err := cmd.BindValues(destInfo.Elemts)
 		if err == nil {
-			// 同步mysql，把T结构的值 拷贝到新创建的dataInfo.T中再保存
-			t := reflect.New(dataInfo.T).Interface()
-			tInfo, _ := utils.GetStructInfoByTag(t, DBTag)
-			destInfo.CopyTo(tInfo)
-			err = c.saveToMySQL(ctx, cond, tInfo)
+			// 同步mysql，把T结构的值 拷贝到新创建的resInfo中再保存
+			destInfo.CopyTo(resInfo)
+			err = c.saveToMySQL(ctx, cond, resInfo)
 			if err != nil {
 				c.redis.Del(ctx, key) // mysql错了 要删缓存
 				return nil, err
@@ -466,85 +854,11 @@ func (c *CacheRow[T]) redisModifyToMysql(ctx context.Context, cond TableConds, k
 	}
 }
 
-// 使用该函数需要提前使用ConfigOneCondField配置相关内容
-// 见Modify2说明
-func (c *CacheRow[T]) Modify2OC(ctx context.Context, condValue interface{}, data interface{}, nc bool) (interface{}, interface{}, error) {
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
-	if len(c.oneCondField) == 0 {
-		return nil, nil, errors.New("need config oneCondField")
-	}
-	return c.Modify2(ctx, NewConds().Eq(c.oneCondField, condValue), data, nc)
-}
-
-// 增量修改数据
-// cond：查询条件变量 field:value, 可以有多个条件但至少有一个条件 (条件具有唯一性，不唯一只能读取一条数据)
-// data：修改内容
-// -     可以是结构或者结构指针，内部的数据是要保存的数据
-// -     data.tags名称需要和T一致，可以是T的一部分
-// -     若data.tags中含有设置的自增自增字段 或者 条件字段 会忽略掉
-// nc：表示不存在是否创建
-// 返回值：是data结构类型的指针(最新的值), 自增ID(如果新增数据 int64类型), error
-func (c *CacheRow[T]) Modify2(ctx context.Context, cond TableConds, data interface{}, nc bool) (interface{}, interface{}, error) {
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
-
-	// 检查条件变量
-	key, err := c.checkCond(cond)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// 检查data数据
-	dataInfo, err := c.checkData(data)
-	if err != nil {
-		return nil, nil, err
-	}
-
+// 不要返回值
+// resInfo 是修改后的数据 和 dataInfo类型一致
+func (c *CacheRow[T]) redisModifyGetToMysql2(ctx context.Context, cond TableConds, key string, dataInfo *utils.StructInfo, resInfo *utils.StructInfo) error {
 	// redis参数
-	redisParams := c.redisModifyParam2(cond, dataInfo, true)
-
-	// 返回值
-	res := reflect.New(dataInfo.T).Interface()
-	resInfo, _ := utils.GetStructInfoByTag(res, DBTag)
-
-	// 写数据
-	err = c.redisModify2ToMysql(ctx, cond, key, redisParams, resInfo)
-	if err == nil {
-		return res, nil, nil
-	} else if err == ErrNullData {
-		if IsPass(key) {
-			return nil, nil, fmt.Errorf("%s is pass", key)
-		}
-		// 不处理执行下面的预加载
-	} else {
-		return nil, nil, err
-	}
-
-	// 预加载 尝试从数据库中读取
-	preData, incrValue, err := c.preLoad(ctx, cond, key, nc, dataInfo)
-	if err != nil {
-		return nil, nil, err
-	}
-	// 返回了自增，数据添加已经完成了，从预加载数据中拷贝返回值
-	if incrValue != nil {
-		dInfo, _ := utils.GetStructInfoByTag(preData, DBTag)
-		dInfo.CopyTo(resInfo)
-		return res, incrValue, nil
-	}
-
-	// 再次写数据，这种情况很少
-	err = c.redisModify2ToMysql(ctx, cond, key, redisParams, resInfo)
-	if err == nil {
-		return res, nil, nil
-	} else {
-		return nil, nil, err
-	}
-}
-
-func (c *CacheRow[T]) redisModify2ToMysql(ctx context.Context, cond TableConds, key string, redisParams []interface{}, resInfo *utils.StructInfo) error {
+	redisParams := c.redisSetGetParam2(cond, dataInfo, true)
 	cmd := c.redis.DoScript2(ctx, rowModifyScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		err := cmd.BindValues(resInfo.Elemts)
@@ -595,24 +909,7 @@ func (c *CacheRow[T]) checkCond(cond TableConds) (string, error) {
 		}
 	}
 
-	temp := cond
-	if len(cond) > 1 {
-		// 根据field排序，不要影响cond，拷贝一份
-		temp = make(TableConds, len(cond))
-		copy(temp, cond)
-		sort.Slice(temp, func(i, j int) bool { return temp[i].field < temp[j].field })
-	}
-
-	var key strings.Builder
-	key.WriteString(KeyPrefix + "mrr_" + c.tableName)
-	for _, v := range temp {
-		if v.field == c.hashTagField {
-			key.WriteString(fmt.Sprintf("_{%v}", v.value))
-		} else {
-			key.WriteString(fmt.Sprintf("_%v", v.value))
-		}
-	}
-	return key.String(), nil
+	return c.genKey(cond), nil
 }
 
 // 预加载，确保写到Redis中
@@ -632,15 +929,16 @@ func (c *CacheRow[T]) preLoad(ctx context.Context, cond TableConds, key string, 
 		defer unlock()
 
 		var incrValue interface{}
-		t, err := c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.Tags, cond)
+		t, err := c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.MySQLTags, cond)
 		if err == ErrNullData {
 			// 创建数据
 			incrValue, err = c.addToMySQL(ctx, cond, dataInfo)
 			if err != nil {
 				return nil, nil, err
 			}
+			DelPass(key)
 			// 重新加载下
-			t, err = c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.Tags, cond)
+			t, err = c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.MySQLTags, cond)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -659,7 +957,7 @@ func (c *CacheRow[T]) preLoad(ctx context.Context, cond TableConds, key string, 
 		unlock, err := c.redis.TryLockWait(context.WithValue(context.TODO(), goredis.CtxKey_nolog, 1), "lock_"+key, time.Second*8)
 		if err == nil && unlock != nil {
 			defer unlock()
-			t, err := c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.Tags, cond)
+			t, err := c.getFromMySQL(ctx, c.tableInfo.T, c.tableInfo.MySQLTags, cond)
 			if err != nil {
 				if err == ErrNullData {
 					SetPass(key)
@@ -688,7 +986,7 @@ func (c *CacheRow[T]) mysqlToRedis(ctx context.Context, key string, data *T) err
 		if vfmt == nil {
 			continue // 空的不填充，redis处理空会写成string类型，后续incr会出错
 		}
-		redisParams = append(redisParams, tInfo.Tags[i])
+		redisParams = append(redisParams, c.tableInfo.RedisTags[i])
 		redisParams = append(redisParams, vfmt)
 	}
 	cmd := c.redis.DoScript(ctx, rowAddScript, []string{key}, redisParams...)
@@ -696,22 +994,4 @@ func (c *CacheRow[T]) mysqlToRedis(ctx context.Context, key string, data *T) err
 		return cmd.Err()
 	}
 	return nil
-}
-
-// 组织redis数据，数据格式符合rowSetScript脚本解析
-func (c *CacheRow[T]) redisSetParam(cond TableConds, dataInfo *utils.StructInfo) []interface{} {
-	redisParams := make([]interface{}, 0, 1+len(dataInfo.Elemts)*2)
-	redisParams = append(redisParams, c.expire)
-	for i, v := range dataInfo.Elemts {
-		if c.saveIgnoreTag(dataInfo.Tags[i].(string), cond) {
-			continue
-		}
-		vfmt := utils.ValueFmt(v)
-		if vfmt == nil {
-			continue // 空的不填充，redis处理空会写成string类型，后续incr会出错
-		}
-		redisParams = append(redisParams, dataInfo.Tags[i])
-		redisParams = append(redisParams, vfmt)
-	}
-	return redisParams
 }

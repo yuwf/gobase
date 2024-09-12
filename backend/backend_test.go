@@ -163,16 +163,15 @@ func (h *TcpHandler) OnDisConnect(ctx context.Context, ts *TcpService[TcpService
 
 }
 
-func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (utils.RecvMsger, int, error) {
-	return utils.TestDecodeMsg(data)
-}
-
-func (h *TcpHandler) CheckRPCResp(msg utils.RecvMsger) interface{} {
-	m, _ := msg.(*utils.TestMsg)
-	if m.Msgid == utils.TestHeatBeatRespMsg.Msgid {
-		return utils.TestHeatBeatReqMsg.Msgid
+func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (utils.RecvMsger, int, interface{}, error) {
+	m, l, err := utils.TestDecodeMsg(data)
+	if err != nil {
+		return nil, len(data), nil, err
 	}
-	return nil
+	if m.Msgid == utils.TestHeatBeatRespMsg.Msgid {
+		return m, l, utils.TestHeatBeatReqMsg.Msgid, err
+	}
+	return m, l, nil, err
 }
 
 func (h *TcpHandler) OnMsg(ctx context.Context, msg utils.RecvMsger, ts *TcpService[TcpServiceInfo]) {
@@ -191,7 +190,7 @@ func (h *TcpHandler) OnTick(ctx context.Context, ts *TcpService[TcpServiceInfo])
 			// 连接成功 发送心跳
 			//正常发送
 			//ts.SendMsg(utils.TestHeatBeatReqMsg)
-			//rpc方式发送，需要修改CheckRPCResp支持
+			//rpc方式发送，需要修改DecodeMsg来支持
 			_, err := ts.SendRPCMsg(ctx, utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5)
 			if err == nil {
 				//m, _ := resp.(*utils.TestMsg)

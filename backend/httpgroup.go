@@ -16,8 +16,8 @@ type HttpGroup[ServiceInfo any] struct {
 	sync.RWMutex
 	hb       *HttpBackend[ServiceInfo]            // 上层对象
 	services map[string]*HttpService[ServiceInfo] // 锁保护
-	// 线程安全
-	hashring    *consistent.Consistent // 哈希环，填充serviceId, 交给HttpService来填充，他有健康检查和熔断机制
+	// 线程安全，哈希环 只填充连接状态和配置都OK的
+	hashring    *consistent.Consistent //
 	tagHashring *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
 }
 
@@ -53,6 +53,7 @@ func (g *HttpGroup[ServiceInfo]) GetServices() map[string]*HttpService[ServiceIn
 }
 
 // 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
+// 只返回连接状态和发现配置都正常的服务对象
 func (g *HttpGroup[ServiceInfo]) GetServiceByHash(hash string) *HttpService[ServiceInfo] {
 	serviceId, err := g.hashring.Get(hash)
 	if err != nil {
@@ -68,6 +69,7 @@ func (g *HttpGroup[ServiceInfo]) GetServiceByHash(hash string) *HttpService[Serv
 }
 
 // 根据tag和哈希环获取对象 hash可以用用户id或者其他稳定的数据
+// 只返回连接状态和发现配置都正常的服务对象
 func (g *HttpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *HttpService[ServiceInfo] {
 	tag = strings.TrimSpace(strings.ToLower(tag))
 	hasrhing, ok := g.tagHashring.Load(tag)
@@ -103,6 +105,9 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 				Int("RegistryPort", service.conf.ServicePort).
 				Str("RoutingTag", service.conf.RoutingTag).
 				Msg("HttpBackend Update Lost And Del")
+
+			// 从哈希环中移除
+			g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
 			service.close() // 关闭
 			delete(g.services, serviceId)
 			remove = append(remove, service)
@@ -121,6 +126,8 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 					Str("RoutingTag", service.conf.RoutingTag).
 					Msg("HttpBackend Update Change")
 
+				// 从哈希环中移除
+				g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
 				service.close() // 先关闭
 				// 创建
 				var err error

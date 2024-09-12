@@ -20,9 +20,8 @@ type ParamConfig struct {
 	LogLevelMsg   int            `json:"loglevelmsg,omitempty"`   // msg消息默认的消息级别，不配置就是debug级别
 	LogLevelByMsg map[string]int `json:"loglevelbymsg,omitempty"` // 根据消息ID区分的消息日志级别，消息ID：日志级别，不配置就使用LogLevelMsg级别
 
-	ActiveTimeout int                 `json:"activetimeout,omitempty"` // 连接活跃超时时间 单位秒 <=0表示不检查活跃
-	MsgSeq        bool                `json:"msgseq,omitempty"`        // 消息顺序执行
-	WSHeader      map[string][]string `json:"wsheader,omitempty"`      // websocket握手时 回复的头
+	MsgSeq   bool                `json:"msgseq,omitempty"`   // 消息顺序执行
+	WSHeader map[string][]string `json:"wsheader,omitempty"` // websocket握手时 回复的头
 }
 
 var ParamConf loader.JsonLoader[ParamConfig]

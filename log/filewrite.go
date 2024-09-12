@@ -64,7 +64,7 @@ func (f *filewrite) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// 先停止Write 在close
+//先停止Write 在close
 func (f *filewrite) close() {
 	f.locker.Lock()
 	defer f.locker.Unlock()

@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 )
@@ -21,6 +22,9 @@ type Name struct {
 }
 
 func BenchmarkMySQL(b *testing.B) {
+	var m map[int]string
+	s :=`{"1":"1", "2":"22"}`
+	fmt.Println(json.Unmarshal([]byte(s), &m))
 	mysql, err := InitDefaultMySQL(cfg)
 	if err != nil {
 		return

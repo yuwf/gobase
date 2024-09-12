@@ -57,7 +57,7 @@ func (tb *TcpBackend[ServiceInfo]) GetService(serviceName, serviceId string) *Tc
 	return nil
 }
 
-// 根据哈希环获取,哈希环行记录的都是连接成功的
+// 根据哈希环获取,哈希环行记录的都是连接成功且发现配置都存在的
 func (tb *TcpBackend[ServiceInfo]) GetServiceByHash(serviceName, hash string) *TcpService[ServiceInfo] {
 	group := tb.GetGroup(serviceName)
 	if group != nil {

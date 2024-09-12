@@ -11,12 +11,15 @@ import (
 
 type GNetEvent[ClientInfo any] interface {
 	// 收到连接
+	// 异步顺序调用
 	OnConnected(ctx context.Context, gc *GNetClient[ClientInfo])
 
 	// 用户掉线
+	// 异步顺序调用
 	OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo])
 
 	// DecodeMsg 解码消息实现
+	// 网络协程调用
 	// ctx       包括 [CtxKey_WS,CtxKey_Text]
 	// 返回值为   msg,len,err
 	// msg       解码出的消息体
@@ -25,10 +28,12 @@ type GNetEvent[ClientInfo any] interface {
 	DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (utils.RecvMsger, int, error)
 
 	// OnRecv 收到消息，解码成功后调用
+	// 异步顺序调用 or 异步调用
 	// ctx    包括 [CtxKey_WS,CtxKey_Text],CtxKey_traceId,CtxKey_msgId
 	OnMsg(ctx context.Context, msg utils.RecvMsger, gc *GNetClient[ClientInfo])
 
 	// OnTick 每秒调用一次
+	// 异步顺序调用
 	// ctx    包括 [CtxKey_WS],CtxKey_traceId,CtxKey_msgId(固定为：_tick_)
 	OnTick(ctx context.Context, gc *GNetClient[ClientInfo])
 }

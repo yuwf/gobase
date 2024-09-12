@@ -25,6 +25,7 @@ type Config struct {
 	UserName string `json:"username,omitempty"`
 	Passwd   string `json:"passwd,omitempty"`
 	DB       string `json:"db,omitempty"`
+	Param    string `json:"param,omitempty"` // 链接参数 k1=v1&k2=v2, 默认添加charset=utf8
 
 	MaxOpenConns int `json:"maxopenconns,omitempty"`
 	MaxIdleConns int `json:"maxidleconns,omitempty"`
@@ -73,7 +74,7 @@ func InitDefaultMySQL(conf *Config) (*MySQL, error) {
 func NewMySQL(conf *Config) (*MySQL, error) {
 	conf.Source = strings.TrimSpace(conf.Source)
 	if len(conf.Source) == 0 {
-		conf.Source = fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8", conf.UserName, conf.Passwd, conf.Addr, conf.DB)
+		conf.Source = fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&%s", conf.UserName, conf.Passwd, conf.Addr, conf.DB, conf.Param)
 	}
 	db, err := sqlx.Connect("mysql", conf.Source)
 	if err != nil {

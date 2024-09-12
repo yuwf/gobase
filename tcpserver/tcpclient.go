@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yuwf/gobase/tcp"
@@ -41,7 +42,9 @@ type TCPClient[ClientInfo any] struct {
 	connName   func() string             // // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
 	wsh        *tcpWSHandler[ClientInfo] // websocket处理
 
-	ctx context.Context // 本连接的上下文
+	ctx          context.Context // 本连接的上下文
+	lastRecvTime int64           // 最近一次接受数据的时间戳 微妙 原子访问
+	lastSendTime int64           // 最近一次接受数据的时间戳 微妙 原子访问
 
 	//RPC消息使用 [rpcid:chan interface{}]
 	rpc *sync.Map
@@ -51,14 +54,15 @@ type TCPClient[ClientInfo any] struct {
 
 func newTCPClient[ClientInfo any](conn *tcp.TCPConn, event TCPEvent[ClientInfo], hook []TCPHook[ClientInfo]) *TCPClient[ClientInfo] {
 	tc := &TCPClient[ClientInfo]{
-		conn:       conn,
-		removeAddr: *conn.RemoteAddr(),
-		localAddr:  *conn.LocalAddr(),
-		event:      event,
-		hook:       hook,
-		info:       new(ClientInfo),
-		ctx:        context.TODO(),
-		rpc:        new(sync.Map),
+		conn:         conn,
+		removeAddr:   *conn.RemoteAddr(),
+		localAddr:    *conn.LocalAddr(),
+		event:        event,
+		hook:         hook,
+		info:         new(ClientInfo),
+		ctx:          context.TODO(),
+		lastRecvTime: time.Now().UnixMicro(),
+		rpc:          new(sync.Map),
 	}
 
 	// 调用对象的ClientName和ClientCreate函数
@@ -110,6 +114,14 @@ func (tc *TCPClient[ClientInfo]) ConnName() string {
 	return tc.connName()
 }
 
+func (tc *TCPClient[ClientInfo]) LastRecvTime() time.Time {
+	return time.UnixMicro(atomic.LoadInt64(&tc.lastRecvTime))
+}
+
+func (tc *TCPClient[ClientInfo]) LastSendTime() time.Time {
+	return time.UnixMicro(atomic.LoadInt64(&tc.lastSendTime))
+}
+
 func (tc *TCPClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 	var err error
 	if len(data) == 0 {
@@ -125,6 +137,11 @@ func (tc *TCPClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Int("Size", len(data)).Msg("Send error")
 		return err
+	}
+	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
+	// 回调
+	for _, h := range tc.hook {
+		h.OnSendMsg(tc, "_send_", len(data))
 	}
 	utils.LogCtx(log.Debug(), ctx).Str("Name", tc.ConnName()).Int("Size", len(data)).Msg("Send")
 	return nil
@@ -152,6 +169,7 @@ func (tc *TCPClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsge
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 		return err
 	}
+	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
 	// 回调
 	for _, h := range tc.hook {
 		h.OnSendMsg(tc, msg.MsgID(), len(data))
@@ -180,11 +198,16 @@ func (tc *TCPClient[ClientInfo]) SendText(ctx context.Context, data []byte) erro
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Int("Size", len(data)).Msg("SendText error")
 		return err
 	}
+	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
+	// 回调
+	for _, h := range tc.hook {
+		h.OnSendMsg(tc, "_sendtext_", len(data))
+	}
 	utils.LogCtx(log.Debug(), ctx).Str("Name", tc.ConnName()).Int("Size", len(data)).Msg("SendText")
 	return nil
 }
 
-// SendRPCMsg 发送RPC消息并等待消息回复，需要依赖event.CheckRPCResp来判断是否rpc调用
+// SendRPCMsg 发送RPC消息并等待消息回复，需要依赖event.DecodeMsg返回的rpcId来判断是否rpc调用
 // 成功返回解析后的消息
 // 消息对象可实现zerolog.LogObjectMarshaler接口，更好的输出日志，通过ParamConf.LogLevelMsg配置可控制日志级别
 func (tc *TCPClient[ClientInfo]) SendRPCMsg(ctx context.Context, rpcId interface{}, msg utils.SendMsger, timeout time.Duration) (interface{}, error) {
@@ -223,6 +246,7 @@ func (tc *TCPClient[ClientInfo]) SendRPCMsg(ctx context.Context, rpcId interface
 		utils.LogCtx(log.Error(), ctx).Str("Name", tc.ConnName()).Err(err).Interface("Msg", msg).Msg("SendRPCMsg error")
 		return nil, err
 	}
+	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
 	// 回调
 	for _, h := range tc.hook {
 		h.OnSendMsg(tc, msg.MsgID(), len(data))
@@ -277,7 +301,7 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 
 	readlen := 0
 	for {
-		msg, l, err := tc.event.DecodeMsg(ctx, buf[readlen:], tc)
+		msg, l, rpcId, err := tc.event.DecodeMsg(ctx, buf[readlen:], tc)
 		if err != nil {
 			return 0, err
 		}
@@ -294,12 +318,6 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 		if msg != nil {
 			ctx := context.WithValue(ctx, utils.CtxKey_traceId, utils.GenTraceID())
 			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
-			// rpc消息检查
-			rpcId := tc.event.CheckRPCResp(msg)
-			// 回调
-			for _, h := range tc.hook {
-				h.OnRecvMsg(tc, msg.MsgID(), l)
-			}
 			// 日志
 			logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
 			if logLevel >= int(log.Logger.GetLevel()) {
@@ -317,7 +335,7 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 					ch <- msg
 					close(ch) // 删除的地方负责关闭
 				} else {
-					// 没找到可能是超时了也可能是CheckRPCResp出错了 也交给OnMsg执行
+					// 没找到可能是超时了也可能是DecodeMsg没正确返回 也交给OnMsg执行
 					// 消息放入协程池中
 					if ParamConf.Get().MsgSeq {
 						tc.seq.Submit(func() {
@@ -340,6 +358,10 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 						tc.event.OnMsg(ctx, msg, tc)
 					})
 				}
+			}
+			// 回调
+			for _, h := range tc.hook {
+				h.OnRecvMsg(tc, msg.MsgID(), l)
 			}
 		}
 		if len(buf)-readlen == 0 {
