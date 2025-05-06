@@ -368,7 +368,7 @@ func (gs *GinServer) hystrix(c *gin.Context) {
 			return nil
 		}, func(ctx context.Context, err error) error {
 			// 出现了熔断
-			utils.LogCtx(log.Error(), ctx).Err(err).Str("clientIP", c.ClientIP()).Str("path", c.Request.URL.Path).Msg("GinServer Hystrix")
+			utils.LogCtx(log.Error(), ctx).Err(err).Str("RemoteAddr", c.Request.RemoteAddr).Str("path", c.Request.URL.Path).Msg("GinServer Hystrix")
 			if err == hystrix.ErrTimeout { // 如果是超时，逻辑层可能是因为慢，正常来说会回复，这里先不要回复，有待商榷
 				return err
 			}
@@ -479,9 +479,12 @@ func (gs *GinServer) handleNext(ctx context.Context, c *gin.Context, blw *respon
 func (gs *GinServer) callhook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 	defer utils.HandlePanic()
 	// 回调
-	for _, f := range gs.hook {
-		f(ctx, c, elapsed)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, f := range gs.hook {
+			f(ctx, c, elapsed)
+		}
+	}()
 }
 
 func (gs *GinServer) log(ctx context.Context, c *gin.Context, logLevel int, logHeadOut bool, elapsed time.Duration, blw *responseWriterWrapper, msg string) {
@@ -490,7 +493,7 @@ func (gs *GinServer) log(ctx context.Context, c *gin.Context, logLevel int, logH
 		return
 	}
 
-	l = utils.LogCtx(l, ctx).Str("clientIP", c.ClientIP()).
+	l = utils.LogCtx(l, ctx).Str("RemoteAddr", c.Request.RemoteAddr).
 		Str("method", c.Request.Method).
 		Str("path", c.Request.URL.Path)
 	if logHeadOut {
@@ -535,7 +538,7 @@ func (gs *GinServer) reqLog(ctx context.Context, c *gin.Context, logLevel int, l
 		return
 	}
 
-	l = utils.LogCtx(l, ctx).Str("clientIP", c.ClientIP()).
+	l = utils.LogCtx(l, ctx).Str("RemoteAddr", c.Request.RemoteAddr).
 		Str("method", c.Request.Method).
 		Str("path", c.Request.URL.Path)
 	if logHeadOut {

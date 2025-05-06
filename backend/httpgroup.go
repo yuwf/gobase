@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/yuwf/gobase/utils"
+
 	"github.com/rs/zerolog/log"
 	"stathat.com/c/consistent"
 )
@@ -103,11 +105,11 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 				Str("ServiceId", service.conf.ServiceId).
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
-				Str("RoutingTag", service.conf.RoutingTag).
+				Strs("RoutingTag", service.conf.RoutingTag).
 				Msg("HttpBackend Update Lost And Del")
 
 			// 从哈希环中移除
-			g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
+			g.removeHashring(service.conf.ServiceId)
 			service.close() // 关闭
 			delete(g.services, serviceId)
 			remove = append(remove, service)
@@ -123,11 +125,11 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 					Str("ServiceId", service.conf.ServiceId).
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
-					Str("RoutingTag", service.conf.RoutingTag).
+					Strs("RoutingTag", service.conf.RoutingTag).
 					Msg("HttpBackend Update Change")
 
 				// 从哈希环中移除
-				g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
+				g.removeHashring(service.conf.ServiceId)
 				service.close() // 先关闭
 				// 创建
 				var err error
@@ -143,7 +145,7 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 				Str("ServiceId", conf.ServiceId).
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).
-				Str("RoutingTag", conf.RoutingTag).
+				Strs("RoutingTag", conf.RoutingTag).
 				Msg("HttpBackend Update Add")
 			service, err := NewHttpService(conf, g)
 			if err != nil {
@@ -157,42 +159,48 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 	g.Unlock()
 
 	// 回调
-	for _, service := range remove {
-		for _, h := range g.hb.hook {
-			h.OnRemove(service)
+	func() {
+		defer utils.HandlePanic()
+		for _, service := range remove {
+			for _, h := range g.hb.hook {
+				h.OnRemove(service)
+			}
 		}
-	}
-	for _, service := range add {
-		for _, h := range g.hb.hook {
-			h.OnAdd(service)
+		for _, service := range add {
+			for _, h := range g.hb.hook {
+				h.OnAdd(service)
+			}
 		}
-	}
+	}()
 	return len
 }
 
 // 添加到哈希环
-func (g *HttpGroup[ServiceInfo]) addHashring(serviceId, routingTag string) {
+func (g *HttpGroup[ServiceInfo]) addHashring(serviceId string, routingTag []string) {
 	g.hashring.Add(serviceId)
 	if len(routingTag) > 0 {
-		hashring, ok := g.tagHashring.Load(routingTag)
-		if ok {
-			hashring.(*consistent.Consistent).Add(serviceId)
-		} else {
-			hashring := consistent.New()
-			hashring.Add(serviceId)
-			g.tagHashring.Store(routingTag, hashring)
+		for _, tag := range routingTag {
+			hashring, ok := g.tagHashring.Load(tag)
+			if ok {
+				hashring.(*consistent.Consistent).Add(serviceId)
+			} else {
+				hashring := consistent.New()
+				hashring.Add(serviceId)
+				g.tagHashring.Store(tag, hashring)
+			}
 		}
 	}
 }
 
 // 从哈希环中移除
-func (g *HttpGroup[ServiceInfo]) removeHashring(serviceId, routingTag string) {
+func (g *HttpGroup[ServiceInfo]) removeHashring(serviceId string) {
 	g.hashring.Remove(serviceId)
-	hashring, ok := g.tagHashring.Load(routingTag)
-	if ok {
-		hashring.(*consistent.Consistent).Remove(serviceId)
-		if len(hashring.(*consistent.Consistent).Members()) == 0 {
-			g.tagHashring.Delete(routingTag)
+	g.tagHashring.Range(func(key, value any) bool {
+		value.(*consistent.Consistent).Remove(serviceId)
+
+		if len(value.(*consistent.Consistent).Members()) == 0 {
+			g.tagHashring.Delete(key)
 		}
-	}
+		return true
+	})
 }

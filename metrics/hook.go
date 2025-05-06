@@ -16,7 +16,6 @@ import (
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/httprequest"
 	"github.com/yuwf/gobase/mysql"
-	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/tcpserver"
 	"github.com/yuwf/gobase/utils"
 
@@ -71,6 +70,7 @@ var (
 	gnetDisConnCount      *prometheus.CounterVec
 	gnetSendSize          *prometheus.CounterVec
 	gnetRecvSize          *prometheus.CounterVec
+	gnetRecvSeqCount      *prometheus.GaugeVec
 	gnetSendMsgCount      *prometheus.CounterVec
 	gnetRecvMsgCount      *prometheus.CounterVec
 	gnetSendMsgSize       *prometheus.CounterVec
@@ -87,6 +87,7 @@ var (
 	tcpServerDisConnCount      *prometheus.CounterVec
 	tcpServerSendSize          *prometheus.CounterVec
 	tcpServerRecvSize          *prometheus.CounterVec
+	tcpServerRecvSeqCount      *prometheus.GaugeVec
 	tcpServerSendMsgCount      *prometheus.CounterVec
 	tcpServerRecvMsgCount      *prometheus.CounterVec
 	tcpServerSendMsgSize       *prometheus.CounterVec
@@ -98,6 +99,7 @@ var (
 	tcpBackendConned       *prometheus.GaugeVec
 	tcpBackendSendSize     *prometheus.CounterVec
 	tcpBackendRecvSize     *prometheus.CounterVec
+	tcpBackendRecvSeqCount *prometheus.GaugeVec
 	tcpBackendSendMsgCount *prometheus.CounterVec
 	tcpBackendRecvMsgCount *prometheus.CounterVec
 	tcpBackendSendMsgSize  *prometheus.CounterVec
@@ -155,41 +157,6 @@ func redisInit() {
 	})
 }
 
-func redisHook(ctx context.Context, cmd *redis.RedisCommond) {
-	redisInit()
-	// 找到key
-	var key string
-	if len(cmd.Args) >= 1 {
-		k := fmt.Sprintf("%v", cmd.Args[0])
-		for _, exp := range redisKeyRegexp {
-			k, err := exp.Replace(k, "*", 0, -1)
-			if err == nil && (len(key) == 0 || len(k) < len(key)) {
-				key = k
-			}
-		}
-	}
-
-	callerName := ""
-	caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
-	if ok {
-		callerName = caller.Name()
-	}
-
-	//redisCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), key, callerName).Inc()
-	if cmd.Err != nil {
-		redisErrorCount.WithLabelValues(strings.ToUpper(cmd.Cmd), key, callerName).Inc()
-	}
-	redisLatency.WithLabelValues(strings.ToUpper(cmd.Cmd), key, callerName).Observe(float64(cmd.Elapsed) / float64(time.Microsecond))
-	if ctx != nil {
-		if msgId := ctx.Value(utils.CtxKey_msgId); msgId != nil {
-			if s, ok := msgId.(string); ok && len(s) > 0 {
-				redisMsgCount.WithLabelValues(s).Inc()
-				redisMsgTime.WithLabelValues(s).Add(float64(cmd.Elapsed) / float64(time.Microsecond))
-			}
-		}
-	}
-}
-
 func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 	redisInit()
 	if cmd.Cmd != nil && len(cmd.Cmd.Args()) > 0 {
@@ -211,9 +178,9 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 		}
 
 		callerName := ""
-		caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
-		if ok {
-			callerName = caller.Name()
+		callers, ok := ctx.Value(utils.CtxKey_callers).([]*utils.CallerDesc)
+		if ok && len(callers) > 0 {
+			callerName = callers[0].Name()
 		}
 
 		//redisCnt.WithLabelValues(cmdName, key, callerName).Inc()
@@ -245,9 +212,9 @@ func mysqlHook(ctx context.Context, cmd *mysql.MySQLCommond) {
 	})
 
 	callerName := ""
-	caller, ok := ctx.Value(utils.CtxKey_caller).(*utils.CallerDesc)
-	if ok {
-		callerName = caller.Name()
+	callers, ok := ctx.Value(utils.CtxKey_callers).([]*utils.CallerDesc)
+	if ok && len(callers) > 0 {
+		callerName = callers[0].Name()
 	}
 
 	//mysqlCnt.WithLabelValues(strings.ToUpper(cmd.Cmd), callerName).Inc()
@@ -326,14 +293,9 @@ func ginHook(ctx context.Context, c *gin.Context, elapsed time.Duration) {
 	ginLatency.WithLabelValues(strings.ToUpper(c.Request.Method), path).Observe(float64(elapsed) / float64(time.Microsecond))
 }
 
-type ConnCount interface {
-	ConnCount() (int, int)
-	ClientCount() int
-}
-
 type gNetHook[ClientInfo any] struct {
-	addr      string
-	connCount ConnCount
+	addr   string
+	server utils.ServerTermianl
 }
 
 func (h *gNetHook[ClientInfo]) init() {
@@ -347,6 +309,7 @@ func (h *gNetHook[ClientInfo]) init() {
 		gnetDisConnCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_disconn_count"}, []string{"addr"})
 		gnetSendSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_send_size"}, []string{"addr"})
 		gnetRecvSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_recv_size"}, []string{"addr"})
+		gnetRecvSeqCount = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: MetricsNamePrefix + "gnet_recvseq_count"}, []string{"addr"})
 		gnetSendMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_sendmsg_count"}, []string{"msgid"})
 		gnetRecvMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_recvmsg_count"}, []string{"msgid"})
 		gnetSendMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "gnet_sendmsg_size"}, []string{"msgid"})
@@ -356,24 +319,24 @@ func (h *gNetHook[ClientInfo]) init() {
 
 func (h *gNetHook[ClientInfo]) OnConnected(gc *gnetserver.GNetClient[ClientInfo]) {
 	h.init()
-	count, _ := h.connCount.ConnCount()
+	count, _ := h.server.ConnCount()
 	gnetConningCount.WithLabelValues(h.addr).Set(float64(count))
 	gnetConnCount.WithLabelValues(h.addr).Add(1)
 }
 func (h *gNetHook[ClientInfo]) OnWSHandShake(gc *gnetserver.GNetClient[ClientInfo]) {
 	h.init()
-	_, handshakecount := h.connCount.ConnCount()
+	_, handshakecount := h.server.ConnCount()
 	gnetHandShakeCount.WithLabelValues(h.addr).Add(1)
 	gnetHandShakeingCount.WithLabelValues(h.addr).Set(float64(handshakecount))
 }
 func (h *gNetHook[ClientInfo]) OnDisConnect(gc *gnetserver.GNetClient[ClientInfo], removeClient bool, closeReason error) {
 	h.init()
-	count, handshakecount := h.connCount.ConnCount()
+	count, handshakecount := h.server.ConnCount()
 	gnetConningCount.WithLabelValues(h.addr).Set(float64(count))
 	gnetHandShakeingCount.WithLabelValues(h.addr).Set(float64(handshakecount))
 	gnetDisConnCount.WithLabelValues(h.addr).Add(1)
 	if removeClient {
-		gnetClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
+		gnetClientingCount.WithLabelValues(h.addr).Set(float64(h.server.ClientCount()))
 	}
 	if closeReason != nil {
 		gnetConnCloseReason.WithLabelValues(closeReason.Error()).Add(1)
@@ -383,11 +346,11 @@ func (h *gNetHook[ClientInfo]) OnDisConnect(gc *gnetserver.GNetClient[ClientInfo
 }
 func (h *gNetHook[ClientInfo]) OnAddClient(gc *gnetserver.GNetClient[ClientInfo]) {
 	h.init()
-	gnetClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
+	gnetClientingCount.WithLabelValues(h.addr).Set(float64(h.server.ClientCount()))
 }
 func (h *gNetHook[ClientInfo]) OnRemoveClient(gc *gnetserver.GNetClient[ClientInfo]) {
 	h.init()
-	gnetClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
+	gnetClientingCount.WithLabelValues(h.addr).Set(float64(h.server.ClientCount()))
 }
 func (h *gNetHook[ClientInfo]) OnSend(gc *gnetserver.GNetClient[ClientInfo], len int) {
 	h.init()
@@ -411,10 +374,14 @@ func (h *gNetHook[ClientInfo]) OnRecvMsg(gc *gnetserver.GNetClient[ClientInfo], 
 		gnetRecvMsgSize.WithLabelValues(msgId).Add(float64(len_))
 	}
 }
+func (h *gNetHook[ClientInfo]) OnTick() {
+	h.init()
+	gnetRecvSeqCount.WithLabelValues(h.addr).Set(float64(h.server.RecvSeqCount()))
+}
 
 type tcpServerHook[ClientInfo any] struct {
-	addr      string
-	connCount ConnCount
+	addr   string
+	server utils.ServerTermianl
 }
 
 func (h *tcpServerHook[ClientInfo]) init() {
@@ -428,6 +395,7 @@ func (h *tcpServerHook[ClientInfo]) init() {
 		tcpServerDisConnCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_disconn_count"}, []string{"addr"})
 		tcpServerSendSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_send_size"}, []string{"addr"})
 		tcpServerRecvSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_recv_size"}, []string{"addr"})
+		tcpServerRecvSeqCount = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: MetricsNamePrefix + "tcpserver_recvseqmsg_count"}, []string{"addr"})
 		tcpServerSendMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_sendmsg_count"}, []string{"msgid"})
 		tcpServerRecvMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_recvmsg_count"}, []string{"msgid"})
 		tcpServerSendMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpserver_sendmsg_size"}, []string{"msgid"})
@@ -437,24 +405,24 @@ func (h *tcpServerHook[ClientInfo]) init() {
 
 func (h *tcpServerHook[ClientInfo]) OnConnected(tc *tcpserver.TCPClient[ClientInfo]) {
 	h.init()
-	count, _ := h.connCount.ConnCount()
+	count, _ := h.server.ConnCount()
 	tcpServerConningCount.WithLabelValues(h.addr).Set(float64(count))
 	tcpServerConnCount.WithLabelValues(h.addr).Add(1)
 }
 func (h *tcpServerHook[ClientInfo]) OnWSHandShake(gc *tcpserver.TCPClient[ClientInfo]) {
 	h.init()
-	_, handshakecount := h.connCount.ConnCount()
+	_, handshakecount := h.server.ConnCount()
 	tcpServerHandShakeCount.WithLabelValues(h.addr).Add(1)
 	tcpServerHandShakeingCount.WithLabelValues(h.addr).Set(float64(handshakecount))
 }
 func (h *tcpServerHook[ClientInfo]) OnDisConnect(tc *tcpserver.TCPClient[ClientInfo], removeClient bool, closeReason error) {
 	h.init()
-	count, handshakecount := h.connCount.ConnCount()
+	count, handshakecount := h.server.ConnCount()
 	tcpServerConningCount.WithLabelValues(h.addr).Set(float64(count))
 	tcpServerHandShakeingCount.WithLabelValues(h.addr).Set(float64(handshakecount))
 	tcpServerDisConnCount.WithLabelValues(h.addr).Add(1)
 	if removeClient {
-		tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
+		tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.server.ClientCount()))
 	}
 	if closeReason != nil {
 		tcpServerConnCloseReason.WithLabelValues(closeReason.Error()).Add(1)
@@ -464,11 +432,11 @@ func (h *tcpServerHook[ClientInfo]) OnDisConnect(tc *tcpserver.TCPClient[ClientI
 }
 func (h *tcpServerHook[ClientInfo]) OnAddClient(tc *tcpserver.TCPClient[ClientInfo]) {
 	h.init()
-	tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
+	tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.server.ClientCount()))
 }
 func (h *tcpServerHook[ClientInfo]) OnRemoveClient(tc *tcpserver.TCPClient[ClientInfo]) {
 	h.init()
-	tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.connCount.ClientCount()))
+	tcpServerClientingCount.WithLabelValues(h.addr).Set(float64(h.server.ClientCount()))
 }
 func (h *tcpServerHook[ClientInfo]) OnSend(tc *tcpserver.TCPClient[ClientInfo], len int) {
 	h.init()
@@ -492,6 +460,10 @@ func (h *tcpServerHook[ClientInfo]) OnRecvMsg(tc *tcpserver.TCPClient[ClientInfo
 		tcpServerRecvMsgSize.WithLabelValues(msgId).Add(float64(len_))
 	}
 }
+func (h *tcpServerHook[ClientInfo]) OnTick() {
+	h.init()
+	tcpServerRecvSeqCount.WithLabelValues(h.addr).Set(float64(h.server.RecvSeqCount()))
+}
 
 type tcpBackendHook[ServerInfo any] struct {
 }
@@ -502,6 +474,7 @@ func (h *tcpBackendHook[ServerInfo]) init() {
 		tcpBackendConned = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: MetricsNamePrefix + "tcpbackend_conned"}, []string{"servicename", "serviceid"})
 		tcpBackendSendSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_send_size"}, []string{"servicename", "serviceid"})
 		tcpBackendRecvSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_recv_size"}, []string{"servicename", "serviceid"})
+		tcpBackendRecvSeqCount = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: MetricsNamePrefix + "tcpbackend_recvseq_count"}, []string{"servicename", "serviceid"})
 		tcpBackendSendMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_sendmsg_count"}, []string{"servicename", "serviceid", "msgid"})
 		tcpBackendRecvMsgCount = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_recvmsg_count"}, []string{"servicename", "serviceid", "msgid"})
 		tcpBackendSendMsgSize = promauto.NewCounterVec(prometheus.CounterOpts{Name: MetricsNamePrefix + "tcpbackend_sendmsg_size"}, []string{"servicename", "serviceid", "msgid"})
@@ -535,6 +508,7 @@ func (h *tcpBackendHook[ServerInfo]) OnSend(ts *backend.TcpService[ServerInfo], 
 func (h *tcpBackendHook[ServerInfo]) OnRecv(ts *backend.TcpService[ServerInfo], len int) {
 	h.init()
 	tcpBackendRecvSize.WithLabelValues(ts.ServiceName(), ts.ServiceId()).Add(float64(len))
+	tcpBackendRecvSeqCount.WithLabelValues(ts.ServiceName(), ts.ServiceId()).Set(float64(ts.RecvSeqCount()))
 }
 func (h *tcpBackendHook[ServerInfo]) OnSendMsg(ts *backend.TcpService[ServerInfo], msgId string, len_ int) {
 	h.init()

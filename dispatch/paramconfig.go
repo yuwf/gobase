@@ -3,24 +3,16 @@ package dispatch
 // https://github.com/yuwf/gobase
 
 import (
-	"github.com/yuwf/gobase/alert"
 	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/afex/hystrix-go/hystrix"
 )
 
-func init() {
-	alert.AddErrorLogPrefix("MsgDispatch Reg")
-	alert.AddErrorLogPrefix("MsgDispatch TimeOut")
-	alert.AddErrorLogPrefix("MsgDispatch Hystrix")
-}
-
 // 参数配置
 type ParamConfig struct {
-	// 日志级别和zerolog.Level一致
-	LogLevelMsg   int            `json:"loglevelmsg,omitempty"`   // msg消息默认的消息级别，不配置就是debug级别
-	LogLevelByMsg map[string]int `json:"loglevelbymsg,omitempty"` // 根据消息ID区分的消息日志级别，消息ID：日志级别，不配置就使用LogLevelMsg级别
-	RegFuncShort  bool           `json:"logfuncshort,omitempty"`  // 函数名使用简短一些，否则就是类似dispatch.(*Server).onTestHeatBeatResp
+	MsgLogLevel  utils.MsgLogLevel `json:"msgloglevel,omitempty"`  // 消息日志级别
+	RegFuncShort bool              `json:"logfuncshort,omitempty"` // 函数名使用简短一些，否则就是类似dispatch.(*Server).onTestHeatBeatResp
 
 	TimeOutCheck int `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
 	// Timeout: 执行 command 的超时时间 单位为毫秒
@@ -34,7 +26,6 @@ type ParamConfig struct {
 var ParamConf loader.JsonLoader[ParamConfig]
 
 func (c *ParamConfig) Create() {
-	c.LogLevelByMsg = map[string]int{}
 }
 
 func (c *ParamConfig) Normalize() {
@@ -42,14 +33,6 @@ func (c *ParamConfig) Normalize() {
 		c.HystrixMsg[msgid] = config
 		hystrix.ConfigureCommand("msg_"+msgid, *config) // 加个msg_前缀，区别其他模块使用
 	}
-}
-
-func (c *ParamConfig) MsgLogLevel(msgid string) int {
-	loglevel, ok := c.LogLevelByMsg[msgid]
-	if !ok {
-		return c.LogLevelMsg
-	}
-	return loglevel
 }
 
 func (c *ParamConfig) IsHystrixMsg(msgid string) (string, bool) {

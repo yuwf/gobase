@@ -118,14 +118,14 @@ func (l *JsonLoader[T]) LoadFile(path string) error {
 	// 读取文件
 	src, err := os.ReadFile(path)
 	if err != nil {
-		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoader LoadFile ReadFile error")
+		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf((*T)(nil)).Elem().String()).Msg("JsonLoader LoadFile ReadFile error")
 		return err
 	}
 
 	// 检查
 	if src == nil {
 		err := errors.New("src is nil")
-		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoader LoadFile error")
+		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf((*T)(nil)).Elem().String()).Msg("JsonLoader LoadFile error")
 		return err
 	}
 	if reflect.DeepEqual(l.GetSrc(), src) {
@@ -173,12 +173,12 @@ func (l *JsonLoader[T]) SaveFile(path string) error {
 	src := l.GetSrc()
 	if src == nil {
 		err := errors.New("scr is nil")
-		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoader SaveFile error")
+		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf((*T)(nil)).Elem().String()).Msg("JsonLoader SaveFile error")
 		return err
 	}
 	err := os.WriteFile(path, src, os.FileMode(os.O_WRONLY|os.O_CREATE))
 	if err != nil {
-		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoader SaveFile error")
+		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf((*T)(nil)).Elem().String()).Msg("JsonLoader SaveFile error")
 	}
 	return err
 }

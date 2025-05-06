@@ -134,7 +134,7 @@ func (l *JsonLoaders[T]) Load(src map[string][]byte, path string) error {
 	for k := range src {
 		keys = append(keys, k)
 	}
-	log.Info().Str("path", path).Strs("keys", keys).Str("T", reflect.TypeOf(new(T)).Elem().String()).Msg("JsonLoaders Success")
+	log.Info().Str("path", path).Strs("keys", keys).Str("T", reflect.TypeOf((*T)(nil)).Elem().String()).Msg("JsonLoaders Success")
 
 	old := l.Get()
 	// 替换值

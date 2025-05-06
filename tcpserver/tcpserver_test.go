@@ -12,7 +12,6 @@ import (
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
 	"github.com/yuwf/gobase/nacos"
-	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
@@ -77,7 +76,7 @@ func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[
 		tc.SendText(ctx, m.RecvData) // 原路返回
 		return
 	}
-	if h.Dispatch(ctx, m, tc) {
+	if handle, _ := h.Dispatch(ctx, m, tc); handle {
 		return
 	}
 	log.Error().Str("Name", tc.ConnName()).Interface("Msg", msg).Msg("msg not handle")
@@ -186,37 +185,6 @@ func BenchmarkTCPServerNacos(b *testing.B) {
 			})
 		}
 	}
-
-	utils.ExitWait()
-}
-
-func BenchmarkTCPServerRegRedis(b *testing.B) {
-	server, _ := NewTCPServer[int, ClientInfo](1237, NewHandler())
-	server.Start(false)
-	utils.RegExit(func(s os.Signal) {
-		server.Stop() // 退出服务监听
-	})
-
-	// 服务器注册下
-	var cfg = &redis.Config{
-		Addr: "127.0.0.1:6379",
-	}
-	r, err := redis.NewRedis(cfg)
-	if err != nil {
-		return
-	}
-	var info = &redis.RegistryInfo{
-		RegistryName:   "name",
-		RegistryID:     "id",
-		RegistryAddr:   "127.0.0.1",
-		RegistryPort:   1237,
-		RegistryScheme: "tcp",
-	}
-	reg := r.CreateRegister("test-service", info)
-	reg.Reg()
-	utils.RegExit(func(s os.Signal) {
-		reg.DeReg()
-	})
 
 	utils.ExitWait()
 }

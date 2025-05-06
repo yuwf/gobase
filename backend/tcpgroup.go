@@ -3,7 +3,6 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,12 +48,12 @@ func (g *TcpGroup[ServiceInfo]) GetService(serviceId string) *TcpService[Service
 	return nil
 }
 
-func (g *TcpGroup[ServiceInfo]) GetServices() map[string]*TcpService[ServiceInfo] {
+func (g *TcpGroup[ServiceInfo]) GetServices() []*TcpService[ServiceInfo] {
 	g.RLock()
 	defer g.RUnlock()
-	ss := map[string]*TcpService[ServiceInfo]{}
-	for serviceId, service := range g.services {
-		ss[serviceId] = service
+	ss := make([]*TcpService[ServiceInfo], 0, len(g.services))
+	for _, service := range g.services {
+		ss = append(ss, service)
 	}
 	return ss
 }
@@ -96,21 +95,6 @@ func (g *TcpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *TcpSer
 	return nil
 }
 
-// 广播消息
-func (g *TcpGroup[ServiceInfo]) Broad(ctx context.Context, buf []byte) {
-	ss := g.GetServices()
-	for _, service := range ss {
-		service.Send(ctx, buf)
-	}
-}
-
-func (g *TcpGroup[ServiceInfo]) BroadMsg(ctx context.Context, msg utils.SendMsger) {
-	ss := g.GetServices()
-	for _, service := range ss {
-		service.SendMsg(ctx, msg)
-	}
-}
-
 // 更新组，返回剩余个数
 func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 	var remove []*TcpService[ServiceInfo]
@@ -125,10 +109,10 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 				Str("ServiceId", service.conf.ServiceId).
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
-				Str("RoutingTag", service.conf.RoutingTag)
+				Strs("RoutingTag", service.conf.RoutingTag)
 
 			// 从哈希环中移除
-			g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
+			g.removeHashring(service.conf.ServiceId)
 			if TcpParamConf.Get().Immediately {
 				l.Msg("TcpBackend Update Lost And Del")
 				delete(g.services, serviceId) // 先删
@@ -150,11 +134,11 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 					Str("ServiceId", service.conf.ServiceId).
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
-					Str("RoutingTag", service.conf.RoutingTag).
+					Strs("RoutingTag", service.conf.RoutingTag).
 					Msg("TcpBackend Update Change")
 
 				// 从哈希环中移除
-				g.removeHashring(service.conf.ServiceId, service.conf.RoutingTag)
+				g.removeHashring(service.conf.ServiceId)
 				service.close() // 先关闭
 				// 创建
 				var err error
@@ -168,7 +152,7 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 					Str("ServiceId", service.conf.ServiceId).
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
-					Str("RoutingTag", service.conf.RoutingTag).
+					Strs("RoutingTag", service.conf.RoutingTag).
 					Msg("TcpBackend Update Recover")
 				// 添加到哈希环中
 				if service.HealthState() == 0 {
@@ -181,7 +165,7 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 				Str("ServiceId", conf.ServiceId).
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).
-				Str("RoutingTag", conf.RoutingTag).
+				Strs("RoutingTag", conf.RoutingTag).
 				Msg("TcpBackend Update Add")
 			service, err := NewTcpService(conf, g)
 			if err != nil {
@@ -195,45 +179,51 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) int {
 	g.Unlock()
 
 	// 回调
-	for _, service := range remove {
-		for _, h := range g.tb.hook {
-			h.OnRemove(service)
+	func() {
+		defer utils.HandlePanic()
+		for _, service := range remove {
+			for _, h := range g.tb.hook {
+				h.OnRemove(service)
+			}
 		}
-	}
-	for _, service := range add {
-		for _, h := range g.tb.hook {
-			h.OnAdd(service)
+		for _, service := range add {
+			for _, h := range g.tb.hook {
+				h.OnAdd(service)
+			}
 		}
-	}
+	}()
 	return len
 }
 
 // 内部使用
 // 添加到哈希环
-func (g *TcpGroup[ServiceInfo]) addHashring(serviceId, routingTag string) {
+func (g *TcpGroup[ServiceInfo]) addHashring(serviceId string, routingTag []string) {
 	g.hashring.Add(serviceId)
 	if len(routingTag) > 0 {
-		hashring, ok := g.tagHashring.Load(routingTag)
-		if ok {
-			hashring.(*consistent.Consistent).Add(serviceId)
-		} else {
-			hashring := consistent.New()
-			hashring.Add(serviceId)
-			g.tagHashring.Store(routingTag, hashring)
+		for _, tag := range routingTag {
+			hashring, ok := g.tagHashring.Load(tag)
+			if ok {
+				hashring.(*consistent.Consistent).Add(serviceId)
+			} else {
+				hashring := consistent.New()
+				hashring.Add(serviceId)
+				g.tagHashring.Store(tag, hashring)
+			}
 		}
 	}
 }
 
 // 从哈希环中移除
-func (g *TcpGroup[ServiceInfo]) removeHashring(serviceId, routingTag string) {
+func (g *TcpGroup[ServiceInfo]) removeHashring(serviceId string) {
 	g.hashring.Remove(serviceId)
-	hashring, ok := g.tagHashring.Load(routingTag)
-	if ok {
-		hashring.(*consistent.Consistent).Remove(serviceId)
-		if len(hashring.(*consistent.Consistent).Members()) == 0 {
-			g.tagHashring.Delete(routingTag)
+	g.tagHashring.Range(func(key, value any) bool {
+		value.(*consistent.Consistent).Remove(serviceId)
+
+		if len(value.(*consistent.Consistent).Members()) == 0 {
+			g.tagHashring.Delete(key)
 		}
-	}
+		return true
+	})
 }
 
 // 删除Service
@@ -245,7 +235,7 @@ func (g *TcpGroup[ServiceInfo]) removeSevice(serviceId string) {
 			Str("ServiceId", service.conf.ServiceId).
 			Str("RegistryAddr", service.conf.ServiceAddr).
 			Int("RegistryPort", service.conf.ServicePort).
-			Str("RoutingTag", service.conf.RoutingTag).
+			Strs("RoutingTag", service.conf.RoutingTag).
 			Msg("TcpBackend Del")
 		delete(g.services, serviceId)
 	}
@@ -253,9 +243,12 @@ func (g *TcpGroup[ServiceInfo]) removeSevice(serviceId string) {
 	g.Unlock()
 
 	// 回调
-	for _, h := range g.tb.hook {
-		h.OnRemove(service)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range g.tb.hook {
+			h.OnRemove(service)
+		}
+	}()
 
 	// 如果空了
 	if len == 0 {

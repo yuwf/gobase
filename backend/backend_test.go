@@ -12,7 +12,6 @@ import (
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
 	"github.com/yuwf/gobase/nacos"
-	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
@@ -76,6 +75,7 @@ func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig
 				ServiceId:   serviceId,
 				ServiceAddr: conf.RegistryAddr,
 				ServicePort: conf.RegistryPort,
+				Metadata:    conf.RegistryMeta,
 			}
 			tcp = append(tcp, c)
 		}
@@ -110,25 +110,7 @@ func (h *TcpHandler) NacosFilter(confs []*nacos.RegistryInfo) []*ServiceConfig {
 				ServiceId:   serviceId,
 				ServiceAddr: conf.Ip,
 				ServicePort: conf.Port,
-			}
-			tcp = append(tcp, c)
-		}
-	}
-	return tcp
-}
-
-func (h *TcpHandler) RedisFilter(confs []*redis.RegistryInfo) []*ServiceConfig {
-	// 过滤出tcp的配置
-	// 【目前根据业务 ServiceId是存储在meta中nodeId】
-	// 【目前根据业务 目前ServiceName是存储在meta中的serviceName】
-	tcp := []*ServiceConfig{}
-	for _, conf := range confs {
-		if conf.RegistryScheme == "tcp" {
-			c := &ServiceConfig{
-				ServiceName: conf.RegistryName,
-				ServiceId:   conf.RegistryID,
-				ServiceAddr: conf.RegistryAddr,
-				ServicePort: conf.RegistryPort,
+				Metadata:    conf.Metadata,
 			}
 			tcp = append(tcp, c)
 		}
@@ -148,6 +130,7 @@ func (h *TcpHandler) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConf
 				ServiceId:   conf.RegistryID,
 				ServiceAddr: conf.RegistryAddr,
 				ServicePort: conf.RegistryPort,
+				// Metadata:    conf.Metadata, redis没有Metadata
 			}
 			tcp = append(tcp, c)
 		}
@@ -157,6 +140,7 @@ func (h *TcpHandler) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConf
 
 func (h *TcpHandler) OnConnected(ctx context.Context, ts *TcpService[TcpServiceInfo]) {
 	// 连接成功 发送心跳
+	ts.OnLogin() // 直接标记登录成功
 }
 
 func (h *TcpHandler) OnDisConnect(ctx context.Context, ts *TcpService[TcpServiceInfo]) {
@@ -176,7 +160,7 @@ func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[
 
 func (h *TcpHandler) OnMsg(ctx context.Context, msg utils.RecvMsger, ts *TcpService[TcpServiceInfo]) {
 	m, _ := msg.(*utils.TestMsg)
-	if h.Dispatch(ctx, m, ts) {
+	if handle, _ := h.Dispatch(ctx, m, ts); handle {
 		return
 	}
 	log.Error().Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("msg not handle")
@@ -226,19 +210,6 @@ func BenchmarkTCPBackendNacos(b *testing.B) {
 	}
 
 	_, err = NewTcpBackendWithNacos[TcpServiceInfo](nacosCli, "serviceN", "groupN", []string{}, NewTcpHandler())
-	if err != nil {
-		return
-	}
-
-	utils.ExitWait()
-}
-
-func BenchmarkTCPBackendRedis(b *testing.B) {
-	//BackendParamConf.Get().Immediately = true
-	var cfg = &redis.Config{
-		Addr: "127.0.0.1:6379",
-	}
-	_, err := NewTcpBackendWithRedis[TcpServiceInfo](cfg, "test-service", nil, NewTcpHandler())
 	if err != nil {
 		return
 	}

@@ -18,6 +18,8 @@ import (
 var (
 	defaultAntsPool *ants.Pool
 	antWG           sync.WaitGroup
+
+	sequenceGroupPool sync.Pool // 分组任务队列使用 *Sequence 列表
 )
 
 func init() {
@@ -34,6 +36,9 @@ func init() {
 			err := fmt.Errorf("%v: %s", r, buf[:l])
 			log.Error().Err(err).Msg("Panic")
 		}))
+	sequenceGroupPool.New = func() any {
+		return &Sequence{}
+	}
 }
 
 // 暴露出原始对象
@@ -42,11 +47,14 @@ func DefaultAntsPool() *ants.Pool {
 }
 
 // 提交一个任务
-func Submit(task func()) error {
-	return defaultAntsPool.Submit(task)
+func Submit(task func()) {
+	if task == nil {
+		return
+	}
+	defaultAntsPool.Submit(task)
 }
 
-// 提交一个可以可以等待的任务
+// 提交一个可以等待的任务
 func SubmitProcess(task func()) error {
 	antWG.Add(1)
 	return defaultAntsPool.Submit(func() {
@@ -80,6 +88,10 @@ func WaitProcess(timeout time.Duration) {
 type Sequence struct {
 	mutex sync.Mutex
 	tasks list.List
+	run   bool
+	// 正在执行的的分组任务
+	group   *GroupSequence
+	groupId string // 当前执行的groupId
 }
 
 func (s *Sequence) Submit(task func()) {
@@ -92,30 +104,80 @@ func (s *Sequence) Submit(task func()) {
 	// 添加任务
 	s.tasks.PushBack(task)
 
-	// 当前只有一个刚加入的任务，开启协成池调用handle
-	if s.tasks.Len() == 1 {
+	// 开启协成池调用handle
+	if !s.run {
+		s.run = true
 		defaultAntsPool.Submit(s.handle)
 	}
+}
+
+func (s *Sequence) submitGroup(group *GroupSequence, task func()) bool {
+	s.mutex.Lock()         // 加锁
+	defer s.mutex.Unlock() // 退出时解锁
+
+	if s.group != group { // 可能最后一个任务恰好执行完，回收了
+		return false
+	}
+
+	// 添加任务
+	s.tasks.PushBack(task)
+
+	// 开启协成池调用handle
+	if !s.run {
+		s.run = true
+		defaultAntsPool.Submit(s.handle)
+	}
+	return true
+}
+
+func (s *Sequence) Clear() {
+	s.mutex.Lock()         // 加锁
+	defer s.mutex.Unlock() // 退出时解锁
+
+	// 删除还未执行的任务
+	for s.tasks.Len() > 0 {
+		s.tasks.Remove(s.tasks.Back())
+	}
+}
+
+func (s *Sequence) Len() int {
+	s.mutex.Lock()         // 加锁
+	defer s.mutex.Unlock() // 退出时解锁
+	return s.tasks.Len()
 }
 
 func (s *Sequence) handle() {
 	//取出一个任务
 	s.mutex.Lock() // 加锁
 	if s.tasks.Len() == 0 {
+		// 这里的逻辑理论只有触发Clear函数才会走到
+		s.run = false
+		if s.group != nil {
+			s.group.seqs.Delete(s.groupId) // 先删除
+			s.group = nil                  // 置空
+			s.groupId = ""
+			sequenceGroupPool.Put(s)
+		}
 		s.mutex.Unlock() // 解锁
 		return           // 退出
 	}
-	task := s.tasks.Front().Value.(func())
-	s.mutex.Unlock() // 解锁
+	task := s.tasks.Remove(s.tasks.Front()).(func()) // 移除当前完成的任务
+	s.mutex.Unlock()                                 // 解锁
 
 	// 任务执行完之后调用，防止任务有崩溃，放到defer中调用
 	defer func() {
 		s.mutex.Lock() // 加锁
-		// 移除当前完成的任务
-		s.tasks.Remove(s.tasks.Front())
 		// 如果任务列表不为空继续开启下一个handle
 		if s.tasks.Len() > 0 {
 			defaultAntsPool.Submit(s.handle)
+		} else {
+			s.run = false
+			if s.group != nil {
+				s.group.seqs.Delete(s.groupId) // 先删除
+				s.group = nil                  // 置空
+				s.groupId = ""
+				sequenceGroupPool.Put(s)
+			}
 		}
 		s.mutex.Unlock() // 解锁
 	}()
@@ -123,5 +185,39 @@ func (s *Sequence) handle() {
 	// 执行task
 	if task != nil {
 		task()
+	}
+}
+
+type GroupSequence struct {
+	seqs sync.Map // groupId:*Sequence
+}
+
+// 提交一个顺序执行的任务，每个组顺序执行
+func (g *GroupSequence) Submit(groupId string, task func()) {
+	if task == nil {
+		return
+	}
+	gseq, ok := g.seqs.Load(groupId)
+	if ok {
+		seq := gseq.(*Sequence)
+		if seq.submitGroup(g, task) {
+			return
+		}
+	}
+
+	for {
+		seq := sequenceGroupPool.Get().(*Sequence)
+		seq.group = g
+		seq.groupId = groupId
+		gseq, ok := g.seqs.LoadOrStore(groupId, seq)
+		if ok {
+			seq.group = nil
+			seq.groupId = ""
+			sequenceGroupPool.Put(seq) // 有别的协程设置了，此处回收
+			seq = gseq.(*Sequence)
+		}
+		if seq.submitGroup(g, task) {
+			return
+		} // 极端情况就是有一个相同的group任务执行完了，立刻结束了， 而gseq还记录是这个已删除的
 	}
 }

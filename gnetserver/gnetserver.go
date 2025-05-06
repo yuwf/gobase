@@ -124,9 +124,12 @@ func (s *GNetServer[ClientId, ClientInfo]) AddClient(id ClientId, gc *GNetClient
 	s.clientMap.Store(id, client)
 
 	// 回调回调hook
-	for _, h := range s.hook {
-		h.OnAddClient(gc)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range s.hook {
+			h.OnAddClient(gc)
+		}
+	}()
 }
 
 func (s *GNetServer[ClientId, ClientInfo]) GetClient(id ClientId) *GNetClient[ClientInfo] {
@@ -144,9 +147,12 @@ func (s *GNetServer[ClientId, ClientInfo]) RemoveClient(id ClientId) *GNetClient
 		gc := client.(*gClient[ClientId, ClientInfo]).gc
 
 		// 回调hook
-		for _, h := range s.hook {
-			h.OnRemoveClient(gc)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnRemoveClient(gc)
+			}
+		}()
 		return gc
 	}
 	return nil
@@ -164,9 +170,12 @@ func (s *GNetServer[ClientId, ClientInfo]) CloseClient(id ClientId) {
 		gc.Close(nil) // 会回调GNetServer的OnClosed 所以上面先删除对象
 
 		// 回调
-		for _, h := range s.hook {
-			h.OnDisConnect(gc, true, nil)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnDisConnect(gc, true, nil)
+			}
+		}()
 	}
 }
 
@@ -222,6 +231,17 @@ func (s *GNetServer[ClientId, ClientInfo]) ClientCount() int {
 	return count
 }
 
+// 队列中还未处理的消息
+func (s *GNetServer[ClientId, ClientInfo]) RecvSeqCount() int {
+	l := 0
+	s.connMap.Range(func(key, value interface{}) bool {
+		gc := value.(*gClient[ClientId, ClientInfo]).gc
+		l += gc.RecvSeqCount()
+		return true
+	})
+	return l
+}
+
 // 注册hook
 func (s *GNetServer[ClientId, ClientInfo]) RegHook(h GNetHook[ClientInfo]) {
 	s.hook = append(s.hook, h)
@@ -233,9 +253,12 @@ func (s *GNetServer[ClientId, ClientInfo]) Encode(c gnet.Conn, buf []byte) ([]by
 	client, ok := s.connMap.Load(c)
 	if ok {
 		gc := client.(*gClient[ClientId, ClientInfo]).gc
-		for _, h := range s.hook {
-			h.OnSend(gc, len(buf))
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnSend(gc, len(buf))
+			}
+		}()
 	}
 	return buf, nil
 }
@@ -251,9 +274,12 @@ func (s *GNetServer[ClientId, ClientInfo]) Decode(c gnet.Conn) ([]byte, error) {
 	client, ok := s.connMap.Load(c)
 	if ok {
 		gc := client.(*gClient[ClientId, ClientInfo]).gc
-		for _, h := range s.hook {
-			h.OnRecv(gc, len(buf))
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnRecv(gc, len(buf))
+			}
+		}()
 	}
 	return buf, nil
 }
@@ -299,9 +325,12 @@ func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, ac
 		})
 	}
 	// 回调
-	for _, h := range s.hook {
-		h.OnConnected(gc)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range s.hook {
+			h.OnConnected(gc)
+		}
+	}()
 	return
 }
 
@@ -326,9 +355,12 @@ func (s *GNetServer[ClientId, ClientInfo]) OnClosed(c gnet.Conn, err error) (act
 		}
 
 		// 回调
-		for _, h := range s.hook {
-			h.OnDisConnect(gc, delClient, err)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnDisConnect(gc, delClient, err)
+			}
+		}()
 	}
 	return
 }
@@ -360,9 +392,12 @@ func (s *GNetServer[ClientId, ClientInfo]) React(packet []byte, c gnet.Conn) (ou
 				log.Info().Str("RemoveAddr", gc.removeAddr.String()+"("+gc.conn.RemoteAddr().String()+")").Interface("Header", gc.wsh.Header).Msg("HandShake")
 
 				// 回调
-				for _, h := range s.hook {
-					h.OnWSHandShake(gc)
-				}
+				func() {
+					defer utils.HandlePanic()
+					for _, h := range s.hook {
+						h.OnWSHandShake(gc)
+					}
+				}()
 			}
 			c.ShiftN(len)
 		} else {
@@ -392,5 +427,12 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 			return true
 		})
 	}
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range s.hook {
+			h.OnTick()
+		}
+	}()
 	return
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/yuwf/gobase/consul"
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/nacos"
-	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/utils"
 )
 
@@ -19,9 +18,6 @@ type TcpEvent[ServiceInfo any] interface {
 
 	// consul服务器配置过滤器，返回符合条件的服务器
 	NacosFilter(confs []*nacos.RegistryInfo) []*ServiceConfig
-
-	// redis服务器配置过滤器，返回符合条件的服务器
-	RedisFilter(confs []*redis.RegistryInfo) []*ServiceConfig
 
 	// goredis服务器配置过滤器，返回符合条件的服务器
 	GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConfig
@@ -66,13 +62,11 @@ func (*TcpEventHandler[ServiceInfo]) ConsulFilter(confs []*consul.RegistryInfo) 
 func (*TcpEventHandler[ServiceInfo]) NacosFilter(confs []*nacos.RegistryInfo) []*ServiceConfig {
 	return []*ServiceConfig{}
 }
-func (*TcpEventHandler[ServiceInfo]) RedisFilter(confs []*redis.RegistryInfo) []*ServiceConfig {
-	return []*ServiceConfig{}
-}
 func (*TcpEventHandler[ServiceInfo]) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConfig {
 	return []*ServiceConfig{}
 }
 func (*TcpEventHandler[ServiceInfo]) OnConnected(ctx context.Context, ts *TcpService[ServiceInfo]) {
+	ts.OnLogin() // 直接标记登录成功
 }
 func (*TcpEventHandler[ServiceInfo]) OnDisConnect(ctx context.Context, ts *TcpService[ServiceInfo]) {
 }

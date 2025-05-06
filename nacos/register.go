@@ -42,6 +42,9 @@ func (c *Client) CreateRegister(conf *RegistryConfig) (*Register, error) {
 		conf:  *conf, // 配置拷贝一份 防止被外部修改
 		state: 0,
 	}
+	register.conf.ServiceName = c.SanitizeString(conf.ServiceName)
+	register.conf.ClusterName = c.SanitizeString(conf.ClusterName)
+
 	log.Info().Str("GroupName", conf.GroupName).Str("ServiceName", conf.ServiceName).Msg("Nacos CreateRegister success")
 	return register, nil
 }

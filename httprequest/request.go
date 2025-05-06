@@ -325,9 +325,7 @@ func (h *HttpRequest) done(ctx context.Context) {
 
 	// 日志
 	if h.URL != nil {
-		if ctx != nil && ctx.Value(CtxKey_nolog) != nil {
-			// 不输出日志
-		} else {
+		if !utils.CtxHasNolog(ctx) && zerolog.DebugLevel >= log.Logger.GetLevel() {
 			if h.Err != nil {
 				h.log(ctx, int(zerolog.ErrorLevel), h.Elapsed, "HttpRequest Err")
 			} else {

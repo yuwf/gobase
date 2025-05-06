@@ -14,20 +14,15 @@ const CtxKey_Text = utils.CtxKey("text") // 存在表示数据为text格式，�
 
 // 参数配置
 type ParamConfig struct {
-	IgnoreIp []string `json:"ignoreip,omitempty"` // 建立连接和失去连接时，log输出忽略的ip， 支持?*通配符 不区分大小写
-	// SendMsg接口中，输出日志等级会按照下面的配置来执行，否则按照Debug输出
-	// 日志级别和zerolog.Level一致
-	LogLevelMsg   int            `json:"loglevelmsg,omitempty"`   // msg消息默认的消息级别，不配置就是debug级别
-	LogLevelByMsg map[string]int `json:"loglevelbymsg,omitempty"` // 根据消息ID区分的消息日志级别，消息ID：日志级别，不配置就使用LogLevelMsg级别
-
-	MsgSeq   bool                `json:"msgseq,omitempty"`   // 消息顺序执行
-	WSHeader map[string][]string `json:"wsheader,omitempty"` // websocket握手时 回复的头
+	IgnoreIp    []string            `json:"ignoreip,omitempty"`    // 建立连接和失去连接时，log输出忽略的ip， 支持?*通配符 不区分大小写
+	MsgLogLevel utils.MsgLogLevel   `json:"msgloglevel,omitempty"` // 消息日志级别
+	MsgSeq      bool                `json:"msgseq,omitempty"`      // 消息顺序执行
+	WSHeader    map[string][]string `json:"wsheader,omitempty"`    // websocket握手时 回复的头
 }
 
 var ParamConf loader.JsonLoader[ParamConfig]
 
 func (c *ParamConfig) Create() {
-	c.LogLevelByMsg = map[string]int{}
 	c.MsgSeq = true // 默认为按顺序执行
 }
 
@@ -45,12 +40,4 @@ func (c *ParamConfig) IsIgnoreIp(ip string) bool {
 		}
 	}
 	return false
-}
-
-func (c *ParamConfig) MsgLogLevel(msgid string) int {
-	loglevel, ok := c.LogLevelByMsg[msgid]
-	if !ok {
-		return c.LogLevelMsg
-	}
-	return loglevel
 }

@@ -1,3 +1,8 @@
+## mod中引入方式
+- 代码放到工程mod所在目录的上一级目录
+- require gobase v0.0.0-00000000000000-000000000000
+- replace gobase => ../gobase
+
 ## 目录结构
 ---
 ### alert

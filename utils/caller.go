@@ -6,48 +6,76 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type CallerDesc struct {
 	filename string
 	funname  string
 	line     int
+
+	name string // 文件名:函数名
+	pos  string // 文件名:函数名:行号
+	loc  string // 函数名:行号
 }
 
-//返回 文件名:函数名:行号  用作日志
+// 返回 文件名:函数名:行号
 func (c *CallerDesc) Pos() string {
-	return c.filename + ":" + c.funname + ":" + strconv.Itoa(c.line)
+	return c.pos
 }
 
-//返回 文件名:函数名 用作指标统计
+// 返回 文件名:函数名
 func (c *CallerDesc) Name() string {
-	return c.filename + ":" + c.funname
+	return c.name
 }
+
+// 返回 函数名:行号
+func (c *CallerDesc) Loc() string {
+	return c.loc
+}
+
+var callerCache sync.Map // key: file, value: CallerDesc
 
 func GetCallerDesc(skip int) *CallerDesc {
-	caller := &CallerDesc{}
 	pc, file, line, ok := runtime.Caller(skip + 1)
 	if !ok {
-		return caller
-	}
-	// 文件名只取到go文件的目录层
-	slice := strings.Split(file, "/")
-	if len(slice) >= 2 {
-		caller.filename = slice[len(slice)-2] + "/" + slice[len(slice)-1]
-	} else if len(slice) >= 1 {
-		caller.filename = slice[len(slice)-1]
+		return &CallerDesc{}
 	}
 
+	key := file + strconv.Itoa(line)
+
+	if val, ok := callerCache.Load(key); ok {
+		desc := val.(*CallerDesc)
+		return desc
+	}
+
+	// 解析文件路径
+	slice := strings.Split(file, "/")
+	filename := file
+	if len(slice) >= 2 {
+		filename = slice[len(slice)-2] + "/" + slice[len(slice)-1]
+	}
+
+	// 解析函数名
 	fun := runtime.FuncForPC(pc)
+	funname := "unknown"
 	if fun != nil {
-		caller.funname = fun.Name()
-		// 只取函数
-		slice := strings.Split(caller.funname, ".")
+		slice := strings.Split(fun.Name(), ".")
 		if len(slice) >= 1 {
-			caller.funname = slice[len(slice)-1]
+			funname = slice[len(slice)-1]
 		}
 	}
 
-	caller.line = line
-	return caller
+	// 存入缓存
+	desc := &CallerDesc{
+		filename: filename,
+		funname:  funname,
+		line:     line,
+		name:     filename + ":" + funname,
+		pos:      filename + ":" + funname + ":" + strconv.Itoa(line),
+		loc:      funname + ":" + strconv.Itoa(line),
+	}
+	callerCache.Store(key, desc)
+
+	return desc
 }

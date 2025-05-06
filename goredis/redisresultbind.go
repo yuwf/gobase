@@ -50,6 +50,9 @@ type RedisResultBind interface {
 	// 传入的参数为Map的地址 nil的Map也可以
 	BindMap(v interface{}) error
 
+	// BindType reflect.Value Value必须能调用CanSet
+	BindValue(value reflect.Value) error
+
 	// BindType []reflect.Value Value必须能调用CanSet
 	BindValues(values []reflect.Value) error
 

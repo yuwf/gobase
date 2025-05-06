@@ -89,8 +89,16 @@ func (gc *GNetClient[ClientInfo]) Info() *ClientInfo {
 	return gc.info
 }
 
+func (gc *GNetClient[ClientInfo]) InfoI() interface{} {
+	return gc.info
+}
+
 func (gc *GNetClient[ClientInfo]) ConnName() string {
 	return gc.connName()
+}
+
+func (gc *GNetClient[ClientInfo]) RecvSeqCount() int {
+	return gc.seq.Len()
 }
 
 func (gc *GNetClient[ClientInfo]) LastRecvTime() time.Time {
@@ -118,11 +126,15 @@ func (gc *GNetClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 		return err
 	}
 	atomic.StoreInt64(&gc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range gc.hook {
-		h.OnSendMsg(gc, "_send_", len(data))
-	}
+	// 日志
 	utils.LogCtx(log.Debug(), ctx).Str("Name", gc.ConnName()).Int("Size", len(data)).Msg("Send")
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range gc.hook {
+			h.OnSendMsg(gc, "_send_", len(data))
+		}
+	}()
 	return nil
 }
 
@@ -149,15 +161,18 @@ func (gc *GNetClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsg
 		return err
 	}
 	atomic.StoreInt64(&gc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range gc.hook {
-		h.OnSendMsg(gc, msg.MsgID(), len(data))
-	}
 	// 日志
-	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+	logLevel := ParamConf.Get().MsgLogLevel.SendLevel(msg)
 	if logLevel >= int(log.Logger.GetLevel()) {
 		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("SendMsg")
 	}
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range gc.hook {
+			h.OnSendMsg(gc, msg.MsgID(), len(data))
+		}
+	}()
 	return nil
 }
 
@@ -178,11 +193,15 @@ func (gc *GNetClient[ClientInfo]) SendText(ctx context.Context, data []byte) err
 		return err
 	}
 	atomic.StoreInt64(&gc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range gc.hook {
-		h.OnSendMsg(gc, "_sendtext_", len(data))
-	}
+	// 日志
 	utils.LogCtx(log.Debug(), ctx).Str("Name", gc.ConnName()).Int("Size", len(data)).Msg("SendText")
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range gc.hook {
+			h.OnSendMsg(gc, "_sendtext_", len(data))
+		}
+	}()
 	return nil
 }
 
@@ -221,15 +240,18 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 		if msg != nil {
 			ctx := context.WithValue(ctx, utils.CtxKey_traceId, utils.GenTraceID())
 			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
-			// 回调
-			for _, h := range gc.hook {
-				h.OnRecvMsg(gc, msg.MsgID(), l)
-			}
 			// 日志
-			logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+			logLevel := ParamConf.Get().MsgLogLevel.RecvLevel(msg)
 			if logLevel >= int(log.Logger.GetLevel()) {
 				utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("RecvMsg")
 			}
+			// 回调
+			func() {
+				defer utils.HandlePanic()
+				for _, h := range gc.hook {
+					h.OnRecvMsg(gc, msg.MsgID(), l)
+				}
+			}()
 			// 消息放入协程池中
 			if ParamConf.Get().MsgSeq {
 				gc.seq.Submit(func() {

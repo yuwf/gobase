@@ -110,8 +110,16 @@ func (tc *TCPClient[ClientInfo]) Info() *ClientInfo {
 	return tc.info
 }
 
+func (tc *TCPClient[ClientInfo]) InfoI() interface{} {
+	return tc.info
+}
+
 func (tc *TCPClient[ClientInfo]) ConnName() string {
 	return tc.connName()
+}
+
+func (tc *TCPClient[ClientInfo]) RecvSeqCount() int {
+	return tc.seq.Len()
 }
 
 func (tc *TCPClient[ClientInfo]) LastRecvTime() time.Time {
@@ -139,11 +147,15 @@ func (tc *TCPClient[ClientInfo]) Send(ctx context.Context, data []byte) error {
 		return err
 	}
 	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range tc.hook {
-		h.OnSendMsg(tc, "_send_", len(data))
-	}
+	// 日志
 	utils.LogCtx(log.Debug(), ctx).Str("Name", tc.ConnName()).Int("Size", len(data)).Msg("Send")
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range tc.hook {
+			h.OnSendMsg(tc, "_send_", len(data))
+		}
+	}()
 	return nil
 }
 
@@ -170,15 +182,18 @@ func (tc *TCPClient[ClientInfo]) SendMsg(ctx context.Context, msg utils.SendMsge
 		return err
 	}
 	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range tc.hook {
-		h.OnSendMsg(tc, msg.MsgID(), len(data))
-	}
 	// 日志
-	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+	logLevel := ParamConf.Get().MsgLogLevel.SendLevel(msg)
 	if logLevel >= int(log.Logger.GetLevel()) {
 		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", tc.ConnName()).Interface("Msg", msg).Msg("SendMsg")
 	}
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range tc.hook {
+			h.OnSendMsg(tc, msg.MsgID(), len(data))
+		}
+	}()
 	return nil
 }
 
@@ -199,11 +214,15 @@ func (tc *TCPClient[ClientInfo]) SendText(ctx context.Context, data []byte) erro
 		return err
 	}
 	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range tc.hook {
-		h.OnSendMsg(tc, "_sendtext_", len(data))
-	}
+	// 日志
 	utils.LogCtx(log.Debug(), ctx).Str("Name", tc.ConnName()).Int("Size", len(data)).Msg("SendText")
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range tc.hook {
+			h.OnSendMsg(tc, "_sendtext_", len(data))
+		}
+	}()
 	return nil
 }
 
@@ -247,15 +266,18 @@ func (tc *TCPClient[ClientInfo]) SendRPCMsg(ctx context.Context, rpcId interface
 		return nil, err
 	}
 	atomic.StoreInt64(&tc.lastSendTime, time.Now().UnixMicro())
-	// 回调
-	for _, h := range tc.hook {
-		h.OnSendMsg(tc, msg.MsgID(), len(data))
-	}
 	// 日志
-	logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+	logLevel := ParamConf.Get().MsgLogLevel.SendLevel(msg)
 	if logLevel >= int(log.Logger.GetLevel()) {
 		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", tc.ConnName()).Interface("Msg", msg).Msg("SendRPCMsg")
 	}
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range tc.hook {
+			h.OnSendMsg(tc, msg.MsgID(), len(data))
+		}
+	}()
 
 	// 等待rpc回复
 	timer := time.NewTimer(timeout)
@@ -319,7 +341,7 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 			ctx := context.WithValue(ctx, utils.CtxKey_traceId, utils.GenTraceID())
 			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
 			// 日志
-			logLevel := ParamConf.Get().MsgLogLevel(msg.MsgID())
+			logLevel := ParamConf.Get().MsgLogLevel.RecvLevel(msg)
 			if logLevel >= int(log.Logger.GetLevel()) {
 				if rpcId != nil {
 					utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", tc.ConnName()).Interface("Resp", msg).Msg("RecvRPCMsg")
@@ -360,9 +382,12 @@ func (tc *TCPClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, err
 				}
 			}
 			// 回调
-			for _, h := range tc.hook {
-				h.OnRecvMsg(tc, msg.MsgID(), l)
-			}
+			func() {
+				defer utils.HandlePanic()
+				for _, h := range tc.hook {
+					h.OnRecvMsg(tc, msg.MsgID(), l)
+				}
+			}()
 		}
 		if len(buf)-readlen == 0 {
 			break // 不需要继续读取了

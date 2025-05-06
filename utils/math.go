@@ -67,6 +67,32 @@ func Contains[T comparable](collection []T, value T) bool {
 	return false
 }
 
+// 内部数据会移位，会修改原切片数据顺序
+func Delete[T comparable](collection []T, value T) []T {
+	f, b := 0, len(collection)
+	if b == 0 {
+		return collection
+	}
+	for f < b {
+		if collection[f] == value {
+			for i := b - 1; i >= f; i-- {
+				if collection[i] == value {
+					b--
+					continue
+				} else {
+					collection[f], collection[b-1] = collection[b-1], collection[f]
+					f++
+					b--
+					break
+				}
+			}
+		} else {
+			f++
+		}
+	}
+	return collection[:b]
+}
+
 func Clamp[T Ordered](value T, min T, max T) T {
 	if value < min {
 		return min

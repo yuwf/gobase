@@ -10,7 +10,6 @@ import (
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/httprequest"
 	"github.com/yuwf/gobase/mysql"
-	"github.com/yuwf/gobase/redis"
 	"github.com/yuwf/gobase/tcpserver"
 	"github.com/yuwf/gobase/utils"
 )
@@ -19,13 +18,6 @@ import (
 
 // 指标名前缀，需要Reg之前设置
 var MetricsNamePrefix = ""
-
-// Redis统计
-func RegRedis(redis *redis.Redis) {
-	if redis != nil {
-		redis.RegHook(redisHook)
-	}
-}
 
 // GoRedis统计
 func RegGoRedis(redis *goredis.Redis) {
@@ -56,14 +48,14 @@ func RegGinServer(gin *ginserver.GinServer) {
 // GNetServer统计
 func RegGNetServer[ClientId any, ClientInfo any](gnet *gnetserver.GNetServer[ClientId, ClientInfo]) {
 	if gnet != nil {
-		gnet.RegHook(&gNetHook[ClientInfo]{addr: gnet.Address, connCount: gnet})
+		gnet.RegHook(&gNetHook[ClientInfo]{addr: gnet.Address, server: gnet})
 	}
 }
 
 // TCPServer统计
 func RegTCPServer[ClientId any, ClientInfo any](ts *tcpserver.TCPServer[ClientId, ClientInfo]) {
 	if ts != nil {
-		ts.RegHook(&tcpServerHook[ClientInfo]{addr: ts.Address, connCount: ts})
+		ts.RegHook(&tcpServerHook[ClientInfo]{addr: ts.Address, server: ts})
 	}
 }
 

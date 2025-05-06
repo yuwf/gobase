@@ -73,7 +73,7 @@ func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, gc *GNetClient
 		gc.SendText(ctx, m.RecvData) // 原路返回
 		return
 	}
-	if h.Dispatch(ctx, m, gc) {
+	if handle, _ := h.Dispatch(ctx, m, gc); handle {
 		return
 	}
 	log.Error().Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("msg not handle")

@@ -78,4 +78,7 @@ type GNetHook[ClientInfo any] interface {
 	OnSendMsg(gc *GNetClient[ClientInfo], msgId string, len int)
 	// 接受消息数据
 	OnRecvMsg(gc *GNetClient[ClientInfo], msgId string, len int)
+
+	// 定时调用
+	OnTick()
 }

@@ -3,81 +3,60 @@ package mrcache
 // https://github.com/yuwf/gobase
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
+
+	"github.com/yuwf/gobase/goredis"
+	"github.com/yuwf/gobase/utils"
 )
 
 // 表结构数据
 type TableStruct struct {
-	T          reflect.Type
-	TS         reflect.Type  // []*T类型 用来快速创建数据
-	MySQLTags  []interface{} // MySQL字段名 string类型，为了方便外部使用interface，Set或者Modify时外部的子结构中的tag以此为准
-	RedisTags  []interface{} // 存储Reids使用的tag 大小和Tags一致 在组织Redis参数时使用
-	ElemtsType []reflect.Type
+	*utils.StructType
+	RedisTags []string // 存储Reids使用的tag 大小和Tags一致 在组织Redis参数时使用
 }
 
 // 根据tag获取结构信息
-func GetTableStruct[T any]() *TableStruct {
-	dest := new(T)
-	vo := reflect.ValueOf(dest)
-	structtype := vo.Elem().Type() // 第一层是指针，第二层是结构
-	structvalue := vo.Elem()
-	if structtype.Kind() != reflect.Struct {
-		err := errors.New("not struct")
-		panic(err) // 直接panic
+func GetTableStruct[T any]() (*TableStruct, error) {
+	st, err := utils.GetStructTypeByTag[T](DBTag)
+	if err != nil {
+		return nil, err
 	}
 
-	numField := structtype.NumField()
-	mysqlTags := make([]interface{}, 0, numField)
-	redisTags := make([]interface{}, 0, numField)
-	elemtsType := make([]reflect.Type, 0, numField)
-	for i := 0; i < numField; i += 1 {
-		v := structvalue.Field(i)
-		dbTag := structtype.Field(i).Tag.Get(DBTag)
-		if dbTag == "-" || dbTag == "" {
-			continue
-		}
-		sAt := strings.IndexByte(dbTag, ',')
-		if sAt != -1 {
-			dbTag = dbTag[0:sAt]
-		}
-		redisTag := structtype.Field(i).Tag.Get(RedisTag)
+	redisTags := make([]string, 0, len(st.Fields))
+	for i, field := range st.Fields {
+		redisTag := field.Tag.Get(RedisTag)
 		if redisTag != "-" && redisTag != "" {
-			sAt = strings.IndexByte(redisTag, ',')
+			sAt := strings.IndexByte(redisTag, ',')
 			if sAt != -1 {
 				redisTag = redisTag[0:sAt]
 			}
 		} else {
-			redisTag = dbTag
+			redisTag = st.Tags[i]
 		}
-		mysqlTags = append(mysqlTags, dbTag)
+
 		redisTags = append(redisTags, redisTag)
-		elemtsType = append(elemtsType, v.Type())
 	}
 
 	table := &TableStruct{
-		T:          structtype,
-		TS:         reflect.ValueOf([]*T{}).Type(),
-		MySQLTags:  mysqlTags,
+		StructType: st,
 		RedisTags:  redisTags,
-		ElemtsType: elemtsType,
 	}
-	return table
+	return table, nil
 }
 
-func (t *TableStruct) FindIndexByTag(tag interface{}) int {
-	for i, f := range t.MySQLTags {
-		if f == tag {
-			return i
-		}
+func (t *TableStruct) RedisTagsInterface() []interface{} {
+	var tagsI []interface{}
+	for i := 0; i < len(t.RedisTags); i++ {
+		tagsI = append(tagsI, t.RedisTags[i])
 	}
-	return -1
+	return tagsI
 }
 
-func (t *TableStruct) GetRedisTagByTag(tag interface{}) interface{} {
-	for i, f := range t.MySQLTags {
+func (t *TableStruct) GetRedisTagByTag(tag string) interface{} {
+	for i, f := range t.Tags {
 		if f == tag {
 			return t.RedisTags[i]
 		}
@@ -85,90 +64,105 @@ func (t *TableStruct) GetRedisTagByTag(tag interface{}) interface{} {
 	return ""
 }
 
-// 查询条件
-type TableCond struct {
-	field string      // 字段
-	op    string      // 条件和值的连接符
-	value interface{} // 值
-	link  string      // 和下个条件的连接值 不填充默认为AND
+func (t *TableStruct) IsBaseType(tagIdx int) bool {
+	switch t.Fields[tagIdx].Type.Kind() {
+	case reflect.Bool:
+		return true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	case reflect.Slice:
+		if t.Fields[tagIdx].Type.Elem().Kind() == reflect.Uint8 {
+			return true
+		}
+	case reflect.String:
+		return true
+	}
+	return false
 }
 
-type TableConds []*TableCond
+func (t *TableStruct) fmtBaseType(fieldValue interface{}) string {
+	switch val := fieldValue.(type) {
+	case bool:
+		return strconv.FormatBool(val)
+	case int:
+		return strconv.Itoa(val)
+	case int8:
+		return strconv.FormatInt(int64(val), 10)
+	case int16:
+		return strconv.FormatInt(int64(val), 10)
+	case int32:
+		return strconv.FormatInt(int64(val), 10)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case uint:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint64:
+		return strconv.FormatUint(val, 10)
+	case []byte:
+		return utils.BytesToString(val)
+	case string:
+		return val
+	}
+	return fmt.Sprintf("%v", fieldValue) // 最终的，理论上不会到这里
+}
 
-func (cond TableConds) Find(field string) *TableCond {
-	for _, v := range cond {
-		if v.field == field {
-			return v
+func (t *TableStruct) int64Value(fieldValue interface{}) int64 {
+	switch val := fieldValue.(type) {
+	case int:
+		return int64(val)
+	case int8:
+		return int64(val)
+	case int16:
+		return int64(val)
+	case int32:
+		return int64(val)
+	case int64:
+		return val
+	case uint:
+		return int64(val)
+	case uint8:
+		return int64(val)
+	case uint16:
+		return int64(val)
+	case uint32:
+		return int64(val)
+	case uint64:
+		return int64(val)
+	}
+	return 0
+}
+
+// 为了使Map有序和更好的接受返回值，该modify相关的函数设定的结构
+type ModifyData struct {
+	data   map[string]interface{} // 原始值
+	tags   []string               // key field 要修改的tag
+	values []interface{}          // 写入的值   要修改的值
+	rsts   []reflect.Value        // 用于接受返回的值，创建的方式不一，写了多个构造函数
+}
+
+func (m *ModifyData) RstsFrom(src *utils.StructValue) {
+	for i, v := range src.Elemts {
+		if at := utils.IndexOf(m.tags, src.Tags[i]); at != -1 {
+			if !v.IsValid() || !v.CanInterface() {
+				continue
+			}
+			goredis.InterfaceToValue(v.Interface(), m.rsts[at])
 		}
 	}
-	return nil
 }
 
-func NewConds() TableConds {
-	return TableConds{}
-}
-
-func (cond TableConds) Eq(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "=", value: value})
-}
-
-// 为了减少理解的复杂读，在Get Set Modify的条件中不要使用下面的条件
-
-func (cond TableConds) Ne(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "<>", value: value})
-}
-
-func (cond TableConds) Gt(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: ">", value: value})
-}
-
-func (cond TableConds) Ge(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: ">=", value: value})
-}
-
-func (cond TableConds) Lt(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "<", value: value})
-}
-
-func (cond TableConds) Le(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "<=", value: value})
-}
-
-func (cond TableConds) Between(field string, left interface{}, right interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "BEWEEN", value: fmt.Sprintf("%v and %v", left, right)})
-}
-
-func (cond TableConds) NotBetween(field string, left interface{}, right interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "NOT BEWEEN", value: fmt.Sprintf("%v and %v", left, right)})
-}
-
-func (cond TableConds) Like(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "LIKE", value: value})
-}
-
-func (cond TableConds) NotLike(field string, value interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "NOT LIKE", value: value})
-}
-
-func (cond TableConds) IsNull(field string) TableConds {
-	return append(cond, &TableCond{field: field, op: "IS", value: "NULL"})
-}
-
-func (cond TableConds) IsNotNull(field string) TableConds {
-	return append(cond, &TableCond{field: field, op: "IN NOT", value: "NULL"})
-}
-
-func (cond TableConds) In(field string, args ...interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "IN", value: "[" + fmt.Sprint(args...) + "]"})
-}
-
-func (cond TableConds) NoIn(field string, args ...interface{}) TableConds {
-	return append(cond, &TableCond{field: field, op: "NOT IN", value: "[" + fmt.Sprint(args...) + "]"})
-}
-
-func (cond TableConds) Or() TableConds {
-	if len(cond) > 0 {
-		cond[len(cond)-1].link = "OR"
+func (m *ModifyData) TagsRstsMap() map[string]interface{} {
+	result := make(map[string]interface{})
+	for i := 0; i < len(m.rsts); i++ {
+		result[m.tags[i]] = m.rsts[i].Interface()
 	}
-	return cond
+	return result
 }

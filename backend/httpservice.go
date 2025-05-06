@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yuwf/gobase/tcp"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )
@@ -59,6 +60,10 @@ func (hs *HttpService[ServiceInfo]) Address() string {
 }
 
 func (hs *HttpService[ServiceInfo]) Info() *ServiceInfo {
+	return hs.info
+}
+
+func (hs *HttpService[ServiceInfo]) InfoI() interface{} {
 	return hs.info
 }
 
@@ -123,7 +128,7 @@ func (hs *HttpService[ServiceInfo]) close() {
 func (hs *HttpService[ServiceInfo]) onDialSuccess() {
 	log.Info().Str("ServiceName", hs.conf.ServiceName).
 		Str("ServiceId", hs.conf.ServiceId).
-		Str("RoutingTag", hs.conf.RoutingTag).
+		Strs("RoutingTag", hs.conf.RoutingTag).
 		Str("Addr", fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)).
 		Msg("HttpService connect success")
 
@@ -133,23 +138,29 @@ func (hs *HttpService[ServiceInfo]) onDialSuccess() {
 	}
 
 	// 回调
-	for _, h := range hs.g.hb.hook {
-		h.OnConnected(hs)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range hs.g.hb.hook {
+			h.OnConnected(hs)
+		}
+	}()
 }
 
 func (hs *HttpService[ServiceInfo]) onDisConnect(err error) {
 	log.Error().Str("ServiceName", hs.conf.ServiceName).
 		Str("ServiceId", hs.conf.ServiceId).
-		Str("RoutingTag", hs.conf.RoutingTag).
+		Strs("RoutingTag", hs.conf.RoutingTag).
 		Err(err).
 		Str("Addr", fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)).
 		Msg("HttpService connect fail")
 
-	hs.g.removeHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
+	hs.g.removeHashring(hs.conf.ServiceId)
 
 	// 回调
-	for _, h := range hs.g.hb.hook {
-		h.OnDisConnect(hs)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range hs.g.hb.hook {
+			h.OnDisConnect(hs)
+		}
+	}()
 }

@@ -29,17 +29,13 @@ const (
 var ordinalName = []string{"first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"}
 
 type msgHandler struct {
-	regType  int           // RegType类型
-	funValue reflect.Value // 处理函数
-	funName  string        // 处理函数名，用来输出日志，不稳定不要用来做逻辑
-	msgType  reflect.Type  // 处理消息的类型
-	respType reflect.Type  // 回复消息的类型
-	respId   string        // 回复消息的id
-}
-
-// 透传对象接口
-type ConnNameer interface {
-	ConnName() string // 连接对象名字，用来输出日志
+	regType      int           // RegType类型
+	funValue     reflect.Value // 处理函数
+	funName      string        // 处理函数名，用来输出日志，不稳定不要用来做逻辑
+	funNameShort string
+	msgType      reflect.Type // 处理消息的类型
+	respType     reflect.Type // 回复消息的类型
+	respId       string       // 回复消息的id
 }
 
 // MsgDispatch 提供消息注册和分发功能
@@ -107,33 +103,34 @@ func (md *MsgDispatch[Mr, Cr]) Reg(v interface{}) {
 			continue
 		}
 		funName := vType.Method(i).Name // 名字获取的方式和RegMsg不太一样
-		if !ParamConf.Get().RegFuncShort {
-			funName = vType.String() + "." + funName
-		}
+		funNameShort := funName
 		var handler *msgHandler
 		if paramNum == 3 {
 			handler = &msgHandler{
-				regType:  regType_Msg3,
-				funValue: funValue,
-				funName:  funName,
-				msgType:  funType.In(1).Elem(),
+				regType:      regType_Msg3,
+				funValue:     funValue,
+				funName:      funName,
+				funNameShort: funNameShort,
+				msgType:      funType.In(1).Elem(),
 			}
 		} else if paramNum == 4 {
 			// 如果第二个参数是Mr
 			if funType.In(1) == md.mType {
 				handler = &msgHandler{
-					regType:  regType_Msg4,
-					funValue: funValue,
-					funName:  funName,
-					msgType:  funType.In(2).Elem(),
+					regType:      regType_Msg4,
+					funValue:     funValue,
+					funName:      funName,
+					funNameShort: funNameShort,
+					msgType:      funType.In(2).Elem(),
 				}
 			} else if funType.In(1).Kind() == reflect.Ptr && funType.In(1).Elem().Kind() == reflect.Struct {
 				handler = &msgHandler{
-					regType:  regType_ReqResp4,
-					funValue: funValue,
-					funName:  funName,
-					msgType:  funType.In(1).Elem(),
-					respType: funType.In(2).Elem(),
+					regType:      regType_ReqResp4,
+					funValue:     funValue,
+					funName:      funName,
+					funNameShort: funNameShort,
+					msgType:      funType.In(1).Elem(),
+					respType:     funType.In(2).Elem(),
 				}
 			} else {
 				continue
@@ -148,11 +145,12 @@ func (md *MsgDispatch[Mr, Cr]) Reg(v interface{}) {
 				continue
 			}
 			handler = &msgHandler{
-				regType:  regType_ReqResp5,
-				funValue: funValue,
-				funName:  funName,
-				msgType:  funType.In(2).Elem(),
-				respType: funType.In(3).Elem(),
+				regType:      regType_ReqResp5,
+				funValue:     funValue,
+				funName:      funName,
+				funNameShort: funNameShort,
+				msgType:      funType.In(2).Elem(),
+				respType:     funType.In(3).Elem(),
 			}
 		} else {
 			continue
@@ -180,19 +178,20 @@ func (md *MsgDispatch[Mr, Cr]) Reg(v interface{}) {
 }
 
 // 获取函数名
-func getFuncName(fun reflect.Value) string {
+func getFuncName(fun reflect.Value) (string, string) {
 	funName := runtime.FuncForPC(fun.Pointer()).Name()
-	var slice []string
-	if ParamConf.Get().RegFuncShort {
-		slice = strings.Split(funName, ".")
-	} else {
-		slice = strings.Split(funName, "/")
-	}
+	funName = strings.Replace(funName, "-fm", "", -1)
+	funNameShort := funName
+
+	slice := strings.Split(funName, "/")
+	shortSlice := strings.Split(funName, ".")
 	if len(slice) > 0 {
 		funName = slice[len(slice)-1]
-		funName = strings.Replace(funName, "-fm", "", -1)
 	}
-	return funName
+	if len(shortSlice) > 0 {
+		funNameShort = shortSlice[len(shortSlice)-1]
+	}
+	return funName, funNameShort
 }
 
 // 注册消息处理函数
@@ -214,7 +213,7 @@ func (md *MsgDispatch[Mr, Cr]) RegMsgI(msgid string, fun interface{}) error {
 		log.Error().Err(err).Str("type", funType.String()).Msg("MsgDispatch RegMsg error")
 		return err
 	}
-	funName := getFuncName(funValue)
+	funName, funNameShort := getFuncName(funValue)
 
 	// 必须有三个或者四个参数
 	paramNum := funType.NumIn()
@@ -253,17 +252,19 @@ func (md *MsgDispatch[Mr, Cr]) RegMsgI(msgid string, fun interface{}) error {
 	var handler *msgHandler
 	if paramNum == 3 {
 		handler = &msgHandler{
-			regType:  regType_Msg3,
-			funValue: funValue,
-			funName:  funName,
-			msgType:  funType.In(1).Elem(),
+			regType:      regType_Msg3,
+			funValue:     funValue,
+			funName:      funName,
+			funNameShort: funNameShort,
+			msgType:      funType.In(1).Elem(),
 		}
 	} else {
 		handler = &msgHandler{
-			regType:  regType_Msg4,
-			funValue: funValue,
-			funName:  funName,
-			msgType:  funType.In(2).Elem(),
+			regType:      regType_Msg4,
+			funValue:     funValue,
+			funName:      funName,
+			funNameShort: funNameShort,
+			msgType:      funType.In(2).Elem(),
 		}
 	}
 
@@ -307,7 +308,7 @@ func (md *MsgDispatch[Mr, Cr]) RegReqRespI(reqid, respid string, fun interface{}
 		log.Error().Err(err).Str("type", funType.String()).Msg("MsgDispatch RegReqResp error")
 		return err
 	}
-	funName := getFuncName(funValue)
+	funName, funNameShort := getFuncName(funValue)
 
 	// 必须有四个参数
 	paramNum := funType.NumIn()
@@ -352,19 +353,21 @@ func (md *MsgDispatch[Mr, Cr]) RegReqRespI(reqid, respid string, fun interface{}
 	var handler *msgHandler
 	if paramNum == 4 {
 		handler = &msgHandler{
-			regType:  regType_ReqResp4,
-			funValue: funValue,
-			funName:  funName,
-			msgType:  funType.In(1).Elem(),
-			respType: funType.In(2).Elem(),
+			regType:      regType_ReqResp4,
+			funValue:     funValue,
+			funName:      funName,
+			funNameShort: funNameShort,
+			msgType:      funType.In(1).Elem(),
+			respType:     funType.In(2).Elem(),
 		}
 	} else {
 		handler = &msgHandler{
-			regType:  regType_ReqResp5,
-			funValue: funValue,
-			funName:  funName,
-			msgType:  funType.In(2).Elem(),
-			respType: funType.In(3).Elem(),
+			regType:      regType_ReqResp5,
+			funValue:     funValue,
+			funName:      funName,
+			funNameShort: funNameShort,
+			msgType:      funType.In(2).Elem(),
+			respType:     funType.In(3).Elem(),
 		}
 	}
 
@@ -427,34 +430,39 @@ func (r *MsgDispatch[Mr, Cr]) WaitAllMsgDone(timeout time.Duration) {
 }
 
 // 消息分发
-func (r *MsgDispatch[Mr, Cr]) Dispatch(ctx context.Context, m Mr, c *Cr) bool {
+func (r *MsgDispatch[Mr, Cr]) Dispatch(ctx context.Context, m Mr, c *Cr) (bool, error) {
 	msgid := m.MsgID()
 	value1, ok1 := r.handlers.Load(msgid)
 	if ok1 {
 		handler, _ := value1.(*msgHandler)
 		msg, err := m.BodyUnMarshal(handler.msgType)
-		if err != nil {
-			utils.LogCtx(log.Error(), ctx).Err(err).Str("MsgID", msgid).Str("MsgType", handler.msgType.String()).Msg("MsgDispatch Dispatch MsgMarshal error")
-			return false
-		}
-		// 熔断
-		if name, ok := ParamConf.Get().IsHystrixMsg(msgid); ok {
-			hystrix.DoC(ctx, name, func(ctx context.Context) error {
+		if err == nil {
+			// 熔断
+			if name, ok := ParamConf.Get().IsHystrixMsg(msgid); ok {
+				err = hystrix.DoC(ctx, name, func(ctx context.Context) error {
+					r.handle(ctx, handler, m, msgid, msg, c)
+					return nil
+				}, func(ctx context.Context, err error) error {
+					// 出现了熔断
+					// 熔断也会调用回调
+					r.callhook(ctx, msgid, 0)
+					return err
+				})
+			} else {
 				r.handle(ctx, handler, m, msgid, msg, c)
-				return nil
-			}, func(ctx context.Context, err error) error {
-				// 出现了熔断
-				utils.LogCtx(log.Error(), ctx).Err(err).Str("MsgID", msgid).Str("MsgType", handler.msgType.String()).Msg("MsgDispatch Hystrix")
-				// 熔断也会调用回调
-				r.callhook(ctx, msgid, 0)
-				return err
-			})
-		} else {
-			r.handle(ctx, handler, m, msgid, msg, c)
+			}
 		}
-		return true
+		if err != nil {
+			cer, _ := any(c).(utils.ConnTermianl)
+			l := utils.LogCtx(log.Error(), ctx).Err(err)
+			if cer != nil {
+				l.Str("Name", cer.ConnName())
+			}
+			l.Interface("Msg", m).Str("MsgType", handler.msgType.String()).Msg("MsgDispatch error")
+		}
+		return true, err
 	}
-	return false
+	return false, nil
 }
 
 func (r *MsgDispatch[Mr, Cr]) handle(ctx context.Context, handler *msgHandler, m Mr, msgid string, msg interface{}, c *Cr) {
@@ -462,7 +470,7 @@ func (r *MsgDispatch[Mr, Cr]) handle(ctx context.Context, handler *msgHandler, m
 	defer r.wg.Done()
 
 	// 日志
-	logLevel := ParamConf.Get().MsgLogLevel(msgid)
+	logLevel := ParamConf.Get().MsgLogLevel.RecvLevel(m)
 	if logLevel >= int(log.Logger.GetLevel()) {
 		r.log(ctx, handler, m, msg, c, logLevel, "DispatchMsg")
 	}
@@ -526,12 +534,25 @@ func (md *MsgDispatch[Mr, Cr]) callFunc(ctx context.Context, handler *msgHandler
 	return nil
 }
 
+// 注册的消息ID
+func (r *MsgDispatch[Mr, Cr]) RegMsgIds() []string {
+	msgids := []string{}
+	r.handlers.Range(func(key, value any) bool {
+		msgids = append(msgids, key.(string))
+		return true
+	})
+	return msgids
+}
+
 func (r *MsgDispatch[Mr, Cr]) callhook(ctx context.Context, msgid string, elapsed time.Duration) {
 	defer utils.HandlePanic()
 	// 回调
-	for _, f := range r.hook {
-		f(ctx, msgid, elapsed)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, f := range r.hook {
+			f(ctx, msgid, elapsed)
+		}
+	}()
 }
 
 func (r *MsgDispatch[Mr, Cr]) log(ctx context.Context, handler *msgHandler, m Mr, msg interface{}, c *Cr, logLevel int, logmsg string) {
@@ -541,10 +562,15 @@ func (r *MsgDispatch[Mr, Cr]) log(ctx context.Context, handler *msgHandler, m Mr
 	}
 	l = utils.LogCtx(l, ctx)
 	// 调用对象的ConnName函数，输入消息日志
-	cer, _ := any(c).(ConnNameer)
+	cer, _ := any(c).(utils.ConnTermianl)
 	if cer != nil {
 		l.Str("Name", cer.ConnName())
 	}
-	l.Str("Func", handler.funName).Interface("Msg", m)
+	if ParamConf.Get().RegFuncShort {
+		l.Str("Func", handler.funNameShort)
+	} else {
+		l.Str("Func", handler.funName)
+	}
+	l.Interface("Msg", m)
 	l.Msg(logmsg)
 }

@@ -11,14 +11,6 @@ import (
 	"github.com/afex/hystrix-go/hystrix"
 )
 
-const CtxKey_nolog = utils.CtxKey_nolog // 不打印日志，错误日志还会打印 值：不受限制 一般写1
-
-func init() {
-	// 因为报警依赖httprequest， 所以下面的报警直接在alert中添加好了
-	//alert.AddErrorLogPrefix("HttpRequest Err")
-	//alert.AddErrorLogPrefix("HttpRequest TimeOut")
-}
-
 // 参数配置
 type ParamConfig struct {
 	// 日志级别和zerolog.Level一致
@@ -51,7 +43,7 @@ func (c *ParamConfig) Create() {
 	c.LogLevelHeadByHost = map[string]int{}
 	c.LogLevelHeadByPath = map[string]int{}
 	c.TimeOutCheck = 8 // 8秒超时报警
-	c.BodyLogLimit = 1024
+	c.BodyLogLimit = 256
 }
 
 func (c *ParamConfig) Normalize() {

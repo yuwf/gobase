@@ -5,18 +5,11 @@ package ginserver
 import (
 	"strings"
 
-	"github.com/yuwf/gobase/alert"
 	"github.com/yuwf/gobase/loader"
 	"github.com/yuwf/gobase/utils"
 
 	"github.com/afex/hystrix-go/hystrix"
 )
-
-func init() {
-	alert.AddErrorLogPrefix("GinServer RegHandler")
-	alert.AddErrorLogPrefix("GinServer TimeOut")
-	alert.AddErrorLogPrefix("GinServer Hystrix")
-}
 
 // 参数配置
 type ParamConfig struct {
@@ -57,7 +50,7 @@ func (c *ParamConfig) Create() {
 	c.LogMergeByPath = map[string]bool{}
 	c.TimeOutCheck = 8 // 8秒超时报警
 	c.Cors = defaultCorsOptions
-	c.BodyLogLimit = 1024
+	c.BodyLogLimit = 256
 }
 
 func (c *ParamConfig) Normalize() {

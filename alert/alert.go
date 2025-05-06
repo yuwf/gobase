@@ -18,24 +18,8 @@ var (
 	// 日志钩子
 	hook logHook
 
-	errorLogPrefixLock sync.RWMutex
-	// 报警日志 Msg前缀部分
-	errorLogPrefix = map[string]interface{}{
-		"Panic":               nil,
-		"Consul":              nil,
-		"Redis":               nil,
-		"MySQL":               nil,
-		"RandParamErr":        nil,
-		"HttpRequest Err":     nil,
-		"HttpRequest TimeOut": nil,
-	}
-	// 单一节点报警，一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点
-	errorLogPrefix2 = map[string]interface{}{
-		"JsonLoader": nil,
-		"StrLoader":  nil,
-	}
 	// 单一节点报警，检查报警函数，外部可赋值重定义
-	LogAlertCheck = func(prefix string) bool {
+	LogAlertCheck = func(msg string) bool {
 		return true
 	}
 )
@@ -66,56 +50,21 @@ func InitAlert() func(sendAlert bool) {
 	}
 }
 
-// 报警日志前缀添加
-func AddErrorLogPrefix(prefix string) {
-	errorLogPrefixLock.Lock()
-	defer errorLogPrefixLock.Unlock()
-	errorLogPrefix[prefix] = nil
-}
-
-func RemoveErrorLogPrefix(prefix string) {
-	errorLogPrefixLock.Lock()
-	defer errorLogPrefixLock.Unlock()
-	delete(errorLogPrefix, prefix)
-}
-
-// 报警日志前缀添加 多节点唯一性报警
-func AddErrorLogPrefix2(prefix string) {
-	errorLogPrefixLock.Lock()
-	defer errorLogPrefixLock.Unlock()
-	errorLogPrefix2[prefix] = nil
-}
-
-func RemoveErrorLogPrefix2(prefix string) {
-	errorLogPrefixLock.Lock()
-	defer errorLogPrefixLock.Unlock()
-	delete(errorLogPrefix2, prefix)
-}
-
-func checkSendAlert(msg string) bool {
-	errorLogPrefixLock.RLock()
-	defer errorLogPrefixLock.RUnlock()
-
-	alert := false
-	for k := range errorLogPrefix2 {
-		l := len(k)
-		if len(msg) >= l && msg[0:l] == k {
-			if LogAlertCheck != nil && LogAlertCheck(k) {
-				alert = true
-			}
-			break
-		}
-	}
-	if !alert {
-		for k := range errorLogPrefix {
-			l := len(k)
-			if len(msg) >= l && msg[0:l] == k {
-				alert = true
-				break
+func checkSendAlert(msg string) *AlertAddr {
+	alertConf := ParamConf.Get()
+	for _, conf := range alertConf.Configs {
+		if conf.mulErrorTrie.HasPrefix(msg) {
+			if LogAlertCheck != nil && LogAlertCheck(msg) {
+				return conf.AlertAddr
 			}
 		}
 	}
-	return alert
+	for _, conf := range alertConf.Configs {
+		if conf.errorTrie.HasPrefix(msg) {
+			return conf.AlertAddr
+		}
+	}
+	return nil
 }
 
 // 监控所有的Fatal日志
@@ -136,7 +85,8 @@ type logHook struct {
 // 日志采样
 type logSampling struct {
 	// 不修改
-	pos  string
+	pos string
+
 	msg  string
 	info string
 	// 原子操作
@@ -150,14 +100,14 @@ func (h *logHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 	if level == zerolog.FatalLevel {
 		vo := reflect.ValueOf(e).Elem()
 		buf := vo.FieldByName("buf")
-		SendFeiShuAlert2("Fatal %s\n%s}", msg, string(buf.Bytes()))
+		SendFeiShuAlert2(ParamConf.Get().defaultAddr, "Fatal %s\n%s}", msg, string(buf.Bytes()))
 	} else if level == zerolog.PanicLevel {
 		vo := reflect.ValueOf(e).Elem()
 		buf := vo.FieldByName("buf")
-		SendFeiShuAlert2("%s\n%s}", msg, string(buf.Bytes()))
+		SendFeiShuAlert2(ParamConf.Get().defaultAddr, "%s\n%s}", msg, string(buf.Bytes()))
 	} else if level == zerolog.ErrorLevel {
-		if checkSendAlert(msg) {
-			h.addAlertLog(e, &msg)
+		if addr := checkSendAlert(msg); addr != nil {
+			h.addAlertLog(addr, e, msg)
 		}
 
 		if hook.bootChecking {
@@ -188,10 +138,10 @@ func (h *logHook) sendLastLogs() {
 			send = send + "\n\n" + h.lastLogs[index]
 		}
 	}
-	SendFeiShuAlert2(send)
+	SendFeiShuAlert2(ParamConf.Get().defaultAddr, send)
 }
 
-func (h *logHook) addAlertLog(e *zerolog.Event, msg *string) {
+func (h *logHook) addAlertLog(addr *AlertAddr, e *zerolog.Event, msg string) {
 	hook.samplingLock.Lock()
 	if h.samplingLogs == nil {
 		h.samplingLogs = map[string]*logSampling{}
@@ -221,14 +171,14 @@ func (h *logHook) addAlertLog(e *zerolog.Event, msg *string) {
 	eVO := reflect.ValueOf(e).Elem()
 	buf := eVO.FieldByName("buf")
 	a.pos = pos
-	a.msg = *msg
+	a.msg = msg
 	a.info = string(buf.Bytes())
 	a.totalCount = 1
 	// 先报警一次
 	if a.msg == "Panic" {
-		SendFeiShuAlert2("%s\n\n%s}", a.msg, a.info)
+		SendFeiShuAlert2(addr, "%s\n\n%s}", a.msg, a.info)
 	} else {
-		SendFeiShuAlert("Error %s\n\n%s}", a.msg, a.info)
+		SendFeiShuAlert(addr, "Error %s\n\n%s}", a.msg, a.info)
 	}
 
 	// 开启协程 检查该报警
@@ -239,7 +189,7 @@ func (h *logHook) addAlertLog(e *zerolog.Event, msg *string) {
 			if count > 0 {
 				atomic.AddInt32(&a.count, -count)
 				a.totalCount += count
-				SendFeiShuAlert("Error %s\n\nCount:%d\nTotalCount:%d\n\n%s}", a.msg, count, a.totalCount, a.info)
+				SendFeiShuAlert(addr, "Error %s\n\nCount:%d\nTotalCount:%d\n\n%s}", a.msg, count, a.totalCount, a.info)
 			} else {
 				hook.samplingLock.Lock()
 				delete(hook.samplingLogs, a.pos)

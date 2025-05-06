@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/petermattis/goid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/diode"
 	"github.com/rs/zerolog/log"
@@ -25,9 +26,9 @@ func init() {
 	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
 		slice := strings.Split(file, "/")
 		if len(slice) >= 2 {
-			return slice[len(slice)-2] + "/" + slice[len(slice)-1] + ":" + strconv.Itoa(line)
+			return slice[len(slice)-2] + "/" + slice[len(slice)-1] + ":" + strconv.Itoa(line) + "-" + strconv.FormatInt(goid.Get(), 10)
 		}
-		return file + ":" + strconv.Itoa(line)
+		return file + ":" + strconv.Itoa(line) + "-" + strconv.FormatInt(goid.Get(), 10)
 	}
 
 	// 不初始化默认只有控制台输出

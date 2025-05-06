@@ -32,17 +32,13 @@ func NewScriptWithName(name, src string) *RedisScript {
 
 func (r *Redis) DoScript(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *redis.Cmd {
 	ctx = context.WithValue(ctx, CtxKey_noscript, 1) // 屏蔽NOSCRIPT的错误日志
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
+	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	return script.script.Run(ctx, r.UniversalClient, keys, args...)
 }
 
 func (r *Redis) DoScript2(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *RedisCommond {
 	ctx = context.WithValue(ctx, CtxKey_noscript, 1) // 屏蔽NOSCRIPT的错误日志
-	if ctx.Value(utils.CtxKey_caller) == nil {
-		ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	}
+	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	redisCmd := &RedisCommond{
 		ctx: ctx,
 	}

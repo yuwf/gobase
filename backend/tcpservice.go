@@ -30,6 +30,7 @@ type TcpService[ServiceInfo any] struct {
 	seq         utils.Sequence         // 消息顺序处理工具 协程安全
 	info        *ServiceInfo           // 客户端信息，内容修改需要外层加锁控制
 	conn        *tcp.TCPConn           // 连接对象，协程安全
+	connLogin   int32                  // 表示连接是否登录成功了 原子操作
 
 	ctx context.Context // 本连接的上下文
 
@@ -51,6 +52,7 @@ func NewTcpService[ServiceInfo any](conf *ServiceConfig, g *TcpGroup[ServiceInfo
 		confDestroy: 0,
 		address:     fmt.Sprintf("%s:%d", conf.ServiceAddr, conf.ServicePort),
 		info:        new(ServiceInfo),
+		connLogin:   0,
 		ctx:         context.WithValue(context.TODO(), CtxKey_scheme, "tcp"),
 		rpc:         new(sync.Map),
 		quit:        make(chan int),
@@ -60,12 +62,19 @@ func NewTcpService[ServiceInfo any](conf *ServiceConfig, g *TcpGroup[ServiceInfo
 	if err != nil {
 		log.Error().Str("ServiceName", conf.ServiceName).
 			Str("ServiceId", conf.ServiceId).Err(err).
-			Str("RoutingTag", conf.RoutingTag).
+			Strs("RoutingTag", conf.RoutingTag).
 			Str("addr", ts.address).
 			Msg("NewTcpService")
 		return nil, err
 	}
 	ts.conn = conn
+
+	// 调用对象的ServiceCreate函数
+	creater, ok := any(ts.info).(ServiceCreater)
+	if ok {
+		creater.ServiceCreate(ts.conf)
+	}
+
 	// 开启tick协程
 	go ts.loopTick()
 	return ts, nil
@@ -102,6 +111,10 @@ func (ts *TcpService[ServiceInfo]) Info() *ServiceInfo {
 	return ts.info
 }
 
+func (ts *TcpService[ServiceInfo]) InfoI() interface{} {
+	return ts.info
+}
+
 // 获取连接对象
 func (ts *TcpService[ServiceInfo]) Conn() *tcp.TCPConn {
 	return ts.conn
@@ -111,13 +124,30 @@ func (ts *TcpService[ServiceInfo]) ConnName() string {
 	return ts.conf.ServiceName + ":" + ts.conf.ServiceId
 }
 
-// 0:健康 1:没连接成功 2:发现配置已经不存在了，还保持连接
+func (ts *TcpService[ServiceInfo]) RecvSeqCount() int {
+	return ts.seq.Len()
+}
+
+// 登录成功后调用,否则直接调用tcpbackend发不了消息
+func (ts *TcpService[ServiceInfo]) OnLogin() {
+	atomic.StoreInt32(&ts.connLogin, 1)
+
+	// 添加到哈希环中
+	if ts.HealthState() == 0 {
+		ts.g.addHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
+	}
+}
+
+// 0:健康 1:没连接成功 2:发现配置已经不存在了，还保持连接 3：未登录
 func (ts *TcpService[ServiceInfo]) HealthState() int {
 	if !ts.conn.Connected() {
 		return 1
 	}
 	if atomic.LoadInt32(&ts.confDestroy) != 0 {
 		return 2
+	}
+	if atomic.LoadInt32(&ts.connLogin) != 1 {
+		return 3
 	}
 	return 0
 }
@@ -156,15 +186,18 @@ func (ts *TcpService[ServiceInfo]) SendMsg(ctx context.Context, msg utils.SendMs
 		utils.LogCtx(log.Error(), ctx).Str("Name", ts.ConnName()).Err(err).Interface("Msg", msg).Msg("SendMsg error")
 		return err
 	}
-	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnSendMsg(ts, msg.MsgID(), len(data))
-	}
 	// 日志
-	logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
+	logLevel := TcpParamConf.Get().MsgLogLevel.SendLevel(msg)
 	if logLevel >= int(log.Logger.GetLevel()) {
 		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("SendMsg")
 	}
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnSendMsg(ts, msg.MsgID(), len(data))
+		}
+	}()
 	return nil
 }
 
@@ -204,11 +237,14 @@ func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interfa
 		return nil, err
 	}
 	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnSendMsg(ts, msg.MsgID(), len(data))
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnSendMsg(ts, msg.MsgID(), len(data))
+		}
+	}()
 	// 日志
-	logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
+	logLevel := TcpParamConf.Get().MsgLogLevel.SendLevel(msg)
 	if logLevel >= int(log.Logger.GetLevel()) {
 		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("SendRPCMsg")
 	}
@@ -291,11 +327,6 @@ func (ts *TcpService[ServiceInfo]) OnDialFail(err error, t *tcp.TCPConn) error {
 func (ts *TcpService[ServiceInfo]) OnDialSuccess(t *tcp.TCPConn) {
 	log.Info().Str("Name", ts.ConnName()).Str("RemoteAddr", t.RemoteAddr().String()).Str("LocalAddr", t.LocalAddr().String()).Msg("Connect success")
 
-	// 添加到哈希环中
-	if ts.HealthState() == 0 {
-		ts.g.addHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
-	}
-
 	if ts.g.tb.event != nil {
 		ts.seq.Submit(func() {
 			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
@@ -304,9 +335,12 @@ func (ts *TcpService[ServiceInfo]) OnDialSuccess(t *tcp.TCPConn) {
 	}
 
 	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnConnected(ts)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnConnected(ts)
+		}
+	}()
 }
 
 func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error {
@@ -314,12 +348,13 @@ func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error
 		Str("ServiceId", ts.conf.ServiceId).
 		Err(err).
 		Str("Addr", ts.address).
-		Str("RoutingTag", ts.conf.RoutingTag).
+		Strs("RoutingTag", ts.conf.RoutingTag).
 		Int32("ConfDestroy", atomic.LoadInt32(&ts.confDestroy)).
 		Msg("Disconnect")
 
+	atomic.StoreInt32(&ts.connLogin, 0)
 	// 从哈希环中移除
-	ts.g.removeHashring(ts.conf.ServiceId, ts.conf.RoutingTag)
+	ts.g.removeHashring(ts.conf.ServiceId)
 
 	ts.clear()
 
@@ -340,9 +375,12 @@ func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error
 	}
 
 	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnDisConnect(ts)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnDisConnect(ts)
+		}
+	}()
 	return nil
 }
 
@@ -353,16 +391,22 @@ func (ts *TcpService[ServiceInfo]) OnClose(tc *tcp.TCPConn) {
 	ts.clear()
 
 	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnDisConnect(ts)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnDisConnect(ts)
+		}
+	}()
 }
 
 func (ts *TcpService[ServiceInfo]) OnRecv(data []byte, tc *tcp.TCPConn) (int, error) {
 	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnRecv(ts, len(data))
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnRecv(ts, len(data))
+		}
+	}()
 	len, err := ts.recv(data)
 	//if err != nil {
 	//	tc.Close(err) // 不需要关，tcpconn会根据err关闭掉，并调用OnDisConnect
@@ -372,9 +416,12 @@ func (ts *TcpService[ServiceInfo]) OnRecv(data []byte, tc *tcp.TCPConn) (int, er
 
 func (ts *TcpService[ServiceInfo]) OnSend(data []byte, tc *tcp.TCPConn) ([]byte, error) {
 	// 回调
-	for _, h := range ts.g.tb.hook {
-		h.OnSend(ts, len(data))
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range ts.g.tb.hook {
+			h.OnSend(ts, len(data))
+		}
+	}()
 	return data, nil
 }
 
@@ -402,7 +449,7 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 			ctx := context.WithValue(ts.ctx, utils.CtxKey_traceId, utils.GenTraceID())
 			ctx = context.WithValue(ctx, utils.CtxKey_msgId, msg.MsgID())
 			// 日志
-			logLevel := TcpParamConf.Get().MsgLogLevel(msg.MsgID())
+			logLevel := TcpParamConf.Get().MsgLogLevel.RecvLevel(msg)
 			if logLevel >= int(log.Logger.GetLevel()) {
 				if rpcId != nil {
 					utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("Name", ts.ConnName()).Interface("Resp", msg).Msg("RecvRPCMsg")
@@ -442,9 +489,12 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 				}
 			}
 			// 回调
-			for _, h := range ts.g.tb.hook {
-				h.OnRecvMsg(ts, msg.MsgID(), l)
-			}
+			func() {
+				defer utils.HandlePanic()
+				for _, h := range ts.g.tb.hook {
+					h.OnRecvMsg(ts, msg.MsgID(), l)
+				}
+			}()
 		}
 		if decodeLen >= len(data) {
 			break // 不需要继续读取了

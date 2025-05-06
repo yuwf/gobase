@@ -169,7 +169,7 @@ func (s *TCPServer[ClientId, ClientInfo]) Start(reusePort bool) error {
 	err := s.listener.Start(reusePort)
 	if err != nil {
 		atomic.StoreInt32(&s.state, 0)
-		log.Error().Str("Addr", s.Address).Msg("TCPServer already Start")
+		log.Error().Err(err).Str("Addr", s.Address).Msg("TCPServer Start error")
 		return err
 	}
 
@@ -206,9 +206,12 @@ func (s *TCPServer[ClientId, ClientInfo]) AddClient(id ClientId, tc *TCPClient[C
 	s.clientMap.Store(id, client)
 
 	// 回调回调hook
-	for _, h := range s.hook {
-		h.OnAddClient(tc)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range s.hook {
+			h.OnAddClient(tc)
+		}
+	}()
 }
 
 func (s *TCPServer[ClientId, ClientInfo]) GetClient(id ClientId) *TCPClient[ClientInfo] {
@@ -226,9 +229,12 @@ func (s *TCPServer[ClientId, ClientInfo]) RemoveClient(id ClientId) *TCPClient[C
 		tc := client.(*tClient[ClientId, ClientInfo]).tc
 
 		// 回调hook
-		for _, h := range s.hook {
-			h.OnRemoveClient(tc)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnRemoveClient(tc)
+			}
+		}()
 		return tc
 	}
 	return nil
@@ -247,9 +253,12 @@ func (s *TCPServer[ClientId, ClientInfo]) CloseClient(id ClientId) {
 		tc.clear()
 
 		// 回调
-		for _, h := range s.hook {
-			h.OnDisConnect(tc, true, nil)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnDisConnect(tc, true, nil)
+			}
+		}()
 	}
 }
 
@@ -300,6 +309,17 @@ func (s *TCPServer[ClientId, ClientInfo]) ClientCount() int {
 	return count
 }
 
+// 队列中还未处理的消息
+func (s *TCPServer[ClientId, ClientInfo]) RecvSeqCount() int {
+	l := 0
+	s.connMap.Range(func(key, value interface{}) bool {
+		tclient := value.(*tClient[ClientId, ClientInfo])
+		l += tclient.tc.RecvSeqCount()
+		return true
+	})
+	return l
+}
+
 // 注册hook
 func (s *TCPServer[ClientId, ClientInfo]) RegHook(h TCPHook[ClientInfo]) {
 	s.hook = append(s.hook, h)
@@ -343,9 +363,12 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	}
 
 	// 回调
-	for _, h := range s.hook {
-		h.OnConnected(tc)
-	}
+	func() {
+		defer utils.HandlePanic()
+		for _, h := range s.hook {
+			h.OnConnected(tc)
+		}
+	}()
 }
 
 func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn) error {
@@ -370,9 +393,12 @@ func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn
 		}
 
 		// 回调
-		for _, h := range s.hook {
-			h.OnDisConnect(tc, delClient, err)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnDisConnect(tc, delClient, err)
+			}
+		}()
 	}
 	return nil
 }
@@ -396,9 +422,12 @@ func (s *TCPServer[ClientId, ClientInfo]) OnClose(c *tcp.TCPConn) {
 		}
 
 		// 回调
-		for _, h := range s.hook {
-			h.OnDisConnect(tc, delClient, tc.closeReason)
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnDisConnect(tc, delClient, tc.closeReason)
+			}
+		}()
 	}
 }
 
@@ -409,9 +438,12 @@ func (s *TCPServer[ClientId, ClientInfo]) OnRecv(data []byte, c *tcp.TCPConn) (i
 		tc := tclient.tc
 		atomic.StoreInt64(&tc.lastRecvTime, time.Now().UnixMicro())
 		// 回调
-		for _, h := range s.hook {
-			h.OnRecv(tc, len(data))
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnRecv(tc, len(data))
+			}
+		}()
 
 		// 是否websock
 		if tc.wsh != nil {
@@ -425,9 +457,12 @@ func (s *TCPServer[ClientId, ClientInfo]) OnRecv(data []byte, c *tcp.TCPConn) (i
 				log.Info().Str("RemoveAddr", tc.removeAddr.String()+"("+tc.conn.RemoteAddr().String()+")").Interface("Header", tc.wsh.Header).Msg("HandShake")
 
 				// 回调
-				for _, h := range s.hook {
-					h.OnWSHandShake(tc)
-				}
+				func() {
+					defer utils.HandlePanic()
+					for _, h := range s.hook {
+						h.OnWSHandShake(tc)
+					}
+				}()
 			}
 			return len, err // 返回err后会关闭连接，并调用OnDisConnect
 		} else {
@@ -443,9 +478,12 @@ func (s *TCPServer[ClientId, ClientInfo]) OnSend(data []byte, c *tcp.TCPConn) ([
 	client, ok := s.connMap.Load(c)
 	if ok {
 		tc := client.(*tClient[ClientId, ClientInfo]).tc
-		for _, h := range s.hook {
-			h.OnSend(tc, len(data))
-		}
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnSend(tc, len(data))
+			}
+		}()
 	}
 	return data, nil
 }
@@ -478,5 +516,12 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 				return true
 			})
 		}
+		// 回调
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnTick()
+			}
+		}()
 	}
 }

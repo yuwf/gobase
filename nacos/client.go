@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"unicode"
 
 	"github.com/yuwf/gobase/loader"
 	"github.com/yuwf/gobase/utils"
@@ -259,6 +260,8 @@ func (c *Client) GetAllServicesInfo(groupName string) ([]string, error) {
 }
 
 func (c *Client) SelectInstances(serviceName, groupName string, clusters []string) ([]*RegistryInfo, error) {
+	serviceName = c.SanitizeString(serviceName)
+	clusters = c.SanitizeStrings(clusters)
 	instances, err := c.nacosNamingCli.SelectInstances(vo.SelectInstancesParam{
 		ServiceName: serviceName,
 		GroupName:   groupName,
@@ -283,4 +286,24 @@ func (c *Client) SelectInstances(serviceName, groupName string, clusters []strin
 	}
 
 	return resp, nil
+}
+
+func (c *Client) SanitizeString(input string) string {
+	var result []rune
+	for _, char := range input {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) || char == '-' {
+			result = append(result, char)
+		} else {
+			result = append(result, '-')
+		}
+	}
+	return string(result)
+}
+
+func (c *Client) SanitizeStrings(input []string) []string {
+	var result []string
+	for _, s := range input {
+		result = append(result, c.SanitizeString(s))
+	}
+	return result
 }

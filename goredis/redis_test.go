@@ -5,6 +5,7 @@ package goredis
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,7 +15,8 @@ import (
 )
 
 var cfg = &Config{
-	Addrs: []string{"127.0.0.1:6379"},
+	Addrs:  []string{"127.0.0.1:6379"},
+	Passwd: "",
 }
 
 var ccfg = &Config{
@@ -198,6 +200,27 @@ func BenchmarkTryLockWait(b *testing.B) {
 	fmt.Printf("%p %v\n", fun, err)
 }
 
+func BenchmarkKeyLockWait(b *testing.B) {
+	redis, _ := NewRedis(cfg)
+	if redis == nil {
+		return
+	}
+	//f, _ := redis.Lock(context.TODO(), "testkeylock", time.Second*5)
+	//go func() {
+	//	time.Sleep(time.Second*3)
+	//	f()
+	//	fmt.Println("delete")
+	//}()
+	//fun, err := redis.KeyLockWait(context.TODO(), "testkey", "testkeylock", time.Second*10)
+
+	fun, err := redis.KeyLockWait(context.TODO(), "testkey2", "testkeylock2", time.Second*20)
+	fmt.Printf("%p %v\n", fun, err)
+	time.Sleep(time.Second * 5)
+	if fun != nil {
+		fun()
+	}
+}
+
 func BenchmarkLock(b *testing.B) {
 	redis, _ := NewRedis(cfg)
 	if redis == nil {
@@ -250,25 +273,40 @@ func BenchmarkRedisWatchRegister(b *testing.B) {
 	infos := []*RegistryInfo{
 		{
 			RegistryName:   "Name",
-			RegistryID:     "456",
+			RegistryID:     "123",
 			RegistryAddr:   "192.168.0.1",
 			RegistryPort:   123,
 			RegistryScheme: "tcp",
 		},
 		{
 			RegistryName: "Name",
-			RegistryID:   "123",
+			RegistryID:   "456",
 			RegistryAddr: "192.168.0.1",
-			RegistryPort: 123,
+			RegistryPort: 456,
 		},
 	}
-	r := redis.CreateRegisterEx("testregister", infos)
+	r := redis.CreateRegisters("testregister", infos)
 	r.Reg()
 
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 10)
+	r.Add(&RegistryInfo{
+		RegistryName: "Name",
+		RegistryID:   "789",
+		RegistryAddr: "192.168.0.1",
+		RegistryPort: 789,
+	})
+	time.Sleep(time.Second * 5)
+	r.Remove(&RegistryInfo{
+		RegistryName: "Name",
+		RegistryID:   "456",
+		RegistryAddr: "192.168.0.1",
+		RegistryPort: 456,
+	})
+	time.Sleep(time.Second * 5)
 	r.DeReg()
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 5)
 	r.Reg()
+	time.Sleep(time.Second * 5)
 	//time.Sleep(time.Second * 1)
 	//r.DeReg()
 	//time.Sleep(time.Second * 1)
@@ -286,4 +324,47 @@ func BenchmarkRedisWatchServices(b *testing.B) {
 	})
 
 	select {}
+}
+
+func BenchmarkInterfaceToValue(b *testing.B) {
+	type S struct {
+		F1  int         `json:"f1"`
+		Fs  string      `json:"fs"`
+		Fbs []byte      `json:"fbs"`
+		Fi  interface{} `json:"fi"`
+		// Fc  chan interface{} `json:"fc"` 不支持json化
+	}
+	s := S{
+		F1:  1,
+		Fs:  "fss",
+		Fbs: []byte{'1', '2', '3'},
+		Fi:  map[string]string{"11": "22"},
+		// Fc: make(chan interface{}),
+	}
+	var arr = [...]byte{'a', 'b', 'c'}
+	var str string
+
+	//
+	sli1 := []byte{'a', 'b'}
+	sli2 := []byte{}
+	err := InterfaceToValue(sli1, reflect.ValueOf(&sli2))
+	fmt.Println(err, sli2)
+
+	// Array to String
+	err = InterfaceToValue(&arr, reflect.ValueOf(&str))
+	fmt.Println(err, str)
+
+	// Struct to
+	err = InterfaceToValue(&s, reflect.ValueOf(&str))
+	fmt.Println(err, str)
+	ss := S{}
+	err = InterfaceToValue(str, reflect.ValueOf(&ss))
+	fmt.Println(err, ss)
+
+	var i *int
+	err = InterfaceToValue(str, reflect.ValueOf(&i).Elem())
+	fmt.Println(err, ss)
+	i = nil
+	InterfaceToValue(str, reflect.ValueOf(i)) // 这种写法会崩溃
+
 }

@@ -22,6 +22,8 @@ const typeErrFmt = "%v(%v) not to %v"
 
 var RedisTag = "redis"
 
+// GET HGET LPOP RPOP SPOP 会返回空错误
+// BindValues 也会可能会返回redis.Nil
 func IsNilError(err error) bool {
 	return err == redis.Nil
 }
@@ -58,7 +60,7 @@ type RedisCommond struct {
 	CmdDesc string        // 命令的描述
 	Elapsed time.Duration // 耗时
 	// 绑定回调
-	callback func(reply interface{}) error // 如果命令失败 不再回调了
+	callback func(reply interface{}) error // 如果命令失败 不会回调， redis.Nil返回的空错误也认为是一种错误也认为是错误
 
 	nscallback func() *redis.Cmd // 专门为管道中执行Script预留的变量
 }
@@ -267,7 +269,7 @@ func (c *RedisCommond) Bind(v interface{}) error {
 		if reply == nil {
 			return nil
 		}
-		return utils.InterfaceToValue(reply, elem)
+		return InterfaceToValue(reply, elem)
 	}
 	// 直接调用的Redis 此时已经有结果值了
 	if c.Cmd != nil {
@@ -325,21 +327,21 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 		switch r := reply.(type) {
 		case int64:
 			v := reflect.New(elemtype).Elem()
-			err := utils.InterfaceToValue(r, v)
+			err := InterfaceToValue(r, v)
 			if err != nil {
 				return err
 			}
 			sli = reflect.Append(sli, v)
 		case string:
 			v := reflect.New(elemtype).Elem()
-			err := utils.InterfaceToValue(r, v)
+			err := InterfaceToValue(r, v)
 			if err != nil {
 				return err
 			}
 			sli = reflect.Append(sli, v)
 		case []byte:
 			v := reflect.New(elemtype).Elem()
-			err := utils.InterfaceToValue(r, v)
+			err := InterfaceToValue(r, v)
 			if err != nil {
 				return err
 			}
@@ -347,15 +349,14 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 		case []interface{}:
 			for i := range r {
 				v := reflect.New(elemtype).Elem()
-				err := utils.InterfaceToValue(r[i], v)
-				if err != nil {
-					return err
+				if r[i] != nil {
+					err := InterfaceToValue(r[i], v)
+					if err != nil {
+						return err
+					}
 				}
 				sli = reflect.Append(sli, v)
 			}
-			return nil
-		case nil:
-			// 空值
 			return nil
 		case redis.Error:
 			return r
@@ -370,7 +371,7 @@ func (c *RedisCommond) BindSlice(v interface{}) error {
 		if !ok {
 			// 调用绑定的都应该是Cmd才对
 			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindSlice fail")
 			return err
 		}
 		err := c.callback(cmd.Val())
@@ -416,13 +417,13 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 					continue
 				}
 				key := reflect.New(keytype).Elem()
-				err := utils.InterfaceToValue(r[i], key)
+				err := InterfaceToValue(r[i], key)
 				if err != nil {
 					return err
 				}
 				value := reflect.New(elemtype).Elem()
-				if r[i+1] == nil {
-					err = utils.InterfaceToValue(r[i+1], value)
+				if r[i+1] != nil {
+					err = InterfaceToValue(r[i+1], value)
 					if err != nil {
 						return err
 					}
@@ -447,7 +448,7 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 		if !ok {
 			// 调用绑定的都应该是Cmd才对
 			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindMap fail")
 			return err
 		}
 		err := c.callback(cmd.Val())
@@ -459,6 +460,36 @@ func (c *RedisCommond) BindMap(v interface{}) error {
 	return nil
 }
 
+func (c *RedisCommond) BindValue(value reflect.Value) error {
+	// 绑定回到函数
+	c.callback = func(reply interface{}) error {
+		if reply == nil {
+			return nil
+		}
+		return InterfaceToValue(reply, value)
+	}
+	// 直接调用的Redis 此时已经有结果值了
+	if c.Cmd != nil {
+		if c.Cmd.Err() != nil {
+			return c.Cmd.Err()
+		}
+		cmd, ok := c.Cmd.(*redis.Cmd)
+		if !ok {
+			// 调用绑定的都应该是Cmd才对
+			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindValue fail")
+			return err
+		}
+		err := c.callback(cmd.Val())
+		if err != nil {
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindValue fail")
+			return err
+		}
+	}
+	return nil
+}
+
+// 如果命令中返回的数据全部为nil，返回redis.Nil错误
 func (c *RedisCommond) BindValues(values []reflect.Value) error {
 	c.callback = func(reply interface{}) error {
 		switch r := reply.(type) {
@@ -466,6 +497,16 @@ func (c *RedisCommond) BindValues(values []reflect.Value) error {
 		case string:
 		case []byte:
 		case []interface{}:
+			allNil := true
+			for _, r2 := range r {
+				if r2 != nil {
+					allNil = false
+				}
+			}
+			// 如果全部数据为空，返回空数据错误
+			if allNil {
+				return redis.Nil
+			}
 			rlen := len(r)
 			elen := len(values)
 			if rlen < elen {
@@ -477,7 +518,7 @@ func (c *RedisCommond) BindValues(values []reflect.Value) error {
 				if r[rindex] == nil {
 					continue
 				}
-				err := utils.InterfaceToValue(r[rindex], values[i])
+				err := InterfaceToValue(r[rindex], values[i])
 				if err != nil {
 					return err
 				}
@@ -500,12 +541,14 @@ func (c *RedisCommond) BindValues(values []reflect.Value) error {
 		if !ok {
 			// 调用绑定的都应该是Cmd才对
 			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindValues fail")
 			return err
 		}
 		err := c.callback(cmd.Val())
 		if err != nil {
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond HMGetObj fail")
+			if err != redis.Nil {
+				utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindValues fail")
+			}
 			return err
 		}
 	}
@@ -557,7 +600,7 @@ func (c *RedisCommond) BindJsonObj(v interface{}) error {
 		if !ok {
 			// 调用绑定的都应该是Cmd才对
 			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObj fail")
 			return err
 		}
 		err := c.callback(cmd.Val())
@@ -664,7 +707,7 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 		if !ok {
 			// 调用绑定的都应该是Cmd才对
 			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond Bind fail")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjSlice fail")
 			return err
 		}
 		err := c.callback(cmd.Val())

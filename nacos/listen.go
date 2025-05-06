@@ -22,6 +22,10 @@ func (c *Client) ListenConfig(dataId, group string, loader loader.Loader, immedi
 		if err != nil {
 			return err
 		}
+	} else {
+		utils.Submit(func() {
+			c.LoadConfig(dataId, group, loader)
+		})
 	}
 
 	// 内部会开启goruntine
@@ -57,6 +61,8 @@ func (c *Client) CancelListenConfig(dataId, group string) error {
 
 // 回调外部不要修改infos参数
 func (c *Client) ListenService(serviceName, groupName string, clusters []string, fun func(infos []*RegistryInfo)) error {
+	serviceName = c.SanitizeString(serviceName)
+	clusters = c.SanitizeStrings(clusters)
 	log.Info().Str("serviceName", serviceName).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService")
 	last := []*RegistryInfo{} // 当前所
 	err := c.nacosNamingCli.Subscribe(&vo.SubscribeParam{
@@ -95,6 +101,8 @@ func (c *Client) ListenService(serviceName, groupName string, clusters []string,
 
 // 回调外部不要修改infos参数
 func (c *Client) ListenService2(serviceName, groupName string, clusters []string, fun func(addInfos, delInfos []*RegistryInfo)) error {
+	serviceName = c.SanitizeString(serviceName)
+	clusters = c.SanitizeStrings(clusters)
 	log.Info().Str("serviceName", serviceName).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService2")
 	last := []*RegistryInfo{} // 当前所
 	err := c.nacosNamingCli.Subscribe(&vo.SubscribeParam{
@@ -134,6 +142,8 @@ func (c *Client) ListenService2(serviceName, groupName string, clusters []string
 
 // 回调外部不要修改infos参数
 func (c *Client) ListenServices(serviceNames []string, groupName string, clusters []string, fun func(infos []*RegistryInfo)) error {
+	serviceNames = c.SanitizeStrings(serviceNames)
+	clusters = c.SanitizeStrings(clusters)
 	log.Info().Strs("serviceNames", serviceNames).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService")
 	last := make([][]*RegistryInfo, len(serviceNames)) // 当前所
 	for i, serviceName_ := range serviceNames {
@@ -193,6 +203,8 @@ func (c *Client) ListenServices(serviceNames []string, groupName string, cluster
 
 // 回调外部不要修改infos参数
 func (c *Client) ListenServices2(serviceNames []string, groupName string, clusters []string, fun func(addInfos, delInfos []*RegistryInfo)) error {
+	serviceNames = c.SanitizeStrings(serviceNames)
+	clusters = c.SanitizeStrings(clusters)
 	log.Info().Strs("serviceNames", serviceNames).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService")
 	last := make([][]*RegistryInfo, len(serviceNames)) // 当前所
 	for i, serviceName_ := range serviceNames {

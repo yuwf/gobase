@@ -123,7 +123,9 @@ func (hb *HttpBackend[ServiceInfo]) updateServices(confs []*ServiceConfig) {
 	for _, conf := range confs {
 		conf.ServiceName = strings.TrimSpace(strings.ToLower(conf.ServiceName))
 		conf.ServiceId = strings.TrimSpace(strings.ToLower(conf.ServiceId))
-		conf.RoutingTag = strings.TrimSpace(strings.ToLower(conf.RoutingTag))
+		for i := 0; i < len(conf.RoutingTag); i++ {
+			conf.RoutingTag[i] = strings.TrimSpace(strings.ToLower(conf.RoutingTag[i]))
+		}
 	}
 
 	// 组织成Map结构

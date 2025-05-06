@@ -5,9 +5,9 @@ package goredis
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,142 +26,136 @@ var RegSep string = "&"
 // Register对象的注册频率:RegExprieTime/2
 var RegExprieTime = 8
 
-const regCheckLockerFmt = "_{%s}_locker_"
-const regListFmt = "_{%s}_list_"
-const regChannelFmt = "_{%s}_channel_"
-
 // 服务发现相关的脚本
 
-// 注册服务器
-// Key1 服务器注册发现的key，zset结构
-// Key2 有效的服务器列表拼接的串
-// ARGV1 RegExprieTime*1000 毫秒
-// ARGV2 发布订阅channel
-// ARGV3... 添加的服务器
+// 注册服务器，定时调用注册
+// Key1 服务器注册发现的key，zset结构，若数据发生变化会向Key1命名的channel发送通知
+// ARGV1 RegExprieTime 秒
+// ARGV2 描述
+// ARGV3... 注册的服务器
 var registerScirpt = NewScript(`
+	-- 有写入操作，开启复制模式，否则下面的获取时间错误
 	redis.replicate_commands()
 	-- 读取时间
 	local t = redis.call('TIME')
-	local stamp = tonumber(t[1])*1000 + tonumber(t[2])/1000
+	local stamp = tonumber(t[1]) + tonumber(t[2])/1000000
+	local expireat = stamp-tonumber(ARGV[1])
 
-	local score
+	local publish = false -- 是否需要发布
 	for i = 3, #ARGV do
-		if not score then
-			score = redis.call('ZSCORE', KEYS[1], ARGV[i])
+		-- 判断之前的是否还有效，有效不需要发布
+		local score = redis.call('ZSCORE', KEYS[1], ARGV[i])
+		if not (score and tonumber(score) > expireat) then
+			publish = true
 		end
 		redis.call('ZADD', KEYS[1], stamp, ARGV[i])
 	end
 
-	-- 判断之前的是否还有效，有效不需要发布
-	if score and tonumber(score) > stamp-tonumber(ARGV[1]) then
-		return 
-	end
-	-- 读取所有服务器
-	local slist = redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, stamp-tonumber(ARGV[1]))
-	table.sort(slist)
-	local str = ""
-	for i = 1, #slist do
-		if i > 1 then 
-			str = str .. ","
+	if publish then
+		-- 读取所有服务器，存下来
+		local slist = redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, expireat)
+		local str = ""
+		if slist and #slist > 0 then
+			table.sort(slist)
+			str = table.concat(slist,",")
 		end
-		str = str .. slist[i]
+		redis.call("SET", KEYS[1] .. "_list", str)
+		-- 发布变化 通知信息样式 desc:第一个[(剩余个数)]
+		redis.call("PUBLISH", KEYS[1], ARGV[2] .. ":" .. ARGV[3] .. ((#ARGV > 3) and "..(".. tostring(#ARGV-3) ..")" or "" ))
 	end
-	-- 存下来，并发布变化
-	local reg = "reg"
-	for i = 3, #ARGV do
-		reg = reg .. " " .. ARGV[i]
-	end
-	redis.call("SET", KEYS[2], str)
-	redis.call("PUBLISH", ARGV[2], reg)
 `)
 
 // 注册服务器
-// Key1 服务器注册发现的key，zset结构
-// Key2 有效的服务器列表拼接的串
-// ARGV1 RegExprieTime*1000 毫秒
-// ARGV2 发布订阅channel
-// ARGV3... 添加的服务器
+// Key1 服务器注册发现的key，zset结构，若数据发生变化会向Key1命名的channel发送通知
+// ARGV1 RegExprieTime 秒
+// ARGV2 描述
+// ARGV3... 删除的服务器
 var deregisterScirpt = NewScript(`
+	-- 有写入操作，开启复制模式，否则下面的获取时间错误
 	redis.replicate_commands()
 	-- 读取时间
 	local t = redis.call('TIME')
-	local stamp = tonumber(t[1])*1000 + tonumber(t[2])/1000
+	local stamp = tonumber(t[1]) + tonumber(t[2])/1000000
+	local expireat = stamp-tonumber(ARGV[1])
 
-	local score
+	local publish = false -- 是否需要发布
 	for i = 3, #ARGV do
-		if not score then
-			score = redis.call('ZSCORE', KEYS[1], ARGV[i])
+		-- 判断之前的是否还有效，无效不需要发布
+		local score = redis.call('ZSCORE', KEYS[1], ARGV[i])
+		if score and tonumber(score) > expireat then
+			publish = true
 		end
 		redis.call('ZREM', KEYS[1], ARGV[i])
 	end
 
-	-- 判断之前的是否还有效，无效不需要发布
-	if not (score and tonumber(score) > stamp-tonumber(ARGV[1])) then
-		return
-	end
-	
-	-- 读取所有服务器
-	local slist = redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, stamp-tonumber(ARGV[1]))
-	table.sort(slist)
-	local str = ""
-	for i = 1, #slist do
-		if i > 1 then 
-			str = str .. ","
+	if publish then
+		-- 读取所有服务器，存下来
+		local slist = redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, expireat)
+		local str = ""
+		if slist and #slist > 0 then
+			table.sort(slist)
+			str = table.concat(slist,",")
 		end
-		str = str .. slist[i]
+		redis.call("SET", KEYS[1] .. "_list", str)
+		-- 发布变化 通知信息样式 desc:第一个[(剩余个数)]
+		redis.call("PUBLISH", KEYS[1], ARGV[2] .. ":" .. ARGV[3] .. ((#ARGV > 3) and "..(".. tostring(#ARGV-3) ..")" or "" ))
 	end
-	-- 存下来，并发布变化
-	local dereg = "dereg"
-	for i = 3, #ARGV do
-		dereg = dereg .. " " .. ARGV[i]
-	end
-	redis.call("SET", KEYS[2], str)
-	redis.call("PUBLISH", ARGV[2], dereg)
 `)
 
 // 检查服务器变化
-// Key1 服务器注册发现的key，zset结构
-// Key2 有效的服务器列表拼接的串
-// Key3 锁，检查抢占的锁
-// ARGV1 RegExprieTime*1000 毫秒
-// ARGV2 发布订阅channel
-// ARGV3 检查抢占的锁的UUID
+// Key1 服务器注册发现的key，zset结构，若数据发生变化会向Key1命名的channel发送通知
+// ARGV1 RegExprieTime 秒
+// ARGV2 检查抢占的锁的UUID
 var checkServicesScirpt = NewScript(`
-	redis.replicate_commands()
 	-- 先抢占下
-	local v = redis.call("GET", KEYS[3])
+	local checkkey = KEYS[1] .. "_check"
+	local v = redis.call("GET", checkkey)
 	if not v then
-		redis.call("SET", KEYS[3], ARGV[3], "PX", ARGV[1])
-	elseif v == ARGV[3] then
-		--redis.call("PEXPIRE", KEYS[3], ARGV[1])
+		redis.call("SET", checkkey, ARGV[2], "EX", ARGV[1])
+	elseif v == ARGV[2] then
+		-- OK
 	else
 		return 0
 	end
+
+	-- 有写入操作，开启复制模式，否则下面的获取时间错误
+	redis.replicate_commands()
 	-- 读取时间
 	local t = redis.call('TIME')
-	local stamp = tonumber(t[1])*1000 + tonumber(t[2])/1000
-	-- 读取所有服务器
-	local slist = redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, stamp-tonumber(ARGV[1]))
-	table.sort(slist)
+	local stamp = tonumber(t[1]) + tonumber(t[2])/1000000
+	local expireat = stamp-tonumber(ARGV[1])
+
+	-- 读取所有服务器，有变化，存下来
+	local slist = redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, expireat)
 	local str = ""
-	for i = 1, #slist do
-		if i > 1 then 
-			str = str .. ","
-		end
-		str = str .. slist[i]
+	if slist and #slist > 0 then
+		table.sort(slist)
+		str = table.concat(slist,",")
 	end
 	-- 检查是否有变化
-	local rstr = redis.call("GET", KEYS[2])
+	local listkey = KEYS[1] .. "_list"
+	local rstr = redis.call("GET", listkey)
+	rstr = rstr and rstr or ""
 	if str == rstr then
 		return 1
 	end
-	-- 存下来，并发布变化
-	redis.call("SET", KEYS[2], str)
-	redis.call("PUBLISH", ARGV[2], "check")
+	redis.call("SET", listkey, str)
+	-- 发布变化 通知信息样式 check:uuid
+	redis.call("PUBLISH", KEYS[1], "check:" .. ARGV[2])
 
 	-- 删除过期的
-	redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, stamp-tonumber(ARGV[1])-1)
+	redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, expireat-1)
 	return 2
+`)
+
+// 读取服务器
+// Key1 服务器注册发现的key，zset结构
+// ARGV1 RegExprieTime 秒
+var readRegisterScirpt = NewScript(`
+	local t = redis.call('TIME')
+	local stamp = tonumber(t[1]) + tonumber(t[2])/1000000
+	local expireat = stamp-tonumber(ARGV[1])
+	return redis.call('ZREVRANGEBYSCORE', KEYS[1], stamp, expireat)
 `)
 
 // RegistryInfo 服务注册信息
@@ -184,46 +178,99 @@ func (r *RegistryInfo) MarshalZerologObject(e *zerolog.Event) {
 }
 
 type Register struct {
-	r      *Redis
-	key    string
+	// 不可修改
+	ctx context.Context
+	r   *Redis
+	key string
+
+	// 只有
+	mu     sync.Mutex
 	values []string
-	state  int32 // 注册状态 原子操作 0：未注册 1：注册中 2：已注册
-	ctx    context.Context
-	// 退出检查使用
-	quit chan int
+
+	state int32    // 注册状态 原子操作 0：未注册 1：注册中 2：已注册
+	quit  chan int // 退出检查使用
 }
 
 // key是按照zset写入
 func (r *Redis) CreateRegister(key string, cfg *RegistryInfo) *Register {
 	register := &Register{
+		ctx:    context.WithValue(utils.CtxNolog(context.TODO()), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
 		r:      r,
 		key:    key,
 		values: []string{},
 		state:  0,
-		ctx:    context.WithValue(context.WithValue(context.TODO(), CtxKey_nolog, 1), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
 		quit:   make(chan int),
 	}
-	// 生成注册的value
-	register.values = append(register.values, strings.Join([]string{cfg.RegistryName, cfg.RegistryID, cfg.RegistryAddr, strconv.Itoa(cfg.RegistryPort), cfg.RegistryScheme}, RegSep))
-	log.Info().Str("Info", strings.Join(register.values, ",")).Msg("RedisRegister Create success")
+	if cfg != nil {
+		// 生成注册的value
+		register.values = append(register.values, strings.Join([]string{cfg.RegistryName, cfg.RegistryID, cfg.RegistryAddr, strconv.Itoa(cfg.RegistryPort), cfg.RegistryScheme}, RegSep))
+	}
 	return register
 }
 
-func (r *Redis) CreateRegisterEx(key string, cfgs []*RegistryInfo) *Register {
+func (r *Redis) CreateRegisters(key string, cfgs []*RegistryInfo) *Register {
 	register := &Register{
+		ctx:    context.WithValue(utils.CtxNolog(context.TODO()), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
 		r:      r,
 		key:    key,
 		values: []string{},
 		state:  0,
-		ctx:    context.WithValue(context.WithValue(context.TODO(), CtxKey_nolog, 1), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
 		quit:   make(chan int),
 	}
 	// 生成注册的value
 	for _, cfg := range cfgs {
 		register.values = append(register.values, strings.Join([]string{cfg.RegistryName, cfg.RegistryID, cfg.RegistryAddr, strconv.Itoa(cfg.RegistryPort), cfg.RegistryScheme}, RegSep))
 	}
-	log.Info().Str("Info", strings.Join(register.values, ",")).Msg("RedisRegister Create success")
 	return register
+}
+
+func (r *Register) Add(cfg *RegistryInfo) error {
+	value := strings.Join([]string{cfg.RegistryName, cfg.RegistryID, cfg.RegistryAddr, strconv.Itoa(cfg.RegistryPort), cfg.RegistryScheme}, RegSep)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, v := range r.values {
+		if v == value {
+			return nil // 存在了
+		}
+	}
+
+	if atomic.LoadInt32(&r.state) != 0 {
+		args := []interface{}{RegExprieTime, "add", value}
+		err := r.zadd(args)
+		if err != nil {
+			log.Error().Str("Info", value).Msg("RedisRegister Add")
+			return err
+		}
+	}
+	r.values = append(r.values, value)
+
+	log.Info().Str("Info", value).Msg("RedisRegister Add")
+	return nil
+}
+
+func (r *Register) Remove(cfg *RegistryInfo) error {
+	value := strings.Join([]string{cfg.RegistryName, cfg.RegistryID, cfg.RegistryAddr, strconv.Itoa(cfg.RegistryPort), cfg.RegistryScheme}, RegSep)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, v := range r.values {
+		if v == value {
+
+			if atomic.LoadInt32(&r.state) != 0 {
+				args := []interface{}{RegExprieTime, "rem", value}
+				err := r.zrem(args)
+				if err != nil {
+					log.Error().Str("Info", value).Msg("RedisRegister Remove")
+					return err
+				}
+			}
+
+			r.values = append(r.values[:i], r.values[i+1:]...)
+
+			log.Info().Str("Info", value).Msg("RedisRegister Remove")
+			return nil
+		}
+	}
+	return nil
 }
 
 func (r *Register) Reg() error {
@@ -239,10 +286,17 @@ func (r *Register) Reg() error {
 	}
 
 	// 先写一次Redis，确保能注册成功
-	err := r.zadd()
-	if err != nil {
-		atomic.StoreInt32(&r.state, 0)
-		return err
+	// 生成注册的value
+	if len(r.values) > 0 {
+		args := []interface{}{RegExprieTime, "reg"}
+		for _, v := range r.values {
+			args = append(args, v)
+		}
+		err := r.zadd(args)
+		if err != nil {
+			atomic.StoreInt32(&r.state, 0)
+			return err
+		}
 	}
 
 	// 开启协程
@@ -272,11 +326,28 @@ func (r *Register) loop() {
 		timer := time.NewTimer(time.Duration(RegExprieTime) / 2 * time.Second)
 		select {
 		case <-timer.C:
-			r.zadd()
+			if len(r.values) > 0 {
+				args := []interface{}{RegExprieTime, "update"}
+				r.mu.Lock()
+				for _, v := range r.values {
+					args = append(args, v)
+				}
+				r.zadd(args)
+				r.mu.Unlock()
+			}
 
 		case <-r.quit:
 			// 删除写的Redis
-			r.zrem()
+			if len(r.values) > 0 {
+				args := []interface{}{RegExprieTime, "quit"}
+				r.mu.Lock()
+				for _, v := range r.values {
+					args = append(args, v)
+				}
+				r.zrem(args)
+				r.mu.Unlock()
+			}
+
 			r.quit <- 1
 
 			if !timer.Stop() {
@@ -290,38 +361,26 @@ func (r *Register) loop() {
 	}
 }
 
-func (r *Register) zadd() error {
+// args第一个倒计时，其他是values
+// 线程安全
+func (r *Register) zadd(args []interface{}) error {
 	ctx := context.WithValue(r.ctx, CtxKey_cmddesc, "Register")
-	ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	listKey := fmt.Sprintf(regListFmt, r.key)    // 服务器列表
-	channel := fmt.Sprintf(regChannelFmt, r.key) // 广播channel
-	keys := []string{r.key, listKey}
-	args := []interface{}{RegExprieTime * 1000, channel}
-	for _, v := range r.values {
-		args = append(args, v)
-	}
-	cmd := r.r.DoScript(ctx, registerScirpt, keys, args...)
+	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
+	cmd := r.r.DoScript(ctx, registerScirpt, []string{r.key}, args...)
 	if cmd.Err() != nil {
 		// 错误了 在来一次
-		cmd = r.r.DoScript(ctx, registerScirpt, keys, args...)
+		cmd = r.r.DoScript(ctx, registerScirpt, []string{r.key}, args...)
 	}
 	return cmd.Err()
 }
 
-func (r *Register) zrem() error {
+func (r *Register) zrem(args []interface{}) error {
 	ctx := context.WithValue(r.ctx, CtxKey_cmddesc, "Register")
-	ctx = context.WithValue(ctx, utils.CtxKey_caller, utils.GetCallerDesc(1))
-	listKey := fmt.Sprintf(regListFmt, r.key)    // 服务器列表
-	channel := fmt.Sprintf(regChannelFmt, r.key) // 广播channel
-	keys := []string{r.key, listKey}
-	args := []interface{}{RegExprieTime * 1000, channel}
-	for _, v := range r.values {
-		args = append(args, v)
-	}
-	cmd := r.r.DoScript(ctx, deregisterScirpt, keys, args...)
+	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
+	cmd := r.r.DoScript(ctx, deregisterScirpt, []string{r.key}, args...)
 	if cmd.Err() != nil {
 		// 错误了 在来一次
-		cmd = r.r.DoScript(ctx, deregisterScirpt, keys, args...)
+		cmd = r.r.DoScript(ctx, deregisterScirpt, []string{r.key}, args...)
 	}
 	return cmd.Err()
 }

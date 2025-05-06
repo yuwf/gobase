@@ -11,37 +11,18 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/yuwf/gobase/httprequest"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )
 
-// 使用飞书报警 飞书的机器人webhook
-var (
-	feishuConf feishuConfig
-)
-
-type feishuConfig struct {
-	sync.RWMutex
-	// 配置层设置 SetAlertAddr
-	alertAddr  string // 报警地址
-	secret     string // 秘钥
-	serverName string // 本服务器名
-}
-
-// 报警地址由配置层来填充
-func SetFeiShuAddr(addr, secret, serverName string) {
-	feishuConf.Lock()
-	defer feishuConf.Unlock()
-	feishuConf.alertAddr = addr
-	feishuConf.secret = secret
-	feishuConf.serverName = serverName
-}
-
-func SendFeiShuAlert(format string, a ...interface{}) {
+func SendFeiShuAlert(addr *AlertAddr, format string, a ...interface{}) {
+	if addr == nil || len(addr.Addr) == 0 {
+		return
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -52,45 +33,34 @@ func SendFeiShuAlert(format string, a ...interface{}) {
 			}
 		}()
 
-		var addr string
-		feishuConf.RLock()
-		defer feishuConf.RUnlock()
-		addr = feishuConf.alertAddr
-		if len(addr) == 0 {
-			return
-		}
 		hostname, _ := os.Hostname()
-		title := fmt.Sprintf("%s %s", hostname, feishuConf.serverName)
-		body := genFeiShuCardData(title, feishuConf.secret, format, a...)
+		title := fmt.Sprintf("%s %s", hostname, ParamConf.Get().ServerName)
+		body := genFeiShuCardData(title, addr.Secret, format, a...)
 
 		type response struct {
 			Code int    `json:"code"`
 			Msg  string `json:"msg"`
 		}
-		ctx := context.WithValue(context.TODO(), httprequest.CtxKey_nolog, 1)
-		httprequest.JsonRequest[response](ctx, "POST", feishuConf.alertAddr, body, nil)
+		ctx := utils.CtxCaller(context.TODO(), 1)
+		httprequest.JsonRequest[response](ctx, "POST", addr.Addr, body, nil)
 	}()
 }
 
 // 不开启协程 等待http送达返回后 函数结束
-func SendFeiShuAlert2(format string, a ...interface{}) {
-	var addr string
-	feishuConf.RLock()
-	defer feishuConf.RUnlock()
-	addr = feishuConf.alertAddr
-	if len(addr) == 0 {
+func SendFeiShuAlert2(addr *AlertAddr, format string, a ...interface{}) {
+	if addr == nil || len(addr.Addr) == 0 {
 		return
 	}
 	hostname, _ := os.Hostname()
-	title := fmt.Sprintf("%s %s", hostname, feishuConf.serverName)
-	body := genFeiShuCardData(title, feishuConf.secret, format, a...)
+	title := fmt.Sprintf("%s %s", hostname, ParamConf.Get().ServerName)
+	body := genFeiShuCardData(title, addr.Secret, format, a...)
 
 	type response struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 	}
-	ctx := context.WithValue(context.TODO(), httprequest.CtxKey_nolog, 1)
-	httprequest.JsonRequest[response](ctx, "POST", addr, body, nil)
+	ctx := utils.CtxCaller(context.TODO(), 1)
+	httprequest.JsonRequest[response](ctx, "POST", addr.Addr, body, nil)
 }
 
 /*func genFeiShuData(secret string, format string, a ...interface{}) interface{} {

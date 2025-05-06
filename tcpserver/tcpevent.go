@@ -79,4 +79,7 @@ type TCPHook[ClientInfo any] interface {
 	OnSendMsg(tc *TCPClient[ClientInfo], msgId string, len int)
 	// 接受消息数据
 	OnRecvMsg(tc *TCPClient[ClientInfo], msgId string, len int)
+
+	// 定时调用
+	OnTick()
 }

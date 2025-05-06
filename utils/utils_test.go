@@ -1,11 +1,23 @@
 package utils
 
 import (
+	"bytes"
 	"fmt"
-	"reflect"
+	"runtime"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
+	"unsafe"
+
+	"github.com/petermattis/goid"
 )
+
+func BenchmarkDelete(b *testing.B) {
+	t := []int{30}
+	t2 := Delete(t, 20)
+	fmt.Println(t, t2)
+}
 
 func BenchmarkRandStr(b *testing.B) {
 	fmt.Println(RandString(32))
@@ -28,11 +40,86 @@ func BenchmarkSequence(b *testing.B) {
 		n := i
 		seq.Submit(func() {
 			if n == 10 {
-				panic("no")
+				panic("no") // 不会输出10
 			}
+			time.Sleep(time.Second)
 			fmt.Println(n)
 		})
 	}
+	time.Sleep(time.Minute)
+}
+
+func GetGID() uint64 {
+	b := make([]byte, 64)
+	b = b[:runtime.Stack(b, false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	n, _ := strconv.ParseUint(string(b), 10, 64)
+	return n
+}
+
+func BenchmarkGID(b *testing.B) {
+	entry := time.Now()
+	for i := 0; i < 1000000; i++ {
+		GetGID()
+	}
+	fmt.Println("1=", time.Since(entry))
+
+	entry = time.Now()
+	for i := 0; i < 1000000; i++ {
+		goid.Get()
+	}
+	fmt.Println("2=", time.Since(entry))
+}
+
+func BenchmarkGroupSequence1(b *testing.B) {
+	var seq GroupSequence
+	for i := 0; i < 20; i++ {
+		n := i
+		seq.Submit(RandString(10), func() {
+			fmt.Println(goid.Get(), n)
+		})
+	}
+	time.Sleep(time.Second * 10)
+}
+
+func BenchmarkGroupSequence2(b *testing.B) {
+	var seq GroupSequence
+	for i := 0; i < 20; i++ {
+		n := i
+		seq.Submit("my", func() {
+			if n == 10 {
+				panic("no") // 不会输出10
+			}
+			time.Sleep(time.Second)
+			fmt.Println("my", n)
+		})
+	}
+	for i := 0; i < 20; i++ {
+		n := i
+		seq.Submit("my2", func() {
+			time.Sleep(time.Second * 2)
+			fmt.Println("    my2", n)
+		})
+	}
+	time.Sleep(time.Minute)
+}
+
+func BenchmarkGroupSequenceDebug(b *testing.B) {
+	var seq GroupSequence
+	key := RandString(10)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	seq.Submit(key, func() {
+		fmt.Println(goid.Get(), "begin")
+		time.Sleep(time.Second * 4)
+		fmt.Println(goid.Get(), "end")
+		wg.Done()
+	})
+	wg.Wait()
+	seq.Submit(key, func() {
+		fmt.Println(goid.Get(), "do it")
+	})
 	time.Sleep(time.Second * 10)
 }
 
@@ -86,44 +173,65 @@ func BenchmarkStructReflect(b *testing.B) {
 	}
 
 	sInfo, err := GetStructInfoByTag(t, "redis")
-	v := sInfo.TagElemtFmt()
+	v := sInfo.TagsSlice()
 
 	fmt.Println(len(v), v, err)
 }
 
-func BenchmarkInterfaceToValue(b *testing.B) {
-	type S struct {
-		F1  int         `json:"f1"`
-		Fs  string      `json:"fs"`
-		Fbs []byte      `json:"fbs"`
-		Fi  interface{} `json:"fi"`
-		// Fc  chan interface{} `json:"fc"` 不支持json化
+func BenchmarkNTP(b *testing.B) {
+	for i := 0; i < 1000; i++ {
+		NtpTime()
+		fmt.Println(ntpServers[0].Addr, ntpServers[0].avgTime)
 	}
-	s := S{
-		F1:  1,
-		Fs:  "fss",
-		Fbs: []byte{'1', '2', '3'},
-		Fi:  map[string]string{"11": "22"},
-		// Fc: make(chan interface{}),
+}
+
+func BenchmarkStruct(b *testing.B) {
+	type Test struct {
+		Id         int       `db:"Id" json:"Id,omitempty"`                             //自增住建  不可为空
+		CreateTime time.Time `db:"create_time" redis:"ct" json:"CreateTime,omitempty"` //用户ID  redis 记录ct
+		UpdateTime time.Time `db:"update_time" redis:"ut" json:"UpdateTime,omitempty"` //用户ID  redis 记录ut
+		UID        int       `db:"UID" redis:"U" json:"UID,omitempty"`                 //用户ID  redis 记录U
+		Type       int       `db:"Type" json:"Type,omitempty"`                         //用户ID  不可为空
+		Name       string    `db:"Name" json:"Name,omitempty"`                         //名字  不可为空
+		Age        int       `db:"Age" json:"Age,omitempty"`                           //年龄
+		Mark       *string   `db:"Mark" json:"Mark,omitempty"`                         //标记 可以为空
 	}
-	var arr = [...]byte{'a', 'b', 'c'}
-	var str string
 
-	//
-	sli1 := []byte{'a', 'b'}
-	sli2 := []byte{}
-	err := InterfaceToValue(sli1, reflect.ValueOf(&sli2))
-	fmt.Println(err, sli2)
+	st, _ := GetStructTypeByTag[Test]("db")
 
-	// Array to String
-	err = InterfaceToValue(&arr, reflect.ValueOf(&str))
-	fmt.Println(err, str)
+	t := &Test{Id: 100, Name: "abc"}
+	ts, _ := GetStructInfoByStructType(t, st)
+	t.Age = 123
+	fmt.Println(ts.ElemsSlice())
 
-	// Struct to
-	err = InterfaceToValue(&s, reflect.ValueOf(&str))
-	fmt.Println(err, str)
-	ss := S{}
-	err = InterfaceToValue(str, reflect.ValueOf(&ss))
-	fmt.Println(err, ss)
+	entry := time.Now()
+	for i := 0; i < 100000; i++ {
+		t := &Test{Id: 100, Name: "abc"}
+		st.InstanceElemsSlice(t)
+	}
+	fmt.Println(time.Since(entry))
+
+	entry = time.Now()
+	for i := 0; i < 100000; i++ {
+		t := &Test{Id: 100, Name: "abc"}
+		st.InstanceElemsSliceUnSafe(unsafe.Pointer(t))
+	}
+	fmt.Println(time.Since(entry))
+
+	entry = time.Now()
+	for i := 0; i < 100000; i++ {
+		t := &Test{Id: 100, Name: "abc"}
+		ts, _ := GetStructInfoByStructType(t, st)
+		ts.ElemsSlice()
+	}
+	fmt.Println(time.Since(entry))
+
+	entry = time.Now()
+	for i := 0; i < 100000; i++ {
+		t := &Test{Id: 100, Name: "abc"}
+		ts, _ := GetStructInfoByTag(t, "db")
+		ts.ElemsSlice()
+	}
+	fmt.Println(time.Since(entry))
 
 }
