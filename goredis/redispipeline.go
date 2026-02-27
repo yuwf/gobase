@@ -4,6 +4,7 @@ package goredis
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/yuwf/gobase/utils"
 
@@ -27,7 +28,6 @@ func (r *Redis) NewPipeline() *RedisPipeline {
 
 // 统一的命令
 func (p *RedisPipeline) Cmd(ctx context.Context, args ...interface{}) *RedisCommond {
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	redisCmd := &RedisCommond{
 		ctx: ctx,
 	}
@@ -36,7 +36,6 @@ func (p *RedisPipeline) Cmd(ctx context.Context, args ...interface{}) *RedisComm
 }
 
 func (p *RedisPipeline) Do2(ctx context.Context, args ...interface{}) *RedisCommond {
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	redisCmd := &RedisCommond{
 		ctx: ctx,
 	}
@@ -44,14 +43,13 @@ func (p *RedisPipeline) Do2(ctx context.Context, args ...interface{}) *RedisComm
 	return redisCmd
 }
 
-// 此函数提交的管道命令，不会产生nil的错误
+// 此函数提交的管道命令，返回值不会产生产生redis.nil的错误, 但各自Cmd里面依然会产生，如果要避免，需要再Cmd里面也设置CtxKey_nonilerr
 func (p *RedisPipeline) ExecNoNil(ctx context.Context) ([]redis.Cmder, error) {
 	return p.Pipeliner.Exec(context.WithValue(ctx, CtxKey_nonilerr, 1))
 }
 
 // 管道结合脚本，管道先按evalsha执行，管道中所有命令执行完之后，如果有脚本未加载的错误就再执行一次，所以这种管道无法保证命令顺序
 func (p *RedisPipeline) Script(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *redis.Cmd {
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	redisCmd := &RedisCommond{
 		ctx: ctx,
 	}
@@ -73,7 +71,6 @@ func (p *RedisPipeline) Script(ctx context.Context, script *RedisScript, keys []
 }
 
 func (p *RedisPipeline) Script2(ctx context.Context, script *RedisScript, keys []string, args ...interface{}) *RedisCommond {
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	redisCmd := &RedisCommond{
 		ctx: ctx,
 	}
@@ -97,14 +94,13 @@ func (p *RedisPipeline) Script2(ctx context.Context, script *RedisScript, keys [
 
 // 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMGetObj(ctx context.Context, key string, v interface{}) error {
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	redisCmd := &RedisCommond{
 		ctx: ctx,
 	}
 	// 获取结构数据
 	sInfo, err := utils.GetStructInfoByTag(v, RedisTag)
 	if err != nil {
-		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMSetObj Param error")
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMGetObj Param error")
 		return err
 	}
 	if len(sInfo.Tags) == 0 {
@@ -121,7 +117,6 @@ func (p *RedisPipeline) HMGetObj(ctx context.Context, key string, v interface{})
 
 // 参数v 参考Redis.HMGetObj的说明
 func (p *RedisPipeline) HMSetObj(ctx context.Context, key string, v interface{}) error {
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	sInfo, err := utils.GetStructInfoByTag(v, RedisTag)
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(err).Msg("RedisPipeline HMSetObj Param error")
@@ -134,6 +129,28 @@ func (p *RedisPipeline) HMSetObj(ctx context.Context, key string, v interface{})
 	// 组织参数
 	args := []interface{}{"hmset", key}
 	args = append(args, fargs...)
+	cmd := p.Pipeliner.Do(ctx, args...)
+	return cmd.Err()
+}
+
+func (p *RedisPipeline) SetJson(ctx context.Context, key string, v interface{}) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("Redis SetJson Param error")
+		return err
+	}
+	args := []interface{}{"set", key, b}
+	cmd := p.Pipeliner.Do(ctx, args...)
+	return cmd.Err()
+}
+
+func (p *RedisPipeline) HSetJson(ctx context.Context, key, field string, v interface{}) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		utils.LogCtx(log.Error(), ctx).Err(err).Msg("Redis SetJson Param error")
+		return err
+	}
+	args := []interface{}{"hset", key, field, b}
 	cmd := p.Pipeliner.Do(ctx, args...)
 	return cmd.Err()
 }

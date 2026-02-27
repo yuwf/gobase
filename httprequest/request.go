@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -123,6 +125,10 @@ func JsonRequest[T any](ctx context.Context, method, addr string, body interface
 	t := new(T)
 	call.Err = json.Unmarshal(call.RespData, t)
 	if call.Err != nil {
+		if call.Resp != nil && call.Resp.StatusCode != http.StatusOK {
+			call.Err = errors.New(call.Resp.Status)
+			return call.Resp.StatusCode, nil, call.Err
+		}
 		call.errPos = "Unmarshal error"
 		return call.Resp.StatusCode, nil, call.Err
 	}
@@ -256,6 +262,10 @@ func (h *HttpRequest) call_(ctx context.Context) {
 	if h.Header != nil {
 		request.Header = h.Header
 	}
+	// traceId透传
+	if traceId := ctx.Value(utils.CtxKey_traceId); traceId != nil {
+		request.Header.Set(utils.HttpTraceIdHeader, fmt.Sprintf("%d", traceId.(int64)))
+	}
 
 	// 请求
 	var client *http.Client
@@ -376,9 +386,9 @@ func (h *HttpRequest) log(ctx context.Context, logLevel int, elapsed time.Durati
 		l = l.Interface("reqheader", h.Header)
 	}
 	if h.Body != nil {
-		l = utils.LogHttpInterface(l, h.Header, "req", h.Body, ParamConf.Get().BodyLogLimit)
+		l = utils.LogHttpInterface(l, h.Header, "req", h.Body, ParamConf.Get().LogMaxLimit)
 	} else if len(h.Data) > 0 {
-		l = utils.LogHttpBody(l, h.Header, "req", h.Data, ParamConf.Get().BodyLogLimit)
+		l = utils.LogHttpBody(l, h.Header, "req", h.Data, ParamConf.Get().LogMaxLimit)
 	}
 	if h.Resp != nil {
 		l.Int("status", h.Resp.StatusCode)
@@ -386,9 +396,9 @@ func (h *HttpRequest) log(ctx context.Context, logLevel int, elapsed time.Durati
 			l = l.Interface("respheader", h.Resp.Header)
 		}
 		if h.RespBody != nil {
-			l = utils.LogHttpInterface(l, h.Resp.Header, "resp", h.RespBody, ParamConf.Get().BodyLogLimit)
+			l = utils.LogHttpInterface(l, h.Resp.Header, "resp", h.RespBody, ParamConf.Get().LogMaxLimit)
 		} else if len(h.RespData) > 0 {
-			l = utils.LogHttpBody(l, h.Resp.Header, "resp", h.RespData, ParamConf.Get().BodyLogLimit)
+			l = utils.LogHttpBody(l, h.Resp.Header, "resp", h.RespData, ParamConf.Get().LogMaxLimit)
 		}
 	}
 	l.Msg(msg)

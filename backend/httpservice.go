@@ -14,6 +14,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	HttpStatus_All     int = -1 // 不存在该状态 用于一些接口的获取参数
+	HttpStatus_Conning int = 0  // 发现配置 链接中 此状态目前没有哈希环
+	HttpStatus_Conned  int = 1  // 连接成功
+)
+
 // T是和业务相关的客户端信息结构
 type HttpService[ServiceInfo any] struct {
 	// 不可修改
@@ -21,7 +27,7 @@ type HttpService[ServiceInfo any] struct {
 	conf    *ServiceConfig          // 服务器发现的配置
 	address string                  // 地址
 	info    *ServiceInfo            // 客户端信息 内容修改需要外层加锁控制
-	state   int32                   // 状态检查 0：未连接 1：检查OK 原子操作
+	status  int32                   // 状态检查 TcpStatus
 
 	// 外部要求退出
 	quit     chan int // 退出chan 外部写 内部读
@@ -67,29 +73,26 @@ func (hs *HttpService[ServiceInfo]) InfoI() interface{} {
 	return hs.info
 }
 
-// 0:健康 1:没连接成功
-func (hs *HttpService[ServiceInfo]) HealthState() int {
-	if atomic.LoadInt32(&hs.state) != 1 {
-		return 1
-	}
-	return 0
+// HttpStatus
+func (hs *HttpService[ServiceInfo]) HealthStatus() int {
+	return int(atomic.LoadInt32(&hs.status))
 }
 
 func (hs *HttpService[ServiceInfo]) loopTick() {
-	cheackAddr := fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)
+	checkAddr := fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)
 	add := false
 	for {
 		// 健康检查 只是检查端口能不能通
-		err := tcp.TcpPortCheck(cheackAddr, time.Second*3)
+		err := tcp.TcpPortCheck(checkAddr, time.Second*3)
 		if err == nil {
-			atomic.StoreInt32(&hs.state, 1)
+			atomic.StoreInt32(&hs.status, int32(HttpStatus_Conned))
 			// 能连通
 			if !add {
 				add = true
 				hs.onDialSuccess()
 			}
 		} else {
-			atomic.StoreInt32(&hs.state, 0)
+			atomic.StoreInt32(&hs.status, int32(HttpStatus_Conning))
 			if add {
 				add = false
 				hs.onDisConnect(err)
@@ -132,10 +135,8 @@ func (hs *HttpService[ServiceInfo]) onDialSuccess() {
 		Str("Addr", fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)).
 		Msg("HttpService connect success")
 
-	// 添加到哈希环中
-	if hs.HealthState() == 0 {
-		hs.g.addHashring(hs.conf.ServiceId, hs.conf.RoutingTag)
-	}
+	// 修改连接版本号
+	hs.g.hb.addConnVersion(hs.conf.ServiceName)
 
 	// 回调
 	func() {
@@ -154,7 +155,8 @@ func (hs *HttpService[ServiceInfo]) onDisConnect(err error) {
 		Str("Addr", fmt.Sprintf("%s:%d", hs.conf.ServiceAddr, hs.conf.ServicePort)).
 		Msg("HttpService connect fail")
 
-	hs.g.removeHashring(hs.conf.ServiceId)
+	// 修改连接版本号
+	hs.g.hb.addConnVersion(hs.conf.ServiceName)
 
 	// 回调
 	func() {

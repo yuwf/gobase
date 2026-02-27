@@ -29,7 +29,7 @@ func (l *ChangeListener) addWatch(namespace, key string, f func(value interface{
 	})
 }
 
-//OnChange 增加变更监控
+// OnChange 增加变更监控
 func (l *ChangeListener) OnChange(event *storage.ChangeEvent) {
 	l.Lock()
 	watchs := l.watchs
@@ -44,7 +44,7 @@ func (l *ChangeListener) OnChange(event *storage.ChangeEvent) {
 	}
 }
 
-//OnNewestChange 监控最新变更
+// OnNewestChange 监控最新变更
 func (l *ChangeListener) OnNewestChange(event *storage.FullChangeEvent) {
 
 }

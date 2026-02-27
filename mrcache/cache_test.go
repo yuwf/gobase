@@ -34,23 +34,22 @@ func (m TestJ) Value() (driver.Value, error) {
 
 // db中
 type Test struct {
-	Id         int       `db:"Id" json:"Id,omitempty"`                              //自增住建  不可为空
-	CreateTime time.Time `db:"create_time" redis:"ct" json:"create_time,omitempty"` //用户ID  redis 记录ct
-	UpdateTime time.Time `db:"update_time" redis:"ut" json:"update_time,omitempty"` //用户ID  redis 记录ut
-	UID        int       `db:"UID" redis:"U" json:"UID,omitempty"`                  //用户ID  redis 记录U
-	Type       int       `db:"Type" json:"Type,omitempty"`                          //用户ID  不可为空
-	GroupType  string    `db:"GroupType" json:"GroupType,omitempty"`                //用户ID  不可为空
-	Name       string    `db:"Name" json:"Name,omitempty"`                          //名字  不可为空
-	Age        int       `db:"Age" json:"Age,omitempty"`                            //年龄
-	Mark       *string   `db:"Mark" json:"Mark,omitempty"`                          //标记 可以为空
-	Json       *TestJ    `db:"Json" json:"Json,omitempty"`                          //标记 可以为空
+	Id         int               `db:"Id" json:"Id,omitempty"`                              //自增住建  不可为空
+	CreateTime time.Time         `db:"create_time" redis:"ct" json:"create_time,omitempty"` //用户ID  redis 记录ct
+	UpdateTime time.Time         `db:"update_time" redis:"ut" json:"update_time,omitempty"` //用户ID  redis 记录ut
+	UID        int               `db:"UID" redis:"U" json:"UID,omitempty"`                  //用户ID  redis 记录U
+	Type       int               `db:"Type" json:"Type,omitempty"`                          //用户ID  不可为空
+	GroupType  string            `db:"GroupType" json:"GroupType,omitempty"`                //用户ID  不可为空
+	Name       string            `db:"Name" json:"Name,omitempty"`                          //名字  不可为空
+	Age        int               `db:"Age" json:"Age,omitempty"`                            //年龄
+	Mark       *string           `db:"Mark" json:"Mark,omitempty"`                          //标记 可以为空
+	Json       *TestJ            `db:"Json" json:"Json,omitempty"`                          //标记 可以为空
+	Int64s     mysql.JsonInt64s  `db:"Int64s" json:"Int64s,omitempty"`
+	Strs       mysql.JsonStrings `db:"Strs" json:"Strs,omitempty"`
 }
 
 var cacheRow *CacheRow[Test]
 var cacheRows *CacheRows[Test]
-var cacheColumn *CacheColumn[Test, *int]
-var cacheColumnJ *CacheColumn[Test, TestJ]
-var cacheColumnS *CacheColumn[Test, string]
 
 func init() {
 	DBNolog = false // 输出底层日志
@@ -66,7 +65,7 @@ func init() {
 		DB:     10,
 	}
 
-	ctx := utils.CtxNolog(context.TODO())
+	ctx := utils.CtxSetNolog(context.TODO())
 
 	_, err := mysql.InitDefaultMySQL(mysqlCfg)
 	if err != nil {
@@ -108,6 +107,8 @@ func init() {
 		Age int DEFAULT NULL COMMENT '年龄',
 		Mark varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci COMMENT '标记',
 		Json JSON NULL COMMENT '标记',
+		Int64s JSON NULL COMMENT '',
+		Strs JSON NULL COMMENT '',
 		PRIMARY KEY (Id),
 		UNIQUE KEY uk_UID_Type (UID,Type)
 	) ENGINE=InnoDB AUTO_INCREMENT=11019 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -176,55 +177,6 @@ func init() {
 		log.Error().Err(err).Msg("ConfigIncrement Err")
 		return
 	}
-
-	// 列
-	cacheColumn, err = NewCacheColumn[Test, *int](goredis.DefaultRedis(), mysql.DefaultMySQL(), "test", 0, 0, []string{"UID"}, []string{"Type"}, "Age")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigHashTag Err")
-		return
-	}
-	err = cacheColumn.ConfigHashTag("UID")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigHashTag Err")
-		return
-	}
-	err = cacheColumn.ConfigIncrement(goredis.DefaultRedis(), "Id")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigIncrement Err")
-		return
-	}
-
-	cacheColumnJ, err = NewCacheColumn[Test, TestJ](goredis.DefaultRedis(), mysql.DefaultMySQL(), "test", 0, 0, []string{"UID"}, []string{"Type"}, "Json")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigHashTag Err")
-		return
-	}
-	err = cacheColumnJ.ConfigHashTag("UID")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigHashTag Err")
-		return
-	}
-	err = cacheColumnJ.ConfigIncrement(goredis.DefaultRedis(), "Id")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigIncrement Err")
-		return
-	}
-
-	cacheColumnS, err = NewCacheColumn[Test, string](goredis.DefaultRedis(), mysql.DefaultMySQL(), "test", 0, 0, []string{"UID"}, []string{"Type"}, "Json")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigHashTag Err")
-		return
-	}
-	err = cacheColumnS.ConfigHashTag("UID")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigHashTag Err")
-		return
-	}
-	err = cacheColumnS.ConfigIncrement(goredis.DefaultRedis(), "Id")
-	if err != nil {
-		log.Error().Err(err).Msg("ConfigIncrement Err")
-		return
-	}
 }
 
 func BenchmarkRowGet(b *testing.B) {
@@ -243,18 +195,18 @@ func BenchmarkRowGet(b *testing.B) {
 	cacheRow.Get(context.TODO(), []interface{}{123, 110})
 }
 
-func BenchmarkRowGetAll(b *testing.B) {
+func BenchmarkRowGetsBySQLField(b *testing.B) {
 	if cacheRow == nil {
 		log.Error().Msg("init not success")
 		return
 	}
 
 	// 先删除
-	cacheRow.DelAllCache(context.TODO(), map[string]interface{}{"UID": 123})
+	cacheRow.DelsCacheBySQLField(context.TODO(), map[string]interface{}{"UID": 123})
 	// 读取
-	cacheRow.GetAll(context.TODO(), map[string]interface{}{"UID": 123})
+	cacheRow.GetsBySQLField(context.TODO(), map[string]interface{}{"GroupType": "G1"})
 	// 再次读取
-	cacheRow.GetAll(context.TODO(), map[string]interface{}{"UID": 123})
+	cacheRow.GetsBySQLField(context.TODO(), map[string]interface{}{"GroupType": "G1"})
 }
 
 func BenchmarkRowExist(b *testing.B) {
@@ -280,7 +232,7 @@ func BenchmarkRowAdd(b *testing.B) {
 	}
 
 	// 读取
-	cacheRow.GetAll(context.TODO(), map[string]interface{}{"UID": 123})
+	cacheRow.GetsBySQLField(context.TODO(), map[string]interface{}{"UID": 123})
 
 	// 先删除
 	cacheRow.Del(context.TODO(), []interface{}{124, 8})
@@ -312,7 +264,7 @@ func BenchmarkRowDel(b *testing.B) {
 	}
 
 	// 读取
-	cacheRow.GetAll(context.TODO(), map[string]interface{}{"UID": 123})
+	cacheRow.GetsBySQLField(context.TODO(), map[string]interface{}{"UID": 123})
 
 	// 删除
 	cacheRow.Del(context.TODO(), []interface{}{123, 8})
@@ -320,8 +272,8 @@ func BenchmarkRowDel(b *testing.B) {
 
 	cacheRow.Dels(context.TODO(), []interface{}{123, 5}, []interface{}{124, 6}, []interface{}{124, 9})
 
-	cacheRow.DelAll(context.TODO(), map[string]interface{}{"UID": 123})
-	cacheRow.DelAll(context.TODO(), map[string]interface{}{"UID": 124})
+	cacheRow.DelsBySQLField(context.TODO(), map[string]interface{}{"UID": 123})
+	cacheRow.DelsBySQLField(context.TODO(), map[string]interface{}{"UID": 124})
 }
 
 func BenchmarkRowSet(b *testing.B) {
@@ -333,6 +285,7 @@ func BenchmarkRowSet(b *testing.B) {
 	type SetTest struct {
 		Name string `db:"Name" json:"Name,omitempty"` //名字  不可为空
 		Age  int    `db:"Age" json:"Age,omitempty"`   //年龄
+		Json *TestJ `db:"Json" json:"Json,omitempty"` //标记 可以为空
 	}
 
 	// 先删除
@@ -448,7 +401,7 @@ func BenchmarkRowModify(b *testing.B) {
 
 	// 性能测试下 转化耗时
 	cacheRow.Get(context.TODO(), []interface{}{126, 2})
-	ctx := utils.CtxNolog(context.TODO())
+	ctx := utils.CtxSetNolog(context.TODO())
 	entry := time.Now()
 	for i := 0; i < 100000; i++ {
 		goredis.DefaultRedis().Do2(ctx, []interface{}{"hmget", "mrr_test_{126}_2", "Id", "ct", "ut", "U", "Type", "Name", "Age", "Mark"}...)
@@ -586,6 +539,25 @@ func BenchmarkRowsGet(b *testing.B) {
 	cacheRows.Get(context.TODO(), []interface{}{123}, []interface{}{100, "G1"})
 	// 不存在的
 	cacheRows.Get(context.TODO(), []interface{}{123}, []interface{}{9, "G1"})
+}
+
+func BenchmarkRowsGetBySQLField(b *testing.B) {
+	if cacheRows == nil {
+		log.Error().Msg("init not success")
+		return
+	}
+
+	// 先删除缓存
+	cacheRows.DelAllCache(context.TODO(), []interface{}{123})
+
+	cacheRows.GetBySQLField(context.TODO(), map[string]interface{}{"Name": "Name123_5"})
+	// 在获取一次
+	cacheRows.GetBySQLField(context.TODO(), map[string]interface{}{"Name": "Name123_5"})
+	// 不存在的
+	cacheRows.GetBySQLField(context.TODO(), map[string]interface{}{"Name": "Name123_555"})
+	cacheRows.GetBySQLField(context.TODO(), map[string]interface{}{"GroupType": "G1"})
+	// 不存在的
+	cacheRows.GetBySQLField(context.TODO(), map[string]interface{}{"NameA": "Name123_555"})
 }
 
 func BenchmarkRowsExist(b *testing.B) {
@@ -891,52 +863,42 @@ func BenchmarkRowsModify2(b *testing.B) {
 	time.Sleep(time.Second * 2)
 }
 
-/*
-func BenchmarkColumnGetAll(b *testing.B) {
-	if cacheRow == nil {
+func BenchmarkRowsJsonArrayFieldAdd(b *testing.B) {
+	if cacheRows == nil {
 		log.Error().Msg("init not success")
 		return
 	}
 
-	// 先删除
-	cacheColumn.DelAllCache(context.TODO(), []interface{}{123})
-	cacheColumnJ.DelAllCache(context.TODO(), []interface{}{123})
-	// 读取
-	cacheColumn.GetAll(context.TODO(), []interface{}{123})
-	cacheColumn.GetAll(context.TODO(), []interface{}{123})
-	cacheColumn.GetAll(context.TODO(), []interface{}{456}) // 不存在
+	// 先删除缓存
+	cacheRows.DelAllCache(context.TODO(), []interface{}{123})
 
-	cacheColumnJ.GetAll(context.TODO(), []interface{}{123})
-	cacheColumnJ.GetAll(context.TODO(), []interface{}{123})
-	cacheColumnJ.GetAll(context.TODO(), []interface{}{124}) // 不存在
+	// 设置一个存在的
+	data := map[string][]string{}
+	data["Strs"] = []string{"abc"}
+	cacheRows.JsonArrayFieldDel(context.TODO(), []interface{}{123}, []interface{}{9, "G1"}, data, CreateOptions().JsonArrayDuplicate())
 
-	cacheColumnS.DelAllCache(context.TODO(), []interface{}{123})
-	cacheColumnS.GetAll(context.TODO(), []interface{}{123})
-	cacheColumnS.GetAll(context.TODO(), []interface{}{123})
-	cacheColumnS.GetAll(context.TODO(), []interface{}{124}) // 不存在
-}
+	data["Strs"] = []string{"abc", "left"}
+	cacheRows.JsonArrayFieldAdd(context.TODO(), []interface{}{123}, []interface{}{9, "G1"}, data, nil)
+	data["Strs"] = []string{"abc", "abcd"}
+	cacheRows.JsonArrayFieldAdd(context.TODO(), []interface{}{123}, []interface{}{9, "G1"}, data, nil)
+	time.Sleep(time.Second * 2)
 
-func BenchmarkColumnGet(b *testing.B) {
-	if cacheRow == nil {
-		log.Error().Msg("init not success")
-		return
-	}
+	// 清除下缓存
+	cacheRows.DelAllCache(context.TODO(), []interface{}{123})
+	// abcd 应该加不进去
+	data["Strs"] = []string{"123", "abcd"}
+	cacheRows.JsonArrayFieldAdd(context.TODO(), []interface{}{123}, []interface{}{9, "G1"}, data, CreateOptions().JsonArrayDuplicate())
+	time.Sleep(time.Second * 2)
 
-	// 先删除
-	cacheColumn.DelAllCache(context.TODO(), []interface{}{123})
-	cacheColumnJ.DelAllCache(context.TODO(), []interface{}{123})
-	// 读取
-	cacheColumn.Get(context.TODO(), []interface{}{123}, 9)
-	cacheColumn.Get(context.TODO(), []interface{}{123}, 9)
-	//cacheColumn.Get(context.TODO(), []interface{}{123}, 20) // 不存在
+	data["Strs"] = []string{"123", "abcd"}
+	cacheRows.JsonArrayFieldDel(context.TODO(), []interface{}{123}, []interface{}{9, "G1"}, data, nil)
 
-	cacheColumnJ.Get(context.TODO(), []interface{}{123}, 9)
-	cacheColumnJ.Get(context.TODO(), []interface{}{123}, 9)
-	//cacheColumnJ.Get(context.TODO(), []interface{}{124}, 9) // 不存在
+	time.Sleep(time.Second * 2)
 
-	cacheColumnS.DelCache(context.TODO(), []interface{}{123}, 9)
-	cacheColumnS.Get(context.TODO(), []interface{}{123}, 9)
-	cacheColumnS.Get(context.TODO(), []interface{}{124}, 9) // 不存在
+	// abc 全删掉
+	data["Strs"] = []string{"abc"}
+	cacheRows.JsonArrayFieldDel(context.TODO(), []interface{}{123}, []interface{}{9, "G1"}, data, CreateOptions().JsonArrayDuplicate())
+
+	time.Sleep(time.Second * 2)
 
 }
-*/

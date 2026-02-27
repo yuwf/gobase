@@ -19,14 +19,14 @@ func HandlePanic() {
 	}
 }
 
-func HandlePanic2(paniccall func()) {
+func HandlePanic2(paniccall func(r any)) {
 	if r := recover(); r != nil {
 		buf := make([]byte, 4096)
 		l := runtime.Stack(buf, false)
 		err := fmt.Errorf("%v: %s", r, buf[:l])
 		log.Error().Err(err).Msg("Panic")
 		if paniccall != nil {
-			paniccall()
+			paniccall(r)
 		}
 	}
 }

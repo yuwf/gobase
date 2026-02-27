@@ -51,16 +51,29 @@ func Submit(task func()) {
 	if task == nil {
 		return
 	}
-	defaultAntsPool.Submit(task)
+	if defaultAntsPool.Submit(task) != nil {
+		// 任务提交失败，直接开启goruntine
+		go func() {
+			HandlePanic()
+			task()
+		}()
+	}
 }
 
 // 提交一个可以等待的任务
-func SubmitProcess(task func()) error {
+func SubmitProcess(task func()) {
+	if task == nil {
+		return
+	}
+
 	antWG.Add(1)
-	return defaultAntsPool.Submit(func() {
-		defer antWG.Done()
+
+	fun := func() {
+		defer antWG.Done() // 防止task崩溃，最好用defer
 		task()
-	})
+	}
+
+	Submit(fun)
 }
 
 // 等待提交的任务
@@ -89,9 +102,7 @@ type Sequence struct {
 	mutex sync.Mutex
 	tasks list.List
 	run   bool
-	// 正在执行的的分组任务
-	group   *GroupSequence
-	groupId string // 当前执行的groupId
+	done  chan struct{}
 }
 
 func (s *Sequence) Submit(task func()) {
@@ -107,29 +118,20 @@ func (s *Sequence) Submit(task func()) {
 	// 开启协成池调用handle
 	if !s.run {
 		s.run = true
-		defaultAntsPool.Submit(s.handle)
+		s.done = make(chan struct{})
+
+		Submit(s.handle)
 	}
 }
 
-func (s *Sequence) submitGroup(group *GroupSequence, task func()) bool {
-	s.mutex.Lock()         // 加锁
-	defer s.mutex.Unlock() // 退出时解锁
-
-	if s.group != group { // 可能最后一个任务恰好执行完，回收了
-		return false
+// 等待任务执行完成
+func (s *Sequence) Wait() {
+	if s.done != nil {
+		<-s.done
 	}
-
-	// 添加任务
-	s.tasks.PushBack(task)
-
-	// 开启协成池调用handle
-	if !s.run {
-		s.run = true
-		defaultAntsPool.Submit(s.handle)
-	}
-	return true
 }
 
+// 清空任务，清空的是未执行的任务
 func (s *Sequence) Clear() {
 	s.mutex.Lock()         // 加锁
 	defer s.mutex.Unlock() // 退出时解锁
@@ -152,12 +154,7 @@ func (s *Sequence) handle() {
 	if s.tasks.Len() == 0 {
 		// 这里的逻辑理论只有触发Clear函数才会走到
 		s.run = false
-		if s.group != nil {
-			s.group.seqs.Delete(s.groupId) // 先删除
-			s.group = nil                  // 置空
-			s.groupId = ""
-			sequenceGroupPool.Put(s)
-		}
+		close(s.done)
 		s.mutex.Unlock() // 解锁
 		return           // 退出
 	}
@@ -169,55 +166,112 @@ func (s *Sequence) handle() {
 		s.mutex.Lock() // 加锁
 		// 如果任务列表不为空继续开启下一个handle
 		if s.tasks.Len() > 0 {
-			defaultAntsPool.Submit(s.handle)
+			Submit(s.handle)
 		} else {
 			s.run = false
-			if s.group != nil {
-				s.group.seqs.Delete(s.groupId) // 先删除
-				s.group = nil                  // 置空
-				s.groupId = ""
-				sequenceGroupPool.Put(s)
-			}
+			close(s.done)
 		}
 		s.mutex.Unlock() // 解锁
 	}()
 
 	// 执行task
-	if task != nil {
-		task()
-	}
+	task()
 }
 
 type GroupSequence struct {
-	seqs sync.Map // groupId:*Sequence
+	mutex  sync.Mutex
+	groups map[interface{}]*Sequence
+	done   chan struct{}
 }
 
 // 提交一个顺序执行的任务，每个组顺序执行
-func (g *GroupSequence) Submit(groupId string, task func()) {
+func (g *GroupSequence) Submit(groupId interface{}, task func()) {
 	if task == nil {
 		return
 	}
-	gseq, ok := g.seqs.Load(groupId)
-	if ok {
-		seq := gseq.(*Sequence)
-		if seq.submitGroup(g, task) {
-			return
-		}
+
+	fun := func() {
+		// 任务执行完了，如果任务队列中空了，就删除该组，防止任务有崩溃，放到defer中调用
+		defer func() {
+			g.mutex.Lock()
+			defer g.mutex.Unlock()
+
+			seq := g.groups[groupId]
+			if seq.Len() == 0 {
+				sequenceGroupPool.Put(seq)
+				delete(g.groups, groupId)
+				if len(g.groups) == 0 {
+					close(g.done)
+				}
+			}
+		}()
+
+		// 执行任务
+		task()
 	}
 
-	for {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
+	if g.groups == nil {
+		g.groups = map[interface{}]*Sequence{}
+	}
+	if len(g.groups) == 0 {
+		g.done = make(chan struct{})
+	}
+
+	if seq, ok := g.groups[groupId]; ok {
+		seq.Submit(fun)
+	} else {
 		seq := sequenceGroupPool.Get().(*Sequence)
-		seq.group = g
-		seq.groupId = groupId
-		gseq, ok := g.seqs.LoadOrStore(groupId, seq)
-		if ok {
-			seq.group = nil
-			seq.groupId = ""
-			sequenceGroupPool.Put(seq) // 有别的协程设置了，此处回收
-			seq = gseq.(*Sequence)
-		}
-		if seq.submitGroup(g, task) {
-			return
-		} // 极端情况就是有一个相同的group任务执行完了，立刻结束了， 而gseq还记录是这个已删除的
+		g.groups[groupId] = seq
+		seq.Submit(fun)
+	}
+}
+
+func (g *GroupSequence) Wait() {
+	if g.done != nil {
+		<-g.done
+	}
+}
+
+func (g *GroupSequence) Len() int {
+	g.mutex.Lock()         // 加锁
+	defer g.mutex.Unlock() // 退出时解锁
+
+	if g.groups == nil {
+		return 0
+	}
+
+	l := 0
+	for _, seq := range g.groups {
+		l += seq.Len()
+	}
+	return l
+}
+
+func (g *GroupSequence) Clear(groupId interface{}) {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
+	if g.groups == nil {
+		return
+	}
+
+	if seq, ok := g.groups[groupId]; ok {
+		seq.Clear()
+	}
+}
+
+func (g *GroupSequence) ClearAll() {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
+	if g.groups == nil {
+		return
+	}
+
+	for _, seq := range g.groups {
+		seq.Clear()
 	}
 }

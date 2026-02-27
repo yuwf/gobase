@@ -194,7 +194,7 @@ type Register struct {
 // key是按照zset写入
 func (r *Redis) CreateRegister(key string, cfg *RegistryInfo) *Register {
 	register := &Register{
-		ctx:    context.WithValue(utils.CtxNolog(context.TODO()), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
+		ctx:    context.WithValue(utils.CtxSetNolog(context.TODO()), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
 		r:      r,
 		key:    key,
 		values: []string{},
@@ -210,7 +210,7 @@ func (r *Redis) CreateRegister(key string, cfg *RegistryInfo) *Register {
 
 func (r *Redis) CreateRegisters(key string, cfgs []*RegistryInfo) *Register {
 	register := &Register{
-		ctx:    context.WithValue(utils.CtxNolog(context.TODO()), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
+		ctx:    context.WithValue(utils.CtxSetNolog(context.TODO()), CtxKey_nonilerr, 1), // 不要日志 不要nil错误
 		r:      r,
 		key:    key,
 		values: []string{},
@@ -365,7 +365,6 @@ func (r *Register) loop() {
 // 线程安全
 func (r *Register) zadd(args []interface{}) error {
 	ctx := context.WithValue(r.ctx, CtxKey_cmddesc, "Register")
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	cmd := r.r.DoScript(ctx, registerScirpt, []string{r.key}, args...)
 	if cmd.Err() != nil {
 		// 错误了 在来一次
@@ -376,7 +375,6 @@ func (r *Register) zadd(args []interface{}) error {
 
 func (r *Register) zrem(args []interface{}) error {
 	ctx := context.WithValue(r.ctx, CtxKey_cmddesc, "Register")
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	cmd := r.r.DoScript(ctx, deregisterScirpt, []string{r.key}, args...)
 	if cmd.Err() != nil {
 		// 错误了 在来一次

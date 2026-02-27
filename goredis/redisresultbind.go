@@ -65,4 +65,9 @@ type RedisResultBind interface {
 	// SliceElemType 支持json格式化
 	// 传入的参数为Slice的地址 nil的Slice也可以
 	BindJsonObjSlice(v interface{}) error
+
+	// BindType : []Struct 或者 []*Struct
+	// SliceElemType 支持json格式化
+	// 传入的参数为Map的地址 nil的Map也可以
+	BindJsonObjMap(v interface{}) error
 }

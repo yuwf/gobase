@@ -43,7 +43,7 @@ func (c *CacheRow[T]) Get(ctx context.Context, condValues []interface{}) (_rst_ 
 		if _err_ != nil && _err_ != ErrNullData {
 			l.Err(_err_)
 		}
-		l.Interface(c.condFieldsLog, condValues).Interface("rst", _rst_).Msg("CacheRow Get")
+		l.Interface(c.condFieldsLog, condValues).Interface("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s Get", c.TableName())
 	}, ErrNullData)()
 
 	// 检查条件变量
@@ -51,12 +51,50 @@ func (c *CacheRow[T]) Get(ctx context.Context, condValues []interface{}) (_rst_ 
 	if err != nil {
 		return nil, err
 	}
-	return c.get(ctx, key, condValues, false)
+	return c.get(ctx, key, condValues, true, true)
 }
 
-// 第一步是否直接跳过Redis加载
-func (c *CacheRow[T]) get(ctx context.Context, key string, condValues []interface{}, ingnoreRedis bool) (_rst_ *T, _err_ error) {
-	if !ingnoreRedis {
+// 只读取Redis缓存数据
+// condValues：查询条件变量 condFields对应的值 顺序和对应的类型要一致
+// 返回值：是T结构类型的指针
+func (c *CacheRow[T]) GetFromRedis(ctx context.Context, condValues []interface{}) (_rst_ *T, _err_ error) {
+	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
+		if _err_ != nil && _err_ != ErrNullData {
+			l.Err(_err_)
+		}
+		l.Interface(c.condFieldsLog, condValues).Interface("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s GetFromRedis", c.TableName())
+	}, ErrNullData)()
+
+	// 检查条件变量
+	key, err := c.checkCondValuesGenKey(condValues)
+	if err != nil {
+		return nil, err
+	}
+	return c.get(ctx, key, condValues, true, false)
+}
+
+// 直接从数据库读取数据，外层可以结合GetsFromRedis
+// condValues：查询条件变量 condFields对应的值 顺序和对应的类型要一致
+// 返回值：是T结构类型的指针
+func (c *CacheRow[T]) GetFromSQL(ctx context.Context, condValues []interface{}) (_rst_ *T, _err_ error) {
+	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
+		if _err_ != nil && _err_ != ErrNullData {
+			l.Err(_err_)
+		}
+		l.Interface(c.condFieldsLog, condValues).Interface("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s GetFromSQL", c.TableName())
+	}, ErrNullData)()
+
+	// 检查条件变量
+	key, err := c.checkCondValuesGenKey(condValues)
+	if err != nil {
+		return nil, err
+	}
+	return c.get(ctx, key, condValues, false, true)
+}
+
+// redis: 是否从redis加载
+func (c *CacheRow[T]) get(ctx context.Context, key string, condValues []interface{}, redis, proLoad bool) (_rst_ *T, _err_ error) {
+	if redis {
 		// 从Redis中读取
 		redisParams := make([]interface{}, 0, 1+len(c.Tags))
 		redisParams = append(redisParams, c.expire)
@@ -64,44 +102,53 @@ func (c *CacheRow[T]) get(ctx context.Context, key string, condValues []interfac
 
 		dest := new(T)
 		destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
-		err := c.redis.DoScript2(ctx, rowGetScript, []string{key}, redisParams).BindValues(destInfo.Elemts)
+		err := c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowGetScript, []string{key}, redisParams...).BindValues(destInfo.Elemts)
 		if err == nil {
 			return dest, nil
 		}
+		// 如果后面不同sql中加载 如果有错直接返回
+		if !proLoad && err != nil {
+			return nil, err
+		}
 	}
 
-	// 其他情况不处理执行下面的预加载
-	preData, _, err := c.preLoad(ctx, key, condValues, nil)
-	if err != nil {
-		return nil, err
-	}
-	// 预加载的数据就是了
-	if preData != nil {
-		return preData, nil
+	if proLoad {
+		// 理执行下面的预加载
+		preData, _, err := c.preLoad(ctx, key, condValues, nil)
+		if err != nil {
+			return nil, err
+		}
+		// 预加载的数据就是了
+		if preData != nil {
+			return preData, nil
+		}
+
+		// 如果不是自己执行的预加载，这里重新读取下，正常来说这种情况很少
+		redisParams := make([]interface{}, 0, 1+len(c.Tags))
+		redisParams = append(redisParams, c.expire)
+		redisParams = append(redisParams, c.RedisTagsInterface()...)
+
+		dest := new(T)
+		destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
+		err = c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowGetScript, []string{key}, redisParams...).BindValues(destInfo.Elemts)
+		if err == nil {
+			return dest, nil
+		} else if goredis.IsNilError(err) {
+			return nil, ErrNullData
+		} else {
+			return nil, err
+		}
 	}
 
-	// 如果不是自己执行的预加载，这里重新读取下，正常来说这种情况很少
-	redisParams := make([]interface{}, 0, 1+len(c.Tags))
-	redisParams = append(redisParams, c.expire)
-	redisParams = append(redisParams, c.RedisTagsInterface()...)
-
-	dest := new(T)
-	destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
-	err = c.redis.DoScript2(ctx, rowGetScript, []string{key}, redisParams).BindValues(destInfo.Elemts)
-	if err == nil {
-		return dest, nil
-	} else if goredis.IsNilError(err) {
-		return nil, ErrNullData
-	}
-	return nil, err
+	return nil, nil // 理论上不会走到这里了
 }
 
 // 读取数据
 // condValuess：查询条件变量，要和condFields顺序和对应的类型一致
-// 返回值：[]*T
+// 返回值：[]*T, _err_==nil时大小和condValuess一致
 func (c *CacheRow[T]) Gets(ctx context.Context, condValuess ...[]interface{}) (_rst_ []*T, _err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Interface("rst", _rst_).Msg("CacheRow Gets")
+		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Array("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s Gets", c.TableName())
 	})()
 
 	for _, condValues := range condValuess {
@@ -112,22 +159,60 @@ func (c *CacheRow[T]) Gets(ctx context.Context, condValuess ...[]interface{}) (_
 		}
 	}
 
-	return c.gets(ctx, condValuess)
+	return c.gets(ctx, condValuess, true, true)
+}
+
+// 只读取Redis缓存数据，不同的CacheRow他们Redis一致，就可以使用此方法
+// condValuess：查询条件变量，每一个要和condFields顺序和对应的类型一致
+// 返回值：[]*T, _err_==nil时大小顺序和condValuess一致，不存在的填充nil
+func (c *CacheRow[T]) GetMultiFromRedis(ctx context.Context, condValuess ...[]interface{}) (_rst_ []*T, _err_ error) {
+	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
+		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Array("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s GetsFromRedis", c.TableName())
+	})()
+
+	for _, condValues := range condValuess {
+		// 检查条件变量
+		err := c.checkCondValues(condValues)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return c.gets(ctx, condValuess, true, false)
+}
+
+// 直接从数据库数据读取，外层可以结合GetsFromRedis使用优化性能
+// condValuess：查询条件变量，要和condFields顺序和对应的类型一致
+// 返回值：[]*T, _err_==nil时大小和condValuess一致
+func (c *CacheRow[T]) GetsFromSQL(ctx context.Context, condValuess ...[]interface{}) (_rst_ []*T, _err_ error) {
+	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
+		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Array("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s GetsFromSQL", c.TableName())
+	})()
+
+	for _, condValues := range condValuess {
+		// 检查条件变量
+		err := c.checkCondValues(condValues)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return c.gets(ctx, condValuess, false, true)
 }
 
 // 读取数据
-// condFieldValues：查询条件变量，field:value field必须在c.condFields中都存在
-// 每次先通过数据库查出条件索引来
+// condFieldValues：查询条件变量，field:value，强烈建议MySQL中要有这些字段的索引
+// 每次先通过数据库查出条件来
 // 返回值：[]*T
-func (c *CacheRow[T]) GetAll(ctx context.Context, condFieldValues map[string]interface{}) (_rst_ []*T, _err_ error) {
+func (c *CacheRow[T]) GetsBySQLField(ctx context.Context, condFieldValues map[string]interface{}) (_rst_ []*T, _err_ error) {
 	var condFields []string
 	var condValues []interface{}
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface("["+strings.Join(condFields, ",")+"]", condValues).Err(_err_).Interface("rst", _rst_).Msg("CacheRow GetAll")
+		l.Interface("["+strings.Join(condFields, ",")+"]", condValues).Err(_err_).Array("rst", utils.TruncatedLog(_rst_)).Msgf("CacheRow %s GetsBySQLField", c.TableName())
 	})()
 
 	var err error
-	condFields, condValues, err = c.checkCondFieldValues(condFieldValues)
+	condFields, condValues, err = c.checkFieldValues(condFieldValues)
 	if err != nil {
 		return nil, err
 	}
@@ -152,80 +237,93 @@ func (c *CacheRow[T]) GetAll(ctx context.Context, condFieldValues map[string]int
 		condValuess = append(condValuess, condValues)
 	}
 
-	return c.gets(ctx, condValuess)
+	// 防止有空数据，有可能上面查询出索引，数据库因其他情况删除了数据
+	res, err := c.gets(ctx, condValuess, true, true)
+	res = utils.DeleteOrdered(res, nil)
+	return res, err
 }
 
-func (c *CacheRow[T]) gets(ctx context.Context, condValuess [][]interface{}) (_rst_ []*T, _err_ error) {
+// 返回值和condValuess大小顺序一致
+// redis: 是否从redis加载
+// proLoad: 是否从mysql加载
+func (c *CacheRow[T]) gets(ctx context.Context, condValuess [][]interface{}, redis, proLoad bool) ([]*T, error) {
 	if len(condValuess) == 0 {
 		return make([]*T, 0), nil
 	}
 
 	// 查询结构
 	type Cond[T any] struct {
-		key        string
-		condValues []interface{}
-		redisParam []interface{}
-		data       *T // 绑定的对象
-		cmd        *goredis.RedisCommond
+		key  string
+		cmd  *goredis.RedisCommond // Redis执行的命令
+		data *T                    // 绑定的对象
 	}
-	conds := make([]*Cond[T], 0, len(condValuess))
-
-	// redis中读取，key分布不一样，用管道读取
-	pipeline := c.redis.NewPipeline()
-	for _, condValues := range condValuess {
+	conds := make([]*Cond[T], len(condValuess))
+	for i, condValues := range condValuess {
 		key := c.genCondValuesKey(condValues)
-		redisParam := append([]interface{}{"hmget", key}, c.RedisTagsInterface()...)
 		cond := &Cond[T]{
-			key:        key,
-			condValues: condValues,
-			redisParam: redisParam,
-			cmd:        pipeline.Do2(ctx, redisParam...),
+			key: key,
 		}
-		conds = append(conds, cond)
+		conds[i] = cond
 	}
-	_, err := pipeline.ExecNoNil(ctx)
-	if err == nil {
-		for _, cond := range conds {
-			dest := new(T)
-			destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
-			err := cond.cmd.BindValues(destInfo.Elemts)
-			if err == nil {
-				cond.data = dest
+
+	if redis {
+		// redis中读取，key分布不一样，用管道读取
+		pipeline := c.redis.NewPipeline()
+		for i := range conds {
+			redisParam := append([]interface{}{"hmget", conds[i].key}, c.RedisTagsInterface()...)
+			conds[i].cmd = pipeline.Do2(goredis.CtxNonilErrIgnore(ctx), redisParam...)
+		}
+		_, err := pipeline.Exec(goredis.CtxNonilErrIgnore(ctx))
+		if err == nil || goredis.IsNilError(err) {
+			for _, cond := range conds {
+				if cond.cmd.Cmd.Err() != nil {
+					continue
+				}
+				dest := new(T)
+				destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
+				err := cond.cmd.BindValues(destInfo.Elemts)
+				if err == nil {
+					cond.data = dest
+				}
 			}
 		}
-	}
-
-	// 未加载的数据 执行下面的预加载
-	needload := map[string][]interface{}{}
-	for _, cond := range conds {
-		if cond.data == nil {
-			needload[cond.key] = cond.condValues
-		}
-	}
-	if len(needload) > 0 {
-		preDatas, err := c.preLoads(ctx, needload)
-		if err != nil {
+		// 如果后面不同sql中加载 如果有错直接返回
+		if !proLoad && err != nil {
 			return nil, err
 		}
-		for k, data := range preDatas {
-			// 找到对应的cond
-			for _, cond := range conds {
-				if cond.key == k {
-					cond.data = data
-					break
+	}
+
+	if proLoad {
+		// 未加载的数据 执行下面的预加载
+		needload := map[string][]interface{}{}
+		for i, cond := range conds {
+			if cond.data == nil {
+				needload[cond.key] = condValuess[i]
+			}
+		}
+		if len(needload) > 0 {
+			preDatas, err := c.preLoads(ctx, needload)
+			if err != nil {
+				return nil, err
+			}
+			for k, data := range preDatas {
+				// 找到对应的cond
+				for _, cond := range conds {
+					if cond.key == k {
+						cond.data = data
+						break
+					}
 				}
 			}
 		}
 	}
 
-	res := make([]*T, 0)
-	for _, cond := range conds {
-		if cond.data != nil {
-			res = append(res, cond.data)
-		}
+	// 收集结果
+	res := make([]*T, len(condValuess))
+	for i, cond := range conds {
+		res[i] = cond.data
 	}
-
-	return res, err
+	return res, nil
 }
 
 // 读取数据
@@ -233,7 +331,7 @@ func (c *CacheRow[T]) gets(ctx context.Context, condValuess [][]interface{}) (_r
 // 返回值：是否存在
 func (c *CacheRow[T]) Exist(ctx context.Context, condValues []interface{}) (_rst_ bool, _err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", _rst_).Msg("CacheRow Exist")
+		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", _rst_).Msgf("CacheRow %s Exist", c.TableName())
 	})()
 
 	// 检查条件变量
@@ -287,7 +385,7 @@ func (c *CacheRow[T]) Exist(ctx context.Context, condValues []interface{}) (_rst
 // _err_ ： 操作失败
 func (c *CacheRow[T]) Add(ctx context.Context, condValues []interface{}, data interface{}, ops *Options) (_rst_ *T, _incr_ interface{}, _err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Interface("data", data).Err(_err_).Interface("rst", _rst_).Interface("incr", _incr_).Msg("CacheRow Add")
+		l.Interface(c.condFieldsLog, condValues).Interface("data", data).Err(_err_).Interface("rst", utils.TruncatedLog(_rst_)).Interface("incr", _incr_).Msgf("CacheRow %s Add", c.TableName())
 	})()
 
 	if dataM, ok := data.(map[string]interface{}); ok {
@@ -326,7 +424,7 @@ func (c *CacheRow[T]) add(ctx context.Context, condValues []interface{}, data ma
 		return nil, incrValue, nil
 	}
 
-	rst, err := c.get(ctx, key, condValues, true)
+	rst, err := c.get(ctx, key, condValues, false, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -338,7 +436,7 @@ func (c *CacheRow[T]) add(ctx context.Context, condValues []interface{}, data ma
 // 返回值：error
 func (c *CacheRow[T]) Del(ctx context.Context, condValues []interface{}) (_err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Err(_err_).Msg("CacheRow Del")
+		l.Interface(c.condFieldsLog, condValues).Err(_err_).Msgf("CacheRow %s Del", c.TableName())
 	})()
 
 	// 检查条件变量
@@ -371,7 +469,7 @@ func (c *CacheRow[T]) Del(ctx context.Context, condValues []interface{}) (_err_ 
 // 返回值：error
 func (c *CacheRow[T]) Dels(ctx context.Context, condValuess ...[]interface{}) (_err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Msg("CacheRow DelsCache")
+		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Msgf("CacheRow %s DelsCache", c.TableName())
 	})()
 
 	if len(condValuess) == 0 {
@@ -410,18 +508,18 @@ func (c *CacheRow[T]) Dels(ctx context.Context, condValuess ...[]interface{}) (_
 }
 
 // 删除数据
-// condFieldValues：查询条件变量，field:value field必须在c.condFields中都存在
-// 每次先通过数据库查出条件索引来
+// condFieldValues：查询条件变量，field:value，强烈建议MySQL中要有这些字段的索引
+// 每次先通过数据库查出条件来
 // 返回值：error
-func (c *CacheRow[T]) DelAll(ctx context.Context, condFieldValues map[string]interface{}) (_err_ error) {
+func (c *CacheRow[T]) DelsBySQLField(ctx context.Context, condFieldValues map[string]interface{}) (_err_ error) {
 	var condFields []string
 	var condValues []interface{}
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface("["+strings.Join(condFields, ",")+"]", condValues).Err(_err_).Msg("CacheRow DelAll")
+		l.Interface("["+strings.Join(condFields, ",")+"]", condValues).Err(_err_).Msgf("CacheRow %s DelsBySQLField", c.TableName())
 	})()
 
 	var err error
-	condFields, condValues, err = c.checkCondFieldValues(condFieldValues)
+	condFields, condValues, err = c.checkFieldValues(condFieldValues)
 	if err != nil {
 		return err
 	}
@@ -464,7 +562,7 @@ func (c *CacheRow[T]) DelAll(ctx context.Context, condFieldValues map[string]int
 // 返回值：error
 func (c *CacheRow[T]) DelCache(ctx context.Context, condValues []interface{}) (_err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Err(_err_).Msg("CacheRow DelCache")
+		l.Interface(c.condFieldsLog, condValues).Err(_err_).Msgf("CacheRow %s DelCache", c.TableName())
 	})()
 
 	// 检查条件变量
@@ -486,7 +584,7 @@ func (c *CacheRow[T]) DelCache(ctx context.Context, condValues []interface{}) (_
 // 返回值：error
 func (c *CacheRow[T]) DelsCache(ctx context.Context, condValuess ...[]interface{}) (_err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Msg("CacheRow DelsCache")
+		l.Interface(c.condFieldsLog, condValuess).Err(_err_).Msgf("CacheRow %s DelsCache", c.TableName())
 	})()
 
 	var keys []string
@@ -507,18 +605,18 @@ func (c *CacheRow[T]) DelsCache(ctx context.Context, condValuess ...[]interface{
 }
 
 // 只Cache删除数据
-// condFieldValues：查询条件变量，field:value field必须在c.condFields中都存在
-// 每次先通过数据库查出条件索引来
+// condFieldValues：查询条件变量，field:value，强烈建议MySQL中要有这些字段的索引
+// 每次先通过数据库查出条件来
 // 返回值：error
-func (c *CacheRow[T]) DelAllCache(ctx context.Context, condFieldValues map[string]interface{}) (_err_ error) {
+func (c *CacheRow[T]) DelsCacheBySQLField(ctx context.Context, condFieldValues map[string]interface{}) (_err_ error) {
 	var condFields []string
 	var condValues []interface{}
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface("["+strings.Join(condFields, ",")+"]", condValues).Err(_err_).Msg("CacheRow DelAllCache")
+		l.Interface("["+strings.Join(condFields, ",")+"]", condValues).Err(_err_).Msgf("CacheRow %s DelsCacheBySQLField", c.TableName())
 	})()
 
 	var err error
-	condFields, condValues, err = c.checkCondFieldValues(condFieldValues)
+	condFields, condValues, err = c.checkFieldValues(condFieldValues)
 	if err != nil {
 		return err
 	}
@@ -550,7 +648,7 @@ func (c *CacheRow[T]) DelAllCache(ctx context.Context, condFieldValues map[strin
 	return nil
 }
 
-// 写数据 ctx: CtxKey_NR, CtxKey_NEC
+// 写数据
 // condValues：查询条件变量 condFields对应的值 顺序和对应的类型要一致
 // data：修改内容
 // -     可以是【结构】或者【结构指针】或者【map[string]interface{}】
@@ -562,7 +660,7 @@ func (c *CacheRow[T]) DelAllCache(ctx context.Context, condFieldValues map[strin
 // _err_ ： 操作失败
 func (c *CacheRow[T]) Set(ctx context.Context, condValues []interface{}, data interface{}, ops *Options) (_rst_ *T, _incr_ interface{}, _err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", _rst_).Interface("incr", _incr_).Msg("CacheRow Set")
+		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", utils.TruncatedLog(_rst_)).Interface("incr", _incr_).Msgf("CacheRow %s Set", c.TableName())
 	})()
 
 	if dataM, ok := data.(map[string]interface{}); ok {
@@ -646,7 +744,7 @@ func (c *CacheRow[T]) setSave(ctx context.Context, key string, condValues []inte
 
 	// redis参数
 	redisParams := c.redisSetParam("null", data)
-	cmd := c.redis.DoScript2(ctx, rowModifyScript, []string{key}, redisParams...)
+	cmd := c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowModifyScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		// 同步mysql
 		mysqlUnlock = true
@@ -684,7 +782,7 @@ func (c *CacheRow[T]) setGetTSave(ctx context.Context, key string, condValues []
 
 	// redis参数
 	redisParams := c.redisSetGetParam("null", c.Tags, data, false)
-	cmd := c.redis.DoScript2(ctx, rowModifyGetScript, []string{key}, redisParams...)
+	cmd := c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowModifyGetScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		dest := new(T)
 		destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
@@ -727,7 +825,7 @@ func (c *CacheRow[T]) setGetTSave(ctx context.Context, key string, condValues []
 // _err_ ： 操作失败
 func (c *CacheRow[T]) Modify(ctx context.Context, condValues []interface{}, data interface{}, ops *Options) (_rst_ *T, _incr_ interface{}, _err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", _rst_).Interface("incr", _incr_).Msg("CacheRow Modify")
+		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", utils.TruncatedLog(_rst_)).Interface("incr", _incr_).Msgf("CacheRow %s Modify", c.TableName())
 	})()
 
 	if dataM, ok := data.(map[string]interface{}); ok {
@@ -818,7 +916,7 @@ func (c *CacheRow[T]) modify(ctx context.Context, condValues []interface{}, data
 // _err_ ： 操作失败
 func (c *CacheRow[T]) Modify2(ctx context.Context, condValues []interface{}, data interface{}, ops *Options) (_rst_ interface{}, _incr_ interface{}, _err_ error) {
 	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
-		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", _rst_).Interface("incr", _incr_).Msg("CacheRow Modify2")
+		l.Interface(c.condFieldsLog, condValues).Err(_err_).Interface("rst", _rst_).Interface("incr", _incr_).Msgf("CacheRow %s Modify2", c.TableName())
 	})()
 
 	if dataM, ok := data.(map[string]interface{}); ok {
@@ -937,7 +1035,7 @@ func (c *CacheRow[T]) modifyGetSave(ctx context.Context, key string, condValues 
 
 	// redis参数
 	redisParams := c.redisSetGetParam("null", modifydata.tags, modifydata.data, true)
-	cmd := c.redis.DoScript2(ctx, rowModifyGetScript, []string{key}, redisParams...)
+	cmd := c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowModifyGetScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		err := cmd.BindValues(modifydata.rsts)
 		if err == nil {
@@ -983,7 +1081,7 @@ func (c *CacheRow[T]) modifyGetTSave(ctx context.Context, key string, condValues
 
 	// redis参数
 	redisParams := c.redisSetGetParam("null", c.Tags, modifydata.data, true)
-	cmd := c.redis.DoScript2(ctx, rowModifyGetScript, []string{key}, redisParams...)
+	cmd := c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowModifyGetScript, []string{key}, redisParams...)
 	if cmd.Cmd.Err() == nil {
 		dest := new(T)
 		destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType)
@@ -1120,7 +1218,7 @@ func (c *CacheRow[T]) preLoads(ctx context.Context, condValuess map[string][]int
 
 			dest := new(T)
 			destInfo, _ := utils.GetStructInfoByStructType(dest, c.StructType) // 这里不用判断err了
-			err := c.redis.DoScript2(ctx, rowGetScript, []string{key}, redisParams).BindValues(destInfo.Elemts)
+			err := c.redis.DoScript2(goredis.CtxNonilErrIgnore(ctx), rowGetScript, []string{key}, redisParams...).BindValues(destInfo.Elemts)
 			if err == nil {
 				rst[key] = data
 			} else if !goredis.IsNilError(err) {

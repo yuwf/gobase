@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/yuwf/gobase/consul"
-	"github.com/yuwf/gobase/dispatch"
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/msger"
 	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/utils"
 
@@ -38,14 +38,15 @@ func (c *TcpServiceInfo) LastHeart() time.Time {
 }
 
 type TcpHandler struct {
-	dispatch.MsgDispatch[*utils.TestMsg, TcpService[TcpServiceInfo]]
 }
 
 func NewTcpHandler() *TcpHandler {
 	h := &TcpHandler{}
-	h.RegMsgID = utils.TestRegMsgID
-	h.RegMsg(h.onHeatBeatResp)
 	return h
+}
+
+func (h *TcpHandler) OnMsgReg(md *msger.MsgDispatch) {
+	md.RegMsg(utils.TestHeatBeatRespMsg.MsgID(), h.onHeatBeatResp)
 }
 
 func (h *TcpHandler) ConsulFilter(confs []*consul.RegistryInfo) []*ServiceConfig {
@@ -140,30 +141,24 @@ func (h *TcpHandler) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConf
 
 func (h *TcpHandler) OnConnected(ctx context.Context, ts *TcpService[TcpServiceInfo]) {
 	// 连接成功 发送心跳
-	ts.OnLogin() // 直接标记登录成功
+	ts.OnConnLogined(ctx) // 直接标记登录成功
 }
 
 func (h *TcpHandler) OnDisConnect(ctx context.Context, ts *TcpService[TcpServiceInfo]) {
 
 }
 
-func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (utils.RecvMsger, int, interface{}, error) {
+func (h *TcpHandler) DecodeMsg(ctx context.Context, data []byte, ts *TcpService[TcpServiceInfo]) (msger.RecvMsger, int, error) {
 	m, l, err := utils.TestDecodeMsg(data)
 	if err != nil {
-		return nil, len(data), nil, err
+		return nil, len(data), err
 	}
-	if m.Msgid == utils.TestHeatBeatRespMsg.Msgid {
-		return m, l, utils.TestHeatBeatReqMsg.Msgid, err
-	}
-	return m, l, nil, err
+
+	return m, l, err
 }
 
-func (h *TcpHandler) OnMsg(ctx context.Context, msg utils.RecvMsger, ts *TcpService[TcpServiceInfo]) {
-	m, _ := msg.(*utils.TestMsg)
-	if handle, _ := h.Dispatch(ctx, m, ts); handle {
-		return
-	}
-	log.Error().Str("Name", ts.ConnName()).Interface("Msg", msg).Msg("msg not handle")
+func (h *TcpHandler) OnMsg(ctx context.Context, mr msger.RecvMsger, ts *TcpService[TcpServiceInfo]) {
+	utils.LogCtx(log.Warn(), ctx).Interface("msger", mr).Msg("msg not handle")
 }
 
 func (h *TcpHandler) OnTick(ctx context.Context, ts *TcpService[TcpServiceInfo]) {
@@ -175,10 +170,11 @@ func (h *TcpHandler) OnTick(ctx context.Context, ts *TcpService[TcpServiceInfo])
 			//正常发送
 			//ts.SendMsg(utils.TestHeatBeatReqMsg)
 			//rpc方式发送，需要修改DecodeMsg来支持
-			_, err := ts.SendRPCMsg(ctx, utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5)
+			resp := &utils.TestHeatBeatResp{}
+			_, err := ts.SendRPCMsg(ctx, utils.TestHeatBeatReqMsg.Msgid, utils.TestHeatBeatReqMsg, time.Second*5, resp)
 			if err == nil {
 				//m, _ := resp.(*utils.TestMsg)
-				//utils.LogCtx(log.Debug(), ctx).Str("Name", ts.ConnName()).Interface("Msg", m).Msg("RecvRPCMsg")
+				//utils.LogCtx(log.Debug(), ctx).Interface("msger", m).Msg("RecvRPCMsg")
 			}
 		}
 	}
@@ -189,7 +185,8 @@ func (h *TcpHandler) onHeatBeatResp(ctx context.Context, msg *utils.TestHeatBeat
 }
 
 func BenchmarkTCPBackendConsul(b *testing.B) {
-	_, err := NewTcpBackendWithConsul[TcpServiceInfo]("127.0.0.1:8500", "gobase-test", NewTcpHandler())
+	h := NewTcpHandler()
+	_, err := NewTcpBackendWithConsul[TcpServiceInfo, utils.TestMsg]("127.0.0.1:8500", "gobase-test", h)
 	if err != nil {
 		return
 	}
@@ -209,7 +206,8 @@ func BenchmarkTCPBackendNacos(b *testing.B) {
 		return
 	}
 
-	_, err = NewTcpBackendWithNacos[TcpServiceInfo](nacosCli, "serviceN", "groupN", []string{}, NewTcpHandler())
+	h := NewTcpHandler()
+	_, err = NewTcpBackendWithNacos[TcpServiceInfo, utils.TestMsg](nacosCli, []string{"serviceN"}, "groupN", []string{}, h)
 	if err != nil {
 		return
 	}
@@ -222,7 +220,8 @@ func BenchmarkTCPBackendGoRedis(b *testing.B) {
 	var cfg = &goredis.Config{
 		Addrs: []string{"127.0.0.1:6379"},
 	}
-	_, err := NewTcpBackendWithGoRedis[TcpServiceInfo](cfg, "test-service", nil, NewTcpHandler())
+	h := NewTcpHandler()
+	_, err := NewTcpBackendWithGoRedis[TcpServiceInfo, utils.TestMsg](cfg, "test-service", nil, h)
 	if err != nil {
 		return
 	}

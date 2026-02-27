@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -148,7 +149,7 @@ func (gs *GinServer) RegHandler(method, path string, fun interface{}, optionsHan
 	if funType.NumIn() == 1 {
 		// 第二个参数必须是*gin.Context
 		if funType.In(0).String() != "*gin.Context" {
-			log.Error().Str("type", funType.In(1).String()).Msg("GinServer RegHandler, frist param num must be *gin.Context")
+			log.Error().Str("type", funType.In(0).String()).Msg("GinServer RegHandler, frist param num must be *gin.Context")
 			return
 		}
 	} else {
@@ -227,7 +228,7 @@ func (gs *GinServer) RegJsonHandler(method, path string, fun interface{}, option
 	}
 	if funType.NumIn() == 4 {
 		// 第三个参数必须是结构指针
-		if funType.In(3).Kind() != reflect.Ptr || funType.In(2).Elem().Kind() != reflect.Struct {
+		if funType.In(3).Kind() != reflect.Ptr || funType.In(3).Elem().Kind() != reflect.Struct {
 			log.Error().Str("type", funType.In(3).String()).Msg("GinServer RegHttpHandler, fourth param num must be *Struct")
 			return
 		}
@@ -352,8 +353,9 @@ func (w responseWriterWrapper) WriteString(s string) (int, error) {
 }
 
 func (gs *GinServer) context(c *gin.Context) {
-	ctx := context.WithValue(context.TODO(), utils.CtxKey_traceId, utils.GenTraceID())
-	ctx = context.WithValue(ctx, utils.CtxKey_msgId, c.Request.URL.Path)
+	traceIdStr := c.GetHeader(utils.HttpTraceIdHeader)
+	traceId, _ := strconv.ParseInt(traceIdStr, 10, 0)
+	ctx := utils.CtxSetTrace(context.TODO(), traceId, c.Request.URL.Path)
 	c.Set("ctx", ctx)
 }
 
@@ -432,7 +434,7 @@ func (gs *GinServer) handle(c *gin.Context) {
 
 func (gs *GinServer) handleNext(ctx context.Context, c *gin.Context, blw *responseWriterWrapper) {
 	// 外层部分的panic
-	defer utils.HandlePanic2(func() {
+	defer utils.HandlePanic2(func(r any) {
 		// 判断是否已经回复了
 		if c.Writer.Written() {
 			return
@@ -444,34 +446,6 @@ func (gs *GinServer) handleNext(ctx context.Context, c *gin.Context, blw *respon
 			c.AbortWithStatus(http.StatusInternalServerError)
 		}
 	})
-
-	// 消息超时检查
-	if ParamConf.Get().TimeOutCheck > 0 {
-		// 消息处理超时监控逻辑
-		msgDone := make(chan int, 1)
-		defer close(msgDone)
-
-		utils.Submit(func() {
-			timer := time.NewTimer(time.Duration(ParamConf.Get().TimeOutCheck) * time.Second)
-			select {
-			case <-msgDone:
-				if !timer.Stop() {
-					select {
-					case <-timer.C: // try to drain the channel
-					default:
-					}
-				}
-			case <-timer.C:
-				// 消息超时了
-				logHeadOut := true
-				logLevelHead := ParamConf.Get().GetLogLevelHead(c.Request.URL.Path, c.ClientIP())
-				if logLevelHead == int(zerolog.Disabled) || logLevelHead < int(zerolog.ErrorLevel) {
-					logHeadOut = false
-				}
-				gs.log(ctx, c, int(zerolog.ErrorLevel), logHeadOut, time.Duration(ParamConf.Get().TimeOutCheck), blw, "GinServer TimeOut")
-			}
-		})
-	}
 
 	c.Next()
 }

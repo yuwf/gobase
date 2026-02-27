@@ -19,8 +19,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func SendFeiShuAlert(addr *AlertAddr, format string, a ...interface{}) {
-	if addr == nil || len(addr.Addr) == 0 {
+func SendFeiShuAlert(addrs []*AlertAddr, format string, a ...interface{}) {
+	if len(addrs) == 0 {
 		return
 	}
 	go func() {
@@ -35,32 +35,43 @@ func SendFeiShuAlert(addr *AlertAddr, format string, a ...interface{}) {
 
 		hostname, _ := os.Hostname()
 		title := fmt.Sprintf("%s %s", hostname, ParamConf.Get().ServerName)
+		for _, addr := range addrs {
+			if len(addr.Addr) == 0 {
+				continue
+			}
+
+			body := genFeiShuCardData(title, addr.Secret, format, a...)
+
+			type response struct {
+				Code int    `json:"code"`
+				Msg  string `json:"msg"`
+			}
+			ctx := utils.CtxAddCaller(context.TODO(), 1)
+			httprequest.JsonRequest[response](ctx, "POST", addr.Addr, body, nil)
+		}
+	}()
+}
+
+// 不开启协程 等待http送达返回后 函数结束
+func SendFeiShuAlert2(addrs []*AlertAddr, format string, a ...interface{}) {
+	if len(addrs) == 0 {
+		return
+	}
+	hostname, _ := os.Hostname()
+	title := fmt.Sprintf("%s %s", hostname, ParamConf.Get().ServerName)
+	for _, addr := range addrs {
+		if len(addr.Addr) == 0 {
+			continue
+		}
 		body := genFeiShuCardData(title, addr.Secret, format, a...)
 
 		type response struct {
 			Code int    `json:"code"`
 			Msg  string `json:"msg"`
 		}
-		ctx := utils.CtxCaller(context.TODO(), 1)
+		ctx := utils.CtxAddCaller(context.TODO(), 1)
 		httprequest.JsonRequest[response](ctx, "POST", addr.Addr, body, nil)
-	}()
-}
-
-// 不开启协程 等待http送达返回后 函数结束
-func SendFeiShuAlert2(addr *AlertAddr, format string, a ...interface{}) {
-	if addr == nil || len(addr.Addr) == 0 {
-		return
 	}
-	hostname, _ := os.Hostname()
-	title := fmt.Sprintf("%s %s", hostname, ParamConf.Get().ServerName)
-	body := genFeiShuCardData(title, addr.Secret, format, a...)
-
-	type response struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-	}
-	ctx := utils.CtxCaller(context.TODO(), 1)
-	httprequest.JsonRequest[response](ctx, "POST", addr.Addr, body, nil)
 }
 
 /*func genFeiShuData(secret string, format string, a ...interface{}) interface{} {

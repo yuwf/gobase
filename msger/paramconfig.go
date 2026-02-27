@@ -1,18 +1,18 @@
-package dispatch
+package msger
 
 // https://github.com/yuwf/gobase
 
 import (
 	"github.com/yuwf/gobase/loader"
-	"github.com/yuwf/gobase/utils"
 
 	"github.com/afex/hystrix-go/hystrix"
 )
 
 // 参数配置
 type ParamConfig struct {
-	MsgLogLevel  utils.MsgLogLevel `json:"msgloglevel,omitempty"`  // 消息日志级别
-	RegFuncShort bool              `json:"logfuncshort,omitempty"` // 函数名使用简短一些，否则就是类似dispatch.(*Server).onTestHeatBeatResp
+	LogLevel     LogLevel `json:"loglevel,omitempty"`     // 消息日志级别
+	RegFuncShort bool     `json:"logfuncshort,omitempty"` // 函数名使用简短一些，否则就是类似dispatch.(*Server).onTestHeatBeatResp
+	LogMaxLimit  int      `json:"logmaxlimit,omitempty"`  // 日志限制 <=0 表示不限制
 
 	TimeOutCheck int `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
 	// Timeout: 执行 command 的超时时间 单位为毫秒
@@ -26,6 +26,7 @@ type ParamConfig struct {
 var ParamConf loader.JsonLoader[ParamConfig]
 
 func (c *ParamConfig) Create() {
+	c.LogMaxLimit = 4096 // 4KB body日志限制
 }
 
 func (c *ParamConfig) Normalize() {

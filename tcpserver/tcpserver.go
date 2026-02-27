@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yuwf/gobase/msger"
 	"github.com/yuwf/gobase/tcp"
 	"github.com/yuwf/gobase/utils"
 
@@ -23,6 +24,8 @@ import (
 // ClientInfo是和业务相关的客户端信息结构类型
 type TCPServer[ClientId any, ClientInfo any] struct {
 	*tcp.TCPConnEvenHandle
+	// 消息分发
+	*msger.MsgDispatch
 	// 不可需改
 	Address string // 监听地址
 	Scheme  string // scheme支持tcp和ws，为空表示tcp
@@ -53,9 +56,15 @@ type tClient[ClientId any, ClientInfo any] struct {
 }
 
 // 创建服务器
-func NewTCPServer[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo]) (*TCPServer[ClientId, ClientInfo], error) {
+// Msg表示消息类型，必须实现util.Msger接口，否则消息无法分发
+func NewTCPServer[ClientId any, ClientInfo any, Msg any](port int, event TCPEvent[ClientInfo]) (*TCPServer[ClientId, ClientInfo], error) {
+	md, err := msger.NewMsgDispatch[Msg, TCPClient[ClientInfo]]()
+	if err != nil {
+		return nil, err
+	}
 	s := &TCPServer[ClientId, ClientInfo]{
 		TCPConnEvenHandle: new(tcp.TCPConnEvenHandle),
+		MsgDispatch:       md,
 		Address:           fmt.Sprintf(":%d", port),
 		event:             event,
 		state:             0,
@@ -64,20 +73,25 @@ func NewTCPServer[ClientId any, ClientInfo any](port int, event TCPEvent[ClientI
 		quit:              make(chan int),
 	}
 
-	var err error
 	s.listener, err = tcp.NewTCPListener(s.Address, s)
 	if err != nil {
 		log.Error().Err(err).Str("Addr", s.Address).Msg("NewTCPServer error")
 		return nil, err
 	}
+
 	// 开启tick协程
 	go s.loopTick()
 	return s, nil
 }
 
-func NewTCPServerWithWS[ClientId any, ClientInfo any](port int, event TCPEvent[ClientInfo], certFile, keyFile string) (*TCPServer[ClientId, ClientInfo], error) {
+func NewTCPServerWithWS[ClientId any, ClientInfo any, Msg any](port int, event TCPEvent[ClientInfo], certFile, keyFile string) (*TCPServer[ClientId, ClientInfo], error) {
+	md, err := msger.NewMsgDispatch[Msg, TCPClient[ClientInfo]]()
+	if err != nil {
+		return nil, err
+	}
 	s := &TCPServer[ClientId, ClientInfo]{
 		TCPConnEvenHandle: new(tcp.TCPConnEvenHandle),
+		MsgDispatch:       md,
 		Address:           fmt.Sprintf(":%d", port),
 		Scheme:            "ws",
 		event:             event,
@@ -109,6 +123,7 @@ func NewTCPServerWithWS[ClientId any, ClientInfo any](port int, event TCPEvent[C
 			return nil, err
 		}
 	}
+
 	// 开启tick协程
 	go s.loopTick()
 	return s, nil
@@ -164,6 +179,11 @@ func (s *TCPServer[ClientId, ClientInfo]) Start(reusePort bool) error {
 	if !atomic.CompareAndSwapInt32(&s.state, 0, 1) {
 		log.Error().Str("Addr", s.Address).Msg("TCPServer already Start")
 		return nil
+	}
+
+	// 先让外层注册消息
+	if s.event != nil {
+		s.event.OnMsgReg(s.MsgDispatch)
 	}
 
 	err := s.listener.Start(reusePort)
@@ -242,11 +262,11 @@ func (s *TCPServer[ClientId, ClientInfo]) RemoveClient(id ClientId) *TCPClient[C
 
 // 主动关闭 不会回调event的OnDisConnect
 // 使用TCPClient.Close会回调OnDisConnect
-func (s *TCPServer[ClientId, ClientInfo]) CloseClient(id ClientId) {
+func (s *TCPServer[ClientId, ClientInfo]) CloseClient(id ClientId, err error) {
 	client, ok := s.clientMap.Load(id)
 	if ok {
 		tc := client.(*tClient[ClientId, ClientInfo]).tc
-		log.Info().Str("Name", tc.ConnName()).Msg("OnClosed CloseClient") // 日志为OnClosed 便于和下面的OnClosed统一查找
+		log.Info().Err(err).Msgf("Closed CloseClient %s", tc.ConnName()) // 日志为Closed 便于和下面的OnClosed统一查找
 		s.connMap.Delete(tc.conn)
 		s.clientMap.Delete(id)
 		tc.Close(nil) // 会回调TCPServer的OnClosed 所以上面先删除对象
@@ -256,7 +276,7 @@ func (s *TCPServer[ClientId, ClientInfo]) CloseClient(id ClientId) {
 		func() {
 			defer utils.HandlePanic()
 			for _, h := range s.hook {
-				h.OnDisConnect(tc, true, nil)
+				h.OnDisConnect(tc, true, err)
 			}
 		}()
 	}
@@ -269,26 +289,6 @@ func (s *TCPServer[ClientId, ClientInfo]) RangeClient(f func(tc *TCPClient[Clien
 		tc := tclient.tc
 		return f(tc)
 	})
-}
-
-func (s *TCPServer[ClientId, ClientInfo]) Send(ctx context.Context, id ClientId, data []byte) error {
-	client, ok := s.clientMap.Load(id)
-	if ok {
-		return client.(*tClient[ClientId, ClientInfo]).tc.Send(ctx, data)
-	}
-	err := fmt.Errorf("not exist client %v", id)
-	utils.LogCtx(log.Debug(), ctx).Err(err).Int("Size", len(data)).Msg("Send error")
-	return err
-}
-
-func (s *TCPServer[ClientId, ClientInfo]) SendMsg(ctx context.Context, id ClientId, msg utils.SendMsger) error {
-	client, ok := s.clientMap.Load(id)
-	if ok {
-		return client.(*tClient[ClientId, ClientInfo]).tc.SendMsg(ctx, msg)
-	}
-	err := fmt.Errorf("not exist client %v", id)
-	utils.LogCtx(log.Debug(), ctx).Err(err).Interface("Msg", msg).Msg("SendMsg error")
-	return err
 }
 
 func (s *TCPServer[ClientId, ClientInfo]) ConnCount() (int, int) {
@@ -310,14 +310,14 @@ func (s *TCPServer[ClientId, ClientInfo]) ClientCount() int {
 }
 
 // 队列中还未处理的消息
-func (s *TCPServer[ClientId, ClientInfo]) RecvSeqCount() int {
-	l := 0
+func (s *TCPServer[ClientId, ClientInfo]) RecvSeqCount() map[string]int {
+	rst := map[string]int{}
 	s.connMap.Range(func(key, value interface{}) bool {
-		tclient := value.(*tClient[ClientId, ClientInfo])
-		l += tclient.tc.RecvSeqCount()
+		tc := value.(*tClient[ClientId, ClientInfo]).tc
+		rst[tc.ConnName()] = tc.RecvSeqCount()
 		return true
 	})
-	return l
+	return rst
 }
 
 // 注册hook
@@ -336,7 +336,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	}
 
 	conn, _ := tcp.NewTCPConned(c, s)
-	tc := newTCPClient(conn, s.event, s.hook)
+	tc := newTCPClient(conn, s.event, s.MsgDispatch, s.hook)
 	if s.Scheme == "ws" {
 		tc.ctx = context.WithValue(tc.ctx, CtxKey_WS, 1)
 		tc.wsh = newTCPWSHandler(tc)
@@ -344,12 +344,21 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	client := &tClient[ClientId, ClientInfo]{
 		tc: tc,
 	}
-	// 如果clientName还为空 就用client里面的id来表示
-	if client.tc.connName == nil {
+	// 给gc.connName赋值 优先调用对象的ClientName函数
+	connName := func() string {
+		name := fmt.Sprintf("%v", client.id)
+		if len(name) == 0 || name == "0" {
+			return tc.removeAddr.String()
+		}
+		return tc.removeAddr.String() + "-" + name
+	}
+	tc.connName = connName
+	namer, ok := any(tc.info).(ClientNamer)
+	if ok {
 		tc.connName = func() string {
-			name := fmt.Sprintf("%v", client.id)
+			name := namer.ClientName()
 			if len(name) == 0 || name == "0" {
-				return tc.removeAddr.String()
+				return connName()
 			}
 			return name
 		}
@@ -357,7 +366,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	s.connMap.Store(conn, client)
 	if s.event != nil {
 		tc.seq.Submit(func() {
-			ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ctx := utils.CtxSetTrace(tc.ctx, 0, "Connected")
 			s.event.OnConnected(ctx, tc)
 		})
 	}
@@ -380,14 +389,14 @@ func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn
 			if tc.closeReason != nil {
 				err = tc.closeReason
 			}
-			log.Info().Err(err).Str("Name", tc.ConnName()).Str("RemoveAddr", tc.removeAddr.String()).Msg("OnDisConnect")
+			log.Info().Err(err).Str("RemoveAddr", tc.removeAddr.String()).Msgf("OnDisConnect %s", tc.ConnName())
 		}
 		s.connMap.Delete(c)
 		_, delClient := s.clientMap.LoadAndDelete(client.(*tClient[ClientId, ClientInfo]).id)
 		tc.clear()
 		if s.event != nil {
 			tc.seq.Submit(func() {
-				ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+				ctx := utils.CtxSetTrace(tc.ctx, 0, "DisConnected")
 				s.event.OnDisConnect(ctx, tc)
 			})
 		}
@@ -403,34 +412,6 @@ func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn
 	return nil
 }
 
-func (s *TCPServer[ClientId, ClientInfo]) OnClose(c *tcp.TCPConn) {
-	client, ok := s.connMap.Load(c)
-	if ok {
-		tc := client.(*tClient[ClientId, ClientInfo]).tc
-		logOut := !ParamConf.Get().IsIgnoreIp(tc.removeAddr.String())
-		if logOut {
-			log.Info().Err(tc.closeReason).Str("Name", tc.ConnName()).Str("RemoveAddr", tc.removeAddr.String()).Msg("OnClosed")
-		}
-		s.connMap.Delete(c)
-		_, delClient := s.clientMap.LoadAndDelete(client.(*tClient[ClientId, ClientInfo]).id)
-		tc.clear()
-		if s.event != nil {
-			tc.seq.Submit(func() {
-				ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
-				s.event.OnDisConnect(ctx, tc)
-			})
-		}
-
-		// 回调
-		func() {
-			defer utils.HandlePanic()
-			for _, h := range s.hook {
-				h.OnDisConnect(tc, delClient, tc.closeReason)
-			}
-		}()
-	}
-}
-
 func (s *TCPServer[ClientId, ClientInfo]) OnRecv(data []byte, c *tcp.TCPConn) (int, error) {
 	client, ok := s.connMap.Load(c)
 	if ok {
@@ -441,7 +422,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnRecv(data []byte, c *tcp.TCPConn) (i
 		func() {
 			defer utils.HandlePanic()
 			for _, h := range s.hook {
-				h.OnRecv(tc, len(data))
+				h.OnRecvData(tc, len(data))
 			}
 		}()
 
@@ -481,7 +462,7 @@ func (s *TCPServer[ClientId, ClientInfo]) OnSend(data []byte, c *tcp.TCPConn) ([
 		func() {
 			defer utils.HandlePanic()
 			for _, h := range s.hook {
-				h.OnSend(tc, len(data))
+				h.OnSendData(tc, len(data))
 			}
 		}()
 	}
@@ -508,8 +489,7 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 			s.connMap.Range(func(key, value interface{}) bool {
 				tclient := value.(*tClient[ClientId, ClientInfo])
 				tc := tclient.tc
-				ctx := context.WithValue(tc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
-				ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
+				ctx := utils.CtxSetTrace(tc.ctx, 0, "Tick")
 				tc.seq.Submit(func() {
 					s.event.OnTick(ctx, tc)
 				})

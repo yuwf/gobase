@@ -26,7 +26,12 @@ func init() {
 	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
 		slice := strings.Split(file, "/")
 		if len(slice) >= 2 {
-			return slice[len(slice)-2] + "/" + slice[len(slice)-1] + ":" + strconv.Itoa(line) + "-" + strconv.FormatInt(goid.Get(), 10)
+			caller := slice[len(slice)-2] + "/" + slice[len(slice)-1] + ":" + strconv.Itoa(line)
+			if logwrite.consoleStyle != nil {
+				// 控制台样式输出才输出goid
+				caller += "-" + strconv.FormatInt(goid.Get(), 10)
+			}
+			return caller
 		}
 		return file + ":" + strconv.Itoa(line) + "-" + strconv.FormatInt(goid.Get(), 10)
 	}
@@ -36,16 +41,23 @@ func init() {
 	log.Logger = zerolog.New(console).With().Timestamp().Caller().Logger()
 }
 
-func InitLog(prefix string) error {
+func InitLog(prefix string) (func(), error) {
 	// 默认值
 	SetLevel(0)
 	EnableStdout()
 
 	//默认用同步的，异步需要配置环境变量LOG_ASYNC
+	exit := func() {
+		log.Info().Msg("Log exist success")
+	}
 	if os.Getenv("LOG_ASYNC") == "1" {
 		logwrite.locker = new(nulllock)
 		asyncWriteLog = diode.NewWriter(logwrite, 32*1024, 0, func(missed int) {})
 		log.Logger = zerolog.New(asyncWriteLog).With().Timestamp().Caller().Logger()
+		exit = func() {
+			log.Info().Msg("Log exist exit")
+			asyncWriteLog.Close()
+		}
 	} else {
 		logwrite.locker = new(sync.Mutex)
 		log.Logger = zerolog.New(logwrite).With().Timestamp().Caller().Logger()
@@ -53,7 +65,7 @@ func InitLog(prefix string) error {
 	logwrite.prefix = prefix
 	logwrite.createFile()
 	log.Info().Msg("Log init success")
-	return nil
+	return exit, nil
 }
 
 func Stop() {
@@ -89,4 +101,12 @@ func EnableStdoutStyle() {
 // 关闭
 func DisableStdoutStyle() {
 	logwrite.consoleStyle = nil
+}
+
+func WriteLogFile() string {
+	return logwrite.fileName()
+}
+
+func WriteLogFileIsConsoleStyle() bool {
+	return logwrite.consoleStyle != nil
 }

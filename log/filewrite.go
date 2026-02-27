@@ -14,7 +14,7 @@ import (
 type filewrite struct {
 	locker       sync.Locker            // 文件锁
 	file         *os.File               // 日志文件
-	console      *zerolog.ConsoleWriter // 控制台输出，样式 2023-07-01 09:29:55.878 INF log/log.go:52 > Log init success
+	console      *zerolog.ConsoleWriter // 控制台输出，样式 2023-07-01 09:29:55.878-goid INF log/log.go:52 > Log init success
 	consoleStyle *zerolog.ConsoleWriter // 输出到file中日志格式使用console样式
 	prefix       string                 // 日志名后缀
 	path         string                 // 文件路径
@@ -64,7 +64,7 @@ func (f *filewrite) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-//先停止Write 在close
+// 先停止Write 在close
 func (f *filewrite) close() {
 	f.locker.Lock()
 	defer f.locker.Unlock()
@@ -89,5 +89,9 @@ func (f *filewrite) createFile() {
 }
 
 func (f *filewrite) fileName() string {
+	return fmt.Sprintf("%s%s_%s.log", f.path, time.Now().Format("2006-01-02"), f.prefix)
+}
+
+func (f *filewrite) cons() string {
 	return fmt.Sprintf("%s%s_%s.log", f.path, time.Now().Format("2006-01-02"), f.prefix)
 }

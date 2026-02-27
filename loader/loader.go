@@ -38,3 +38,11 @@ type Creater interface {
 type Normalizer interface {
 	Normalize()
 }
+
+type Unmarshal interface {
+	Unmarshal(data []byte) error
+}
+
+type Marshal interface {
+	Marshal() ([]byte, error)
+}

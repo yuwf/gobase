@@ -50,21 +50,23 @@ func InitAlert() func(sendAlert bool) {
 	}
 }
 
-func checkSendAlert(msg string) *AlertAddr {
+func checkSendAlert(msg string) []*AlertAddr {
 	alertConf := ParamConf.Get()
+	var addrs []*AlertAddr
 	for _, conf := range alertConf.Configs {
+		if conf.isIgnore {
+			continue
+		}
 		if conf.mulErrorTrie.HasPrefix(msg) {
 			if LogAlertCheck != nil && LogAlertCheck(msg) {
-				return conf.AlertAddr
+				addrs = append(addrs, conf.AlertAddr)
 			}
 		}
-	}
-	for _, conf := range alertConf.Configs {
 		if conf.errorTrie.HasPrefix(msg) {
-			return conf.AlertAddr
+			addrs = append(addrs, conf.AlertAddr)
 		}
 	}
-	return nil
+	return addrs
 }
 
 // 监控所有的Fatal日志
@@ -106,8 +108,8 @@ func (h *logHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 		buf := vo.FieldByName("buf")
 		SendFeiShuAlert2(ParamConf.Get().defaultAddr, "%s\n%s}", msg, string(buf.Bytes()))
 	} else if level == zerolog.ErrorLevel {
-		if addr := checkSendAlert(msg); addr != nil {
-			h.addAlertLog(addr, e, msg)
+		if addrs := checkSendAlert(msg); addrs != nil {
+			h.addAlertLog(addrs, e, msg)
 		}
 
 		if hook.bootChecking {
@@ -141,7 +143,7 @@ func (h *logHook) sendLastLogs() {
 	SendFeiShuAlert2(ParamConf.Get().defaultAddr, send)
 }
 
-func (h *logHook) addAlertLog(addr *AlertAddr, e *zerolog.Event, msg string) {
+func (h *logHook) addAlertLog(addrs []*AlertAddr, e *zerolog.Event, msg string) {
 	hook.samplingLock.Lock()
 	if h.samplingLogs == nil {
 		h.samplingLogs = map[string]*logSampling{}
@@ -176,9 +178,9 @@ func (h *logHook) addAlertLog(addr *AlertAddr, e *zerolog.Event, msg string) {
 	a.totalCount = 1
 	// 先报警一次
 	if a.msg == "Panic" {
-		SendFeiShuAlert2(addr, "%s\n\n%s}", a.msg, a.info)
+		SendFeiShuAlert2(addrs, "%s\n\n%s}", a.msg, a.info)
 	} else {
-		SendFeiShuAlert(addr, "Error %s\n\n%s}", a.msg, a.info)
+		SendFeiShuAlert(addrs, "Error %s\n\n%s}", a.msg, a.info)
 	}
 
 	// 开启协程 检查该报警
@@ -189,7 +191,7 @@ func (h *logHook) addAlertLog(addr *AlertAddr, e *zerolog.Event, msg string) {
 			if count > 0 {
 				atomic.AddInt32(&a.count, -count)
 				a.totalCount += count
-				SendFeiShuAlert(addr, "Error %s\n\nCount:%d\nTotalCount:%d\n\n%s}", a.msg, count, a.totalCount, a.info)
+				SendFeiShuAlert(addrs, "Error %s\n\nCount:%d\nTotalCount:%d\n\n%s}", a.msg, count, a.totalCount, a.info)
 			} else {
 				hook.samplingLock.Lock()
 				delete(hook.samplingLogs, a.pos)

@@ -86,9 +86,16 @@ func BenchmarkRegister(b *testing.B) {
 		Ip:          "127.0.0.1",
 		Port:        1002,
 		ServiceName: "sname1",
-		GroupName:   "gname2",
+		GroupName:   "gname",
 		ClusterName: "a",
 	}
+	// t3 := &RegistryConfig{
+	// 	Ip:          "127.0.0.2",
+	// 	Port:        1002,
+	// 	ServiceName: "sname1",
+	// 	GroupName:   "gname",
+	// 	ClusterName: "a",
+	// }
 	r1, err := client.CreateRegister(t1)
 	if err != nil {
 		return
@@ -97,6 +104,10 @@ func BenchmarkRegister(b *testing.B) {
 	if err != nil {
 		return
 	}
+	// r3, err := client.CreateRegister(t3)
+	// if err != nil {
+	// 	return
+	// }
 	err = r1.Reg()
 	if err != nil {
 		return
@@ -105,6 +116,10 @@ func BenchmarkRegister(b *testing.B) {
 	if err != nil {
 		return
 	}
+	// err = r3.Reg()
+	// if err != nil {
+	// 	return
+	// }
 	//defaultClient.Register("name2")
 	time.Sleep(time.Hour * 10)
 	//r.DeReg()
@@ -143,6 +158,70 @@ func BenchmarkRegister2(b *testing.B) {
 	//time.Sleep(time.Second * 10)
 }
 
+func BenchmarkRegisters(b *testing.B) {
+	cfg := Config{
+		NamespaceId: "",
+		Username:    "nacos",
+		Password:    "nacos",
+		Addrs:       []string{"localhost:8848"},
+	}
+	client, err := CreateClient(&cfg)
+	if err != nil {
+		return
+	}
+	r1, err := client.CreateRegisters("sname", "127.0.0.1")
+	if err != nil {
+		return
+	}
+	t1 := RegistrysConfig{
+		Ip:          "127.0.0.1",
+		Port:        2001,
+		ClusterName: "a",
+	}
+	err = r1.Reg(t1)
+	if err != nil {
+		return
+	}
+
+	t11 := RegistrysConfig{
+		Ip:          "127.0.0.1",
+		Port:        2001,
+		ClusterName: "ab",
+	}
+	err = r1.Reg(t11)
+	if err != nil {
+		return
+	}
+
+	t2 := RegistrysConfig{
+		Ip:          "127.0.0.2",
+		Port:        2002,
+		ClusterName: "a",
+	}
+	err = r1.Reg(t2)
+	if err != nil {
+		return
+	}
+	time.Sleep(time.Second * 10)
+
+	err = r1.DeReg(&t2)
+	if err != nil {
+		return
+	}
+	time.Sleep(time.Second * 10)
+
+	r1.DeRegAll()
+	time.Sleep(time.Second * 10)
+
+	err = r1.Reg(t2)
+	if err != nil {
+		return
+	}
+
+	time.Sleep(time.Second * 30)
+	r1.Close()
+}
+
 func BenchmarkListenService(b *testing.B) {
 	cfg := Config{
 		NamespaceId: "",
@@ -158,7 +237,7 @@ func BenchmarkListenService(b *testing.B) {
 	//log.Info().Strs("serviceNames", serviceNames).Msg("GetAllServicesInfo")
 	//regs, _ := defaultClient.SelectInstances("sname1", "gname", []string{"a"})
 	//log.Info().Interface("regs", regs).Msg("SelectInstances")
-	defaultClient.ListenService("ds", "pc_ds", []string{""}, func(infos []*RegistryInfo) {
+	defaultClient.ListenService("sname", "gname", []string{""}, func(infos []*RegistryInfo) {
 		log.Info().Interface("infos", infos).Msg("Regs")
 	})
 	time.Sleep(time.Hour)

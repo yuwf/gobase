@@ -3,8 +3,10 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
+	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/yuwf/gobase/utils"
 
@@ -13,22 +15,29 @@ import (
 )
 
 // 功能相同的一组服务器
-// ServiceInfo是和业务相关的客户端信息结构 透传给HttpService
+// ServiceInfo是和业务相关的连接端自定义信息结构
 type HttpGroup[ServiceInfo any] struct {
+	// 不可修改，协程安全
+	serviceName string
+	hb          *HttpBackend[ServiceInfo] // 上层对象
+
 	sync.RWMutex
-	hb       *HttpBackend[ServiceInfo]            // 上层对象
 	services map[string]*HttpService[ServiceInfo] // 锁保护
-	// 线程安全，哈希环 只填充连接状态和配置都OK的
-	hashring    *consistent.Consistent //
-	tagHashring *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
+
+	// 哈希环，协程安全，根据版本号生成
+	hashringServicesVersion int64
+	hashringConnVersion     int64
+	hashringAll             *consistent.Consistent //
+	tagHashringAll          *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
+	hashringConn            *consistent.Consistent //
+	tagHashringConn         *sync.Map              // 按tag分组的哈希环 [tag:*consistent.Consistent]
 }
 
-func NewHttpGroup[ServiceInfo any](hb *HttpBackend[ServiceInfo]) *HttpGroup[ServiceInfo] {
+func NewHttpGroup[ServiceInfo any](serviceName string, hb *HttpBackend[ServiceInfo]) *HttpGroup[ServiceInfo] {
 	g := &HttpGroup[ServiceInfo]{
+		serviceName: serviceName,
 		hb:          hb,
 		services:    map[string]*HttpService[ServiceInfo]{},
-		hashring:    consistent.New(),
-		tagHashring: new(sync.Map),
 	}
 	return g
 }
@@ -55,9 +64,21 @@ func (g *HttpGroup[ServiceInfo]) GetServices() map[string]*HttpService[ServiceIn
 }
 
 // 根据哈希环获取对象 hash可以用用户id或者其他稳定的数据
-// 只返回连接状态和发现配置都正常的服务对象
-func (g *HttpGroup[ServiceInfo]) GetServiceByHash(hash string) *HttpService[ServiceInfo] {
-	serviceId, err := g.hashring.Get(hash)
+// hash可以用用户id或者其他稳定的数据
+// status有效值 HttpStatus_All、HttpStatus_Conned
+func (g *HttpGroup[ServiceInfo]) GetServiceByHash(hash string, status int) *HttpService[ServiceInfo] {
+	g.updateHashring()
+	var hashring *consistent.Consistent
+	if status == HttpStatus_All {
+		hashring = g.hashringAll
+	} else if status == HttpStatus_Conned {
+		hashring = g.hashringConn
+	}
+	if hashring == nil {
+		return nil
+	}
+
+	serviceId, err := hashring.Get(hash)
 	if err != nil {
 		return nil
 	}
@@ -71,10 +92,23 @@ func (g *HttpGroup[ServiceInfo]) GetServiceByHash(hash string) *HttpService[Serv
 }
 
 // 根据tag和哈希环获取对象 hash可以用用户id或者其他稳定的数据
-// 只返回连接状态和发现配置都正常的服务对象
-func (g *HttpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *HttpService[ServiceInfo] {
+// hash可以用用户id或者其他稳定的数据
+// status有效值 HttpStatus_All、HttpStatus_Conned
+func (g *HttpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string, status int) *HttpService[ServiceInfo] {
 	tag = strings.TrimSpace(strings.ToLower(tag))
-	hasrhing, ok := g.tagHashring.Load(tag)
+
+	g.updateHashring()
+	var tagHashring *sync.Map
+	if status == HttpStatus_All {
+		tagHashring = g.tagHashringAll
+	} else if status == HttpStatus_Conned {
+		tagHashring = g.tagHashringConn
+	}
+	if tagHashring == nil {
+		return nil
+	}
+
+	hasrhing, ok := tagHashring.Load(tag)
 	if !ok {
 		return nil
 	}
@@ -91,10 +125,11 @@ func (g *HttpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string) *HttpS
 	return nil
 }
 
-// 更新组，返回剩余个数
-func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEvent[ServiceInfo]) int {
+// 更新组，返回剩余个数、新增个数、修改个数、删除个数
+func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEvent[ServiceInfo]) (int, int, int, int) {
 	var remove []*HttpService[ServiceInfo]
 	var add []*HttpService[ServiceInfo]
+	var modify []*HttpService[ServiceInfo]
 
 	g.Lock()
 	// 先删除不存在的
@@ -108,8 +143,6 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 				Strs("RoutingTag", service.conf.RoutingTag).
 				Msg("HttpBackend Update Lost And Del")
 
-			// 从哈希环中移除
-			g.removeHashring(service.conf.ServiceId)
 			service.close() // 关闭
 			delete(g.services, serviceId)
 			remove = append(remove, service)
@@ -128,8 +161,6 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 					Strs("RoutingTag", service.conf.RoutingTag).
 					Msg("HttpBackend Update Change")
 
-				// 从哈希环中移除
-				g.removeHashring(service.conf.ServiceId)
 				service.close() // 先关闭
 				// 创建
 				var err error
@@ -138,6 +169,12 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 					continue
 				}
 				g.services[serviceId] = service
+				modify = append(modify, service)
+			} else {
+				if !reflect.DeepEqual(service.conf, conf) {
+					service.conf = conf
+					modify = append(modify, service)
+				}
 			}
 		} else {
 			// 新增
@@ -155,7 +192,7 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 			add = append(add, service)
 		}
 	}
-	len := len(g.services)
+	count := len(g.services)
 	g.Unlock()
 
 	// 回调
@@ -172,35 +209,58 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 			}
 		}
 	}()
-	return len
+	return count, len(add), len(modify), len(remove)
 }
 
-// 添加到哈希环
-func (g *HttpGroup[ServiceInfo]) addHashring(serviceId string, routingTag []string) {
-	g.hashring.Add(serviceId)
-	if len(routingTag) > 0 {
-		for _, tag := range routingTag {
-			hashring, ok := g.tagHashring.Load(tag)
-			if ok {
-				hashring.(*consistent.Consistent).Add(serviceId)
-			} else {
-				hashring := consistent.New()
-				hashring.Add(serviceId)
-				g.tagHashring.Store(tag, hashring)
+func (g *HttpGroup[ServiceInfo]) updateHashring() {
+	var all, conn bool
+	hashringServicesVersion := atomic.LoadInt64(&g.hashringServicesVersion)
+	servicesVersion := g.hb.GetServiceVersion(g.serviceName)
+	if hashringServicesVersion != servicesVersion && atomic.CompareAndSwapInt64(&g.hashringServicesVersion, hashringServicesVersion, servicesVersion) {
+		all = true
+	}
+	hashringConnVersion := atomic.LoadInt64(&g.hashringConnVersion)
+	connVersion := g.hb.GetConnVersion(g.serviceName)
+	if hashringConnVersion != connVersion && atomic.CompareAndSwapInt64(&g.hashringConnVersion, hashringConnVersion, connVersion) {
+		conn = true
+	}
+	if !all && !conn {
+		return
+	}
+
+	g.Lock()
+	defer g.Unlock()
+
+	for serviceId, service := range g.services {
+		if all {
+			g.hashringAll = consistent.New()
+			g.tagHashringAll = new(sync.Map)
+			g.addHashring(g.hashringAll, g.tagHashringAll, serviceId, service.conf.RoutingTag)
+		}
+		status := service.HealthStatus()
+		if all || conn {
+			g.hashringConn = consistent.New()
+			g.tagHashringConn = new(sync.Map)
+			if status == HttpStatus_Conned {
+				g.addHashring(g.hashringConn, g.tagHashringConn, serviceId, service.conf.RoutingTag)
 			}
 		}
 	}
 }
 
-// 从哈希环中移除
-func (g *HttpGroup[ServiceInfo]) removeHashring(serviceId string) {
-	g.hashring.Remove(serviceId)
-	g.tagHashring.Range(func(key, value any) bool {
-		value.(*consistent.Consistent).Remove(serviceId)
-
-		if len(value.(*consistent.Consistent).Members()) == 0 {
-			g.tagHashring.Delete(key)
+// 添加到哈希环
+func (g *HttpGroup[ServiceInfo]) addHashring(hashring *consistent.Consistent, tagHashring *sync.Map, serviceId string, routingTag []string) {
+	hashring.Add(serviceId)
+	if len(routingTag) > 0 {
+		for _, tag := range routingTag {
+			hashring, ok := tagHashring.Load(tag)
+			if ok {
+				hashring.(*consistent.Consistent).Add(serviceId)
+			} else {
+				hashring := consistent.New()
+				hashring.Add(serviceId)
+				tagHashring.Store(tag, hashring)
+			}
 		}
-		return true
-	})
+	}
 }

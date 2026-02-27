@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/yuwf/gobase/consul"
-	"github.com/yuwf/gobase/dispatch"
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/msger"
 	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/utils"
 
@@ -37,14 +37,15 @@ func (c *ClientInfo) LastHeart() time.Time {
 }
 
 type Handler struct {
-	dispatch.MsgDispatch[*utils.TestMsg, GNetClient[ClientInfo]]
 }
 
 func NewHandler() *Handler {
 	h := &Handler{}
-	h.RegMsgID = utils.TestRegMsgID
-	h.RegMsg(h.onHeatBeatReq)
 	return h
+}
+
+func (h *Handler) OnMsgReg(md *msger.MsgDispatch) {
+	md.RegMsg(utils.TestHeatBeatReqMsg.MsgID(), h.onHeatBeatReq)
 }
 
 func (h *Handler) OnConnected(ctx context.Context, gc *GNetClient[ClientInfo]) {
@@ -53,7 +54,7 @@ func (h *Handler) OnConnected(ctx context.Context, gc *GNetClient[ClientInfo]) {
 func (h *Handler) OnDisConnect(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 
-func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (utils.RecvMsger, int, error) {
+func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[ClientInfo]) (msger.RecvMsger, int, error) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
 		return &utils.TestMsg{
@@ -66,17 +67,8 @@ func (b *Handler) DecodeMsg(ctx context.Context, data []byte, gc *GNetClient[Cli
 	}
 	return utils.TestDecodeMsg(data)
 }
-func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, gc *GNetClient[ClientInfo]) {
-	m, _ := msg.(*utils.TestMsg)
-	texttype := ctx.Value(CtxKey_Text)
-	if texttype != nil {
-		gc.SendText(ctx, m.RecvData) // 原路返回
-		return
-	}
-	if handle, _ := h.Dispatch(ctx, m, gc); handle {
-		return
-	}
-	log.Error().Str("Name", gc.ConnName()).Interface("Msg", msg).Msg("msg not handle")
+func (h *Handler) OnMsg(ctx context.Context, mr msger.RecvMsger, gc *GNetClient[ClientInfo]) {
+	utils.LogCtx(log.Warn(), ctx).Interface("msger", mr).Msgf("Msg Not Handle %s", gc.ConnName())
 }
 
 func (h *Handler) OnTick(ctx context.Context, gc *GNetClient[ClientInfo]) {
@@ -84,13 +76,13 @@ func (h *Handler) OnTick(ctx context.Context, gc *GNetClient[ClientInfo]) {
 }
 
 func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestHeatBeatReq, gc *GNetClient[ClientInfo]) {
-
 	gc.SendMsg(ctx, utils.TestHeatBeatRespMsg)
 	gc.info.SetLastHeart(time.Now())
 }
 
 func BenchmarkGNetServer(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1236, NewHandler())
+	h := NewHandler()
+	server, _ := NewGNetServer[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -100,7 +92,8 @@ func BenchmarkGNetServer(b *testing.B) {
 }
 
 func BenchmarkGNetServerConsul(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1236, NewHandler())
+	h := NewHandler()
+	server, _ := NewGNetServer[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -146,7 +139,8 @@ func BenchmarkGNetServerConsul(b *testing.B) {
 }
 
 func BenchmarkGNetServerNacos(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1237, NewHandler())
+	h := NewHandler()
+	server, _ := NewGNetServer[int, ClientInfo, utils.TestMsg](1237, h)
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -188,7 +182,8 @@ func BenchmarkGNetServerNacos(b *testing.B) {
 }
 
 func BenchmarkGNetServerRegGoRedis(b *testing.B) {
-	server := NewGNetServer[int, ClientInfo](1237, NewHandler())
+	h := NewHandler()
+	server, _ := NewGNetServer[int, ClientInfo, utils.TestMsg](1237, h)
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -219,7 +214,8 @@ func BenchmarkGNetServerRegGoRedis(b *testing.B) {
 }
 
 func BenchmarkGNetServerWS(b *testing.B) {
-	server := NewGNetServerWS[int, ClientInfo](1236, NewHandler())
+	h := NewHandler()
+	server, _ := NewGNetServerWS[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start()
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听

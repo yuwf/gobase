@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/petermattis/goid"
+	"github.com/rs/zerolog/log"
 )
 
 func BenchmarkDelete(b *testing.B) {
@@ -36,6 +38,7 @@ func BenchmarkAnts(b *testing.B) {
 
 func BenchmarkSequence(b *testing.B) {
 	var seq Sequence
+	seq.Wait()
 	for i := 0; i < 20; i++ {
 		n := i
 		seq.Submit(func() {
@@ -46,7 +49,8 @@ func BenchmarkSequence(b *testing.B) {
 			fmt.Println(n)
 		})
 	}
-	time.Sleep(time.Minute)
+	seq.Wait()
+	seq.Wait()
 }
 
 func GetGID() uint64 {
@@ -72,15 +76,49 @@ func BenchmarkGID(b *testing.B) {
 	fmt.Println("2=", time.Since(entry))
 }
 
+func BenchmarkCtx(b *testing.B) {
+	ctx := CtxAddCaller(nil, 0)
+	ctx = CtxAddCaller(ctx, 0)
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+	TextCtxAddCaller(ctx)
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+
+	ctx = CtxAddLog(nil, "abc", "ab")
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+	ctx = CtxAddLog(ctx, "abc", "ab")
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+	ctx = CtxAddLog(ctx, "abc", "456")
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+	ctx = CtxAddLog(ctx, "abc456", "456")
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+	TextCtxAddLog(ctx)
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+}
+
+func TextCtxAddCaller(ctx context.Context) {
+	ctx = CtxAddCaller(ctx, 0)
+	ctx = CtxAddCaller(ctx, 1)
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+}
+
+func TextCtxAddLog(ctx context.Context) {
+	ctx = CtxAddLog(ctx, "abc123", "456")
+	ctx = CtxAddLog(ctx, "abc456", "456=====")
+	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
+}
+
+
 func BenchmarkGroupSequence1(b *testing.B) {
 	var seq GroupSequence
+	seq.Wait()
 	for i := 0; i < 20; i++ {
 		n := i
 		seq.Submit(RandString(10), func() {
 			fmt.Println(goid.Get(), n)
 		})
 	}
-	time.Sleep(time.Second * 10)
+	seq.Wait()
+	seq.Wait()
 }
 
 func BenchmarkGroupSequence2(b *testing.B) {
@@ -89,6 +127,9 @@ func BenchmarkGroupSequence2(b *testing.B) {
 		n := i
 		seq.Submit("my", func() {
 			if n == 10 {
+				seq.Submit("my", func() {
+					fmt.Println("my", n*10) // 会输出100 但这个在my组中100肯定最后输出
+				})
 				panic("no") // 不会输出10
 			}
 			time.Sleep(time.Second)
@@ -102,7 +143,8 @@ func BenchmarkGroupSequence2(b *testing.B) {
 			fmt.Println("    my2", n)
 		})
 	}
-	time.Sleep(time.Minute)
+	seq.Wait()
+	seq.Wait()
 }
 
 func BenchmarkGroupSequenceDebug(b *testing.B) {
@@ -234,4 +276,60 @@ func BenchmarkStruct(b *testing.B) {
 	}
 	fmt.Println(time.Since(entry))
 
+}
+
+func BenchmarkRecursiveMutex(b *testing.B) {
+	ctx := context.TODO()
+	fmt.Println(goid.Get())
+	var m RecursiveMutex
+	m.Lock(ctx)
+	//m.Unlock()
+	time.Sleep(time.Second)
+	DumpAllRecursiveMutexs() // 日志输出
+	m.Unlock(ctx)
+	DumpAllRecursiveMutexs() // 无日志输出
+
+	fmt.Println("-----------")
+
+	//
+	m.Lock(ctx)
+	m.TryLock(ctx)
+	go func() {
+		fmt.Println(goid.Get())
+		m.Lock(ctx)
+		time.Sleep(time.Second * 2)
+	}()
+	time.Sleep(time.Second)
+	log.Info().Msg("两个held 一个wait")
+	DumpAllRecursiveMutexs()
+	m.Unlock(ctx)
+	log.Info().Msg("一个held 一个wait")
+	DumpAllRecursiveMutexs()
+
+	m.Unlock(ctx)
+	time.Sleep(time.Second)
+	log.Info().Msg("一个held 协程里面的")
+	DumpAllRecursiveMutexs()
+	log.Info().Msg("Lock超时")
+	time.Sleep(time.Minute * 2)
+
+	go func() {
+		m.Lock(ctx)
+	}()
+	log.Info().Msg("Wait超时和Lock超时报警")
+	time.Sleep(time.Minute * 2)
+
+	log.Info().Msg("压测")
+	for i := 0; i < 100000; i++ {
+		go func() {
+			var m RecursiveMutex
+			m.Lock(ctx)
+			m.Lock(ctx)
+		}()
+	}
+	time.Sleep(time.Second * 30)
+	t1 := time.Now()
+	result := AllRecursiveMutexsInfo()
+	t2 := time.Now()
+	log.Info().TimeDiff("t", t1, t2).Int("size", len(result)).Msg("压测结果")
 }

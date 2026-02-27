@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -20,23 +21,26 @@ import (
 
 const CtxKey_NoDuplicate = utils.CtxKey("_NoDuplicate_")
 
+// 所有创建的MySQL实例，暂不支持删除
+var AllMySQL sync.Map // key = *MySQL, value = struct{}
+
 type Config struct {
 	Source string `json:"source,omitempty"` //地址 username:password@tcp(ip:port)/database?charset=utf8
 	// 如果Source为空 就用下面的配置
-	Addr     string `json:"addr,omitempty"` // host:port
-	UserName string `json:"username,omitempty"`
-	Passwd   string `json:"passwd,omitempty"`
-	DB       string `json:"db,omitempty"`
-	Param    string `json:"param,omitempty"` // 链接参数 k1=v1&k2=v2, 默认添加charset=utf8
+	Addr     string            `json:"addr,omitempty"` // host:port
+	UserName string            `json:"username,omitempty"`
+	Passwd   string            `json:"passwd,omitempty"`
+	DB       string            `json:"db,omitempty"`
+	Params   map[string]string `json:"params,omitempty"` // 链接参数
 
-	MaxOpenConns int `json:"maxopenconns,omitempty"`
-	MaxIdleConns int `json:"maxidleconns,omitempty"`
+	MaxOpenConns int `json:"maxopenconns,omitempty"` // <=0 填充10  小流量测试时建议10-20 中等流量50-100 大流量200-500
 }
 
 var defaultMySQL *MySQL
 
 type MySQL struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	source string
 
 	// 执行命令时的回调 不使用锁，默认要求提前注册好 管道部分待完善
 	hook []func(ctx context.Context, cmd *MySQLCommond)
@@ -76,27 +80,48 @@ func InitDefaultMySQL(conf *Config) (*MySQL, error) {
 func NewMySQL(conf *Config) (*MySQL, error) {
 	conf.Source = strings.TrimSpace(conf.Source)
 	if len(conf.Source) == 0 {
-		conf.Source = fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8&%s", conf.UserName, conf.Passwd, conf.Addr, conf.DB, conf.Param)
+		conf.Source = fmt.Sprintf("%s:%s@tcp(%s)/%s", conf.UserName, conf.Passwd, conf.Addr, conf.DB)
+		i := 0
+		for k, v := range conf.Params {
+			if i > 0 {
+				conf.Source += "&"
+			} else {
+				conf.Source += "?"
+			}
+			i++
+			conf.Source += fmt.Sprintf("%s=%s", k, v)
+		}
 	}
 	db, err := sqlx.Connect("mysql", conf.Source)
 	if err != nil {
 		log.Error().Err(err).Str("source", conf.Source).Msg("MySQL Conn Fail")
 		return nil, err
 	}
+	if conf.MaxOpenConns <= 0 {
+		conf.MaxOpenConns = 10
+	}
 	db.SetMaxOpenConns(conf.MaxOpenConns)
-	db.SetMaxIdleConns(conf.MaxIdleConns)
+	db.SetMaxIdleConns(conf.MaxOpenConns / 2)
+	db.SetConnMaxLifetime(time.Hour)        // 连接多少次时间后重建，如果正在使用中则等使用完后重建,防止mysql端泄露
+	db.SetConnMaxIdleTime(time.Minute * 10) // 连接空闲多少时间后重建
 
 	mysql := &MySQL{
-		db: db,
+		db:     db,
+		source: conf.Source,
 	}
 	log.Info().Str("source", conf.Source).Msg("MySQL Conn Success")
 
+	AllMySQL.Store(mysql, struct{}{})
 	return mysql, nil
 }
 
 // DB 暴露原始对象
 func (m *MySQL) DB() *sqlx.DB {
 	return m.db
+}
+
+func (m *MySQL) Source() string {
+	return m.source
 }
 
 func getCmd(query, def string) string {
@@ -113,8 +138,6 @@ func (m *MySQL) RegHook(f func(ctx context.Context, cmd *MySQLCommond)) {
 }
 
 func (m *MySQL) Get(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
-
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   getCmd(query, "Get"),
 		Query: query,
@@ -149,7 +172,6 @@ func (m *MySQL) Get(ctx context.Context, dest interface{}, query string, args ..
 }
 
 func (m *MySQL) Select(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   getCmd(query, "Select"),
 		Query: query,
@@ -184,7 +206,6 @@ func (m *MySQL) Select(ctx context.Context, dest interface{}, query string, args
 }
 
 func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   getCmd(query, "Exec"),
 		Query: query,
@@ -224,7 +245,6 @@ func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sq
 }
 
 func (m *MySQL) Update(ctx context.Context, query string, args ...interface{}) (int64, error) {
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   getCmd(query, "Update"),
 		Query: query,
@@ -275,7 +295,6 @@ func (m *MySQL) Close() error {
 }
 
 func (mt *MySQLTx) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   getCmd(query, "TxExec"),
 		Query: query,
@@ -310,7 +329,6 @@ func (mt *MySQLTx) Exec(ctx context.Context, query string, args ...interface{}) 
 }
 
 func (mt *MySQLTx) Commit(ctx context.Context) error {
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   "TxCommit",
 		Query: "Commit",
@@ -342,7 +360,6 @@ func (mt *MySQLTx) Commit(ctx context.Context) error {
 }
 
 func (mt *MySQLTx) Rollback(ctx context.Context) error {
-	ctx = utils.CtxCaller(ctx, 1)
 	mysqlCmd := &MySQLCommond{
 		Cmd:   "TxRollback",
 		Query: "Rollback",

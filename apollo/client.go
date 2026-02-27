@@ -37,6 +37,9 @@ func DefaultClient() *Client {
 }
 
 func InitDefaultClient(conf *Config) (*Client, error) {
+	if defaultClient != nil {
+		return defaultClient, nil
+	}
 	var err error
 	defaultClient, err = CreateClient(conf)
 	return defaultClient, err

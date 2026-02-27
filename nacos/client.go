@@ -31,7 +31,7 @@ var defaultClient *Client
 // Client nacos对象
 type Client struct {
 	nacosCfgCli    config_client.IConfigClient
-	nacosNamingCli naming_client.INamingClient
+	nacosNamingCli naming_client.INamingClient // 用于服务器发现，服务注册要单独创建一个，测试发现一个client在一个组下（servicename+groupname）, 只有最后一个RegisterInstance生效
 
 	clientConfig  constant.ClientConfig
 	serverConfigs []constant.ServerConfig
@@ -55,12 +55,11 @@ func CreateClient(cfg *Config) (*Client, error) {
 		Password:    cfg.Password,
 		//TimeoutMs:           5000,
 		//NotLoadCacheAtStart: true,
-		LogDir:   ".nacos",
-		CacheDir: ".nacos",
-		//LogLevel: "debug",
-		LogLevel:             "-",
+		LogDir:               ".nacos",
+		CacheDir:             ".nacos",
+		LogLevel:             "info",
 		NotLoadCacheAtStart:  true,
-		UpdateCacheWhenEmpty: true, // 必须设置 否则注册服务器为空时，不会回到服务器发现
+		UpdateCacheWhenEmpty: true, // 必须设置 否则注册服务器为空时，不会回调服务器发现
 	}
 
 	// At least one ServerConfig
@@ -88,8 +87,8 @@ func CreateClient(cfg *Config) (*Client, error) {
 
 	// Create naming client for service discovery
 	cNaming, err := clients.CreateNamingClient(map[string]interface{}{
-		"serverConfigs": serverConfigs,
-		"clientConfig":  clientConfig,
+		constant.KEY_SERVER_CONFIGS: serverConfigs,
+		constant.KEY_CLIENT_CONFIG:  clientConfig,
 	})
 	if err != nil {
 		log.Error().Err(err).Strs("Addr", cfg.Addrs).Msg("Nacos CreateNamingClient error")
@@ -98,8 +97,8 @@ func CreateClient(cfg *Config) (*Client, error) {
 
 	// Create config client for dynamic configuration
 	cCfc, err := clients.CreateConfigClient(map[string]interface{}{
-		"serverConfigs": serverConfigs,
-		"clientConfig":  clientConfig,
+		constant.KEY_SERVER_CONFIGS: serverConfigs,
+		constant.KEY_CLIENT_CONFIG:  clientConfig,
 	})
 	if err != nil {
 		log.Error().Err(err).Strs("Addr", cfg.Addrs).Msg("Nacos CreateConfigClient error")
@@ -288,6 +287,7 @@ func (c *Client) SelectInstances(serviceName, groupName string, clusters []strin
 	return resp, nil
 }
 
+// ServiceName ClusterName 传递给nacos的需要格式化
 func (c *Client) SanitizeString(input string) string {
 	var result []rune
 	for _, char := range input {

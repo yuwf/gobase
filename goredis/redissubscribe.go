@@ -30,7 +30,7 @@ func (r *Redis) CreateSubscribe(ctx context.Context, channel string) (*Subscribe
 		return nil, err
 	}
 	return &Subscribe{
-		ctx:     utils.CtxNolog(context.TODO()), // 不要日志
+		ctx:     utils.CtxSetNolog(context.TODO()), // 不要日志
 		r:       r,
 		sub:     subscriber,
 		channel: channel,

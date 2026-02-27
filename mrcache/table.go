@@ -64,8 +64,8 @@ func (t *TableStruct) GetRedisTagByTag(tag string) interface{} {
 	return ""
 }
 
-func (t *TableStruct) IsBaseType(tagIdx int) bool {
-	switch t.Fields[tagIdx].Type.Kind() {
+func (t *TableStruct) IsBaseType(tp reflect.Type) bool {
+	switch tp.Kind() {
 	case reflect.Bool:
 		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -73,10 +73,20 @@ func (t *TableStruct) IsBaseType(tagIdx int) bool {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return true
 	case reflect.Slice:
-		if t.Fields[tagIdx].Type.Elem().Kind() == reflect.Uint8 {
+		if tp.Elem().Kind() == reflect.Uint8 {
 			return true
 		}
 	case reflect.String:
+		return true
+	}
+	return false
+}
+
+func (t *TableStruct) IsNumType(tp reflect.Type) bool {
+	switch tp.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return true
 	}
 	return false

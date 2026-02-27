@@ -425,6 +425,17 @@ func sliceToValue(src reflect.Value, dst reflect.Value) (bool, error) {
 			dst.Set(src)
 			return true, nil
 		}
+		if dst.Type().Kind() == reflect.Slice {
+			newSlice := reflect.MakeSlice(dst.Type(), src.Len(), src.Len())
+			for i := 0; i < src.Len(); i++ {
+				err := InterfaceToValue(src.Index(i).Interface(), newSlice.Index(i))
+				if err != nil {
+					return false, err
+				}
+			}
+			dst.Set(newSlice)
+			return true, nil
+		}
 	case reflect.String:
 		if src.Type().Elem().Kind() == reflect.Uint8 {
 			dst.SetString(utils.BytesToString(src.Bytes()))

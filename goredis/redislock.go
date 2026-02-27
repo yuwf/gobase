@@ -29,7 +29,7 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxNolog(ctx)                        // 命令传递下去不需要日志了
+	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
 	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "TryLock")
 
@@ -70,7 +70,7 @@ func (r *Redis) TryLockWait(ctx context.Context, key string, timeout time.Durati
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxNolog(ctx)                        // 命令传递下去不需要日志了
+	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
 	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "TryLockWait")
 
@@ -158,7 +158,7 @@ func (r *Redis) KeyLockWait(ctx context.Context, key, keylock string, timeout ti
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxNolog(ctx)                        // 命令传递下去不需要日志了
+	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
 	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "KeyLockWait")
 
@@ -237,7 +237,7 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxNolog(ctx)                        // 命令传递下去不需要日志了
+	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
 	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "Lock")
 

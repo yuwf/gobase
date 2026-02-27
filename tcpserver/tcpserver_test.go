@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/yuwf/gobase/consul"
-	"github.com/yuwf/gobase/dispatch"
 	"github.com/yuwf/gobase/goredis"
 	_ "github.com/yuwf/gobase/log"
 	"github.com/yuwf/gobase/nacos"
 	"github.com/yuwf/gobase/utils"
+
+	"github.com/yuwf/gobase/msger"
 
 	"github.com/rs/zerolog/log"
 )
@@ -38,14 +39,15 @@ func (c *ClientInfo) LastHeart() time.Time {
 }
 
 type Handler struct {
-	dispatch.MsgDispatch[*utils.TestMsg, TCPClient[ClientInfo]]
 }
 
 func NewHandler() *Handler {
 	h := &Handler{}
-	h.RegMsgID = utils.TestRegMsgID
-	h.RegMsg(h.onHeatBeatReq)
 	return h
+}
+
+func (h *Handler) OnMsgReg(md *msger.MsgDispatch) {
+	md.RegMsg(utils.TestHeatBeatReqMsg.MsgID(), h.onHeatBeatReq)
 }
 
 func (h *Handler) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
@@ -54,7 +56,7 @@ func (h *Handler) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 func (h *Handler) OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 
-func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (utils.RecvMsger, int, interface{}, error) {
+func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (msger.RecvMsger, int, error) {
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
 		return &utils.TestMsg{
@@ -63,23 +65,20 @@ func (b *Handler) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[Clie
 				Len:   uint32(len(data)),
 			},
 			RecvData: data,
-		}, len(data), nil, nil
+		}, len(data), nil
 	}
 	m, l, err := utils.TestDecodeMsg(data)
-	return m, l, nil, err
+	return m, l, err
 }
 
-func (h *Handler) OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo]) {
-	m, _ := msg.(*utils.TestMsg)
+func (h *Handler) OnMsg(ctx context.Context, mr msger.RecvMsger, tc *TCPClient[ClientInfo]) {
+	m, _ := mr.(*utils.TestMsg)
 	texttype := ctx.Value(CtxKey_Text)
 	if texttype != nil {
 		tc.SendText(ctx, m.RecvData) // 原路返回
 		return
 	}
-	if handle, _ := h.Dispatch(ctx, m, tc); handle {
-		return
-	}
-	log.Error().Str("Name", tc.ConnName()).Interface("Msg", msg).Msg("msg not handle")
+	utils.LogCtx(log.Warn(), ctx).Interface("msger", mr).Msgf("Msg Not Handle %s", tc.ConnName())
 }
 
 func (h *Handler) OnTick(ctx context.Context, tc *TCPClient[ClientInfo]) {
@@ -92,7 +91,8 @@ func (h *Handler) onHeatBeatReq(ctx context.Context, msg *utils.TestHeatBeatReq,
 }
 
 func BenchmarkTCPServer(b *testing.B) {
-	server, _ := NewTCPServer[int, ClientInfo](1236, NewHandler())
+	h := NewHandler()
+	server, _ := NewTCPServer[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -102,7 +102,8 @@ func BenchmarkTCPServer(b *testing.B) {
 }
 
 func BenchmarkTCPServerConsul(b *testing.B) {
-	server, _ := NewTCPServer[int, ClientInfo](1236, NewHandler())
+	h := NewHandler()
+	server, _ := NewTCPServer[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -148,7 +149,8 @@ func BenchmarkTCPServerConsul(b *testing.B) {
 }
 
 func BenchmarkTCPServerNacos(b *testing.B) {
-	server, _ := NewTCPServer[int, ClientInfo](1236, NewHandler())
+	h := NewHandler()
+	server, _ := NewTCPServer[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -190,7 +192,8 @@ func BenchmarkTCPServerNacos(b *testing.B) {
 }
 
 func BenchmarkTCPServerRegGoRedis(b *testing.B) {
-	server, _ := NewTCPServer[int, ClientInfo](1237, NewHandler())
+	h := NewHandler()
+	server, _ := NewTCPServer[int, ClientInfo, utils.TestMsg](1236, h)
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
@@ -208,7 +211,7 @@ func BenchmarkTCPServerRegGoRedis(b *testing.B) {
 		RegistryName:   "name",
 		RegistryID:     "id",
 		RegistryAddr:   "127.0.0.1",
-		RegistryPort:   1237,
+		RegistryPort:   1236,
 		RegistryScheme: "tcp",
 	}
 	reg := r.CreateRegister("test-service", info)
@@ -221,10 +224,12 @@ func BenchmarkTCPServerRegGoRedis(b *testing.B) {
 }
 
 func BenchmarkTCPServerWS(b *testing.B) {
-	server, _ := NewTCPServerWithWS[int, ClientInfo](1237, NewHandler(), "ca.crt", "ca.key")
+	h := NewHandler()
+	server, _ := NewTCPServerWithWS[int, ClientInfo, utils.TestMsg](1237, h, "ca.crt", "ca.key")
 	server.Start(false)
 	utils.RegExit(func(s os.Signal) {
 		server.Stop() // 退出服务监听
 	})
+
 	utils.ExitWait()
 }

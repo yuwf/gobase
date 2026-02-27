@@ -8,7 +8,12 @@ import (
 )
 
 var cfg = &Config{
-	Source: "root:1235@tcp(localhost:3306)/mysql?charset=utf8",
+	//Source: "root:1235@tcp(localhost:3306)/mysql?charset=utf8",
+	Addr:     "localhost:3306",
+	UserName: "root",
+	Passwd:   "1235",
+	DB:       "mysql",
+	Params:   map[string]string{"charset": "utf8"},
 }
 
 type Users struct {
@@ -23,7 +28,7 @@ type Name struct {
 
 func BenchmarkMySQL(b *testing.B) {
 	var m map[int]string
-	s :=`{"1":"1", "2":"22"}`
+	s := `{"1":"1", "2":"22"}`
 	fmt.Println(json.Unmarshal([]byte(s), &m))
 	mysql, err := InitDefaultMySQL(cfg)
 	if err != nil {
@@ -31,7 +36,7 @@ func BenchmarkMySQL(b *testing.B) {
 	}
 
 	var name Name
-	err = mysql.Get(context.TODO(), &name, "SELECT User FROM user WHERE User=? and Host=?", "root", "local'host")
+	err = mysql.Get(context.TODO(), &name, "SELECT User FROM user WHERE User=? and Host=?", "root", "localhost")
 	fmt.Println(name, err)
 
 	var users []Users

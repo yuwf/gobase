@@ -26,8 +26,9 @@ var Expire = 36 * 3600 // 支持修改
 var IncrementKey = "_mrcache_increment_" // 自增key，hash结构，field使用table名
 
 type Options struct {
-	noResp        bool // 不需要返回值，有时为了优化性能不需要返回值
-	noExistCreate bool // 不存在就创建
+	noResp             bool // 不需要返回值，有时为了优化性能不需要返回值
+	noExistCreate      bool // 不存在就创建
+	jsonArrayDuplicate bool // JsonArray去重
 }
 
 func NewOptions() *Options {
@@ -48,6 +49,11 @@ func (o *Options) NoResp() *Options {
 }
 func (o *Options) Create() *Options {
 	o.noExistCreate = true
+	return o
+}
+
+func (o *Options) JsonArrayDuplicate() *Options {
+	o.jsonArrayDuplicate = true
 	return o
 }
 

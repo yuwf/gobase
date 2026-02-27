@@ -5,11 +5,18 @@ package tcpserver
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/yuwf/gobase/msger"
 	"github.com/yuwf/gobase/utils"
+
+	"github.com/rs/zerolog/log"
 )
 
 type TCPEvent[ClientInfo any] interface {
+	// 消息注册
+	OnMsgReg(md *msger.MsgDispatch)
+
 	// 收到连接
 	// 异步顺序调用
 	OnConnected(ctx context.Context, tc *TCPClient[ClientInfo])
@@ -24,14 +31,13 @@ type TCPEvent[ClientInfo any] interface {
 	// 返回值为   msg,len,err
 	// msg       解码出的消息体
 	// len       解码消息的数据长度，内部根据len来删除已解码的数据
-	// rpcid     对应请求SendRPC的id， 返回nil表示非rpc调用
 	// err       解码错误，若发生error，服务器将重连
-	DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (utils.RecvMsger, int, interface{}, error)
+	DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (msger.RecvMsger, int, error)
 
 	// OnRecv 收到消息，解码成功后调用，rpc不会调用此函数
 	// 异步顺序调用 or 异步调用
 	// ctx    包括 [CtxKey_WS,CtxKey_Text],CtxKey_traceId,CtxKey_msgId
-	OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo])
+	OnMsg(ctx context.Context, mr msger.RecvMsger, tc *TCPClient[ClientInfo])
 
 	// OnTick 每秒调用一次
 	// 异步顺序调用
@@ -44,14 +50,17 @@ type TCPEvent[ClientInfo any] interface {
 type TCPEventHandler[ClientInfo any] struct {
 }
 
+func (*TCPEventHandler[ClientInfo]) OnMsgReg(md *msger.MsgDispatch) {
+}
 func (*TCPEventHandler[ClientInfo]) OnConnected(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
 func (*TCPEventHandler[ClientInfo]) OnDisConnect(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
-func (*TCPEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (interface{}, int, interface{}, error) {
-	return nil, len(data), nil, errors.New("DecodeMsg not Implementation")
+func (*TCPEventHandler[ClientInfo]) DecodeMsg(ctx context.Context, data []byte, tc *TCPClient[ClientInfo]) (msger.RecvMsger, int, error) {
+	return nil, len(data), errors.New("DecodeMsg not Implementation")
 }
-func (*TCPEventHandler[ClientInfo]) OnMsg(ctx context.Context, msg utils.RecvMsger, tc *TCPClient[ClientInfo]) {
+func (*TCPEventHandler[ClientInfo]) OnMsg(ctx context.Context, mr msger.RecvMsger, tc *TCPClient[ClientInfo]) {
+	utils.LogCtx(log.Warn(), ctx).Interface("msger", mr).Msgf("Msg Not Handle %s", tc.ConnName())
 }
 func (*TCPEventHandler[ClientInfo]) OnTick(ctx context.Context, tc *TCPClient[ClientInfo]) {
 }
@@ -71,14 +80,20 @@ type TCPHook[ClientInfo any] interface {
 	OnRemoveClient(tc *TCPClient[ClientInfo])
 
 	// 发送数据 所有的发送
-	OnSend(tc *TCPClient[ClientInfo], len int)
+	OnSendData(tc *TCPClient[ClientInfo], len int)
 	// 接受数据 所有的接受
-	OnRecv(tc *TCPClient[ClientInfo], len int)
+	OnRecvData(tc *TCPClient[ClientInfo], len int)
 
-	// 发送消息数据
-	OnSendMsg(tc *TCPClient[ClientInfo], msgId string, len int)
-	// 接受消息数据
-	OnRecvMsg(tc *TCPClient[ClientInfo], msgId string, len int)
+	// Send后调用
+	OnSend(tc *TCPClient[ClientInfo], len int)
+	// SendMsg后调用
+	OnSendMsg(tc *TCPClient[ClientInfo], mr msger.Msger, len int)
+	// SendText后调用
+	OnSendText(tc *TCPClient[ClientInfo], len int)
+	// SendRPCMsg后调用， 收到的Resp在OnRecvMsg中调用，会在此函数前调用
+	OnSendRPCMsg(tc *TCPClient[ClientInfo], rpcId interface{}, mr msger.Msger, elapsed time.Duration, len int)
+	// 接受消息数据，消息解码后调用
+	OnRecvMsg(tc *TCPClient[ClientInfo], mr msger.RecvMsger, len int)
 
 	// 定时调用
 	OnTick()

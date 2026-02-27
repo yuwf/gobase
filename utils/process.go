@@ -15,7 +15,7 @@ import (
 
 var (
 	processWG       sync.WaitGroup
-	processQuit     = make(chan bool)
+	processQuit     = make(chan struct{})
 	processExitCall []func(os.Signal)
 	exiting         bool
 )

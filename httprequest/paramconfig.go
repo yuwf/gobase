@@ -25,7 +25,7 @@ type ParamConfig struct {
 	TimeOutCheck int  `json:"timeoutcheck,omitempty"` // 消息超时监控 单位秒 默认0不开启监控
 	Pool         bool `json:"pool,omitempty"`         // 是否使用连接池，有些网址处理完请求就执行关闭，会导致连接池有问题，默认不使用
 
-	BodyLogLimit int `json:"bodyloglimit,omitempty"` // body日志限制 <=0 表示不限制
+	LogMaxLimit int `json:"logmaxlimit,omitempty"` // body日志限制 <=0 表示不限制
 	// Timeout: 执行 command 的超时时间 单位为毫秒
 	// MaxConcurrentRequests: 最大并发量
 	// RequestVolumeThreshold: 一个统计窗口 10 秒内请求数量 达到这个请求数量后才去判断是否要开启熔断
@@ -42,8 +42,8 @@ func (c *ParamConfig) Create() {
 	c.LogLevelByPath = map[string]int{}
 	c.LogLevelHeadByHost = map[string]int{}
 	c.LogLevelHeadByPath = map[string]int{}
-	c.TimeOutCheck = 8 // 8秒超时报警
-	c.BodyLogLimit = 256
+	c.TimeOutCheck = 8   // 8秒超时报警
+	c.LogMaxLimit = 4096 // 4KB body日志限制
 }
 
 func (c *ParamConfig) Normalize() {

@@ -25,7 +25,7 @@ var loopCheckServicesOnce sync.Once
 // serverName 表示监听哪些服务器 为空表示监听全部的服务器
 func (r *Redis) WatchServices(key string, serverNames []string, fun func(infos []*RegistryInfo)) {
 	log.Info().Str("key", key).Msg("Redis WatchService")
-	ctx := utils.CtxNolog(context.TODO())
+	ctx := utils.CtxSetNolog(context.TODO())
 	// 开启读
 	go func() {
 		// 先创建订阅对象
@@ -63,7 +63,7 @@ func (r *Redis) WatchServices(key string, serverNames []string, fun func(infos [
 // serverName 表示监听哪些服务器 为空表示监听全部的服务器
 func (r *Redis) WatchServices2(key string, serverNames []string, fun func(addInfos, delInfos []*RegistryInfo)) {
 	log.Info().Str("key", key).Msg("Redis WatchService")
-	ctx := utils.CtxNolog(context.TODO())
+	ctx := utils.CtxSetNolog(context.TODO())
 	go func() {
 		// 先创建订阅对象
 		subscriber, _ := r.CreateSubscribe(ctx, key)
@@ -99,7 +99,6 @@ func (r *Redis) WatchServices2(key string, serverNames []string, fun func(addInf
 // 读取一次服务器列表
 func (r *Redis) ReadServices(ctx context.Context, key string, serverNames []string) ([]*RegistryInfo, error) {
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "WatchServices")
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	result, err := r.DoScript(ctx, readRegisterScirpt, []string{key}, RegExprieTime).StringSlice()
 	if err != nil {
 		// 错误了 在来一次
@@ -159,7 +158,6 @@ func (r *Redis) loopCheckServicesChange(ctx context.Context, key string) {
 // 返回值表示是否抢占到了
 func (r *Redis) checkServicesChange(ctx context.Context, key string, uuid string) bool {
 	ctx = context.WithValue(ctx, CtxKey_cmddesc, "CheckServices")
-	ctx = context.WithValue(utils.CtxCaller(ctx, 1), CtxKey_addcaller, 1)
 	ok, err := r.DoScript(ctx, checkServicesScirpt, []string{key}, RegExprieTime, uuid).Int()
 	if err != nil || ok == 0 {
 		return false

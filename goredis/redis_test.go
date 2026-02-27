@@ -190,6 +190,61 @@ func BenchmarkRedisHMSetObj(b *testing.B) {
 	fmt.Printf("%v\n", t3)
 }
 
+func BenchmarkRedisJson(b *testing.B) {
+	redis, _ := NewRedis(cfg)
+	if redis == nil {
+		return
+	}
+	type Head struct {
+		HF string `json:"UID,omitempty"`
+	}
+	type Test struct {
+		F1  int                    `json:"f1,omitempty"`
+		F11 *int                   `json:"f11,omitempty"`
+		F2  float32                `json:"f2,omitempty"`
+		F22 *float32               `json:"f22,omitempty"`
+		F3  string                 `json:"f3,omitempty"`
+		F33 *string                `json:"f33,omitempty"`
+		F4  []byte                 `json:"f4,omitempty"`
+		F44 []byte                 `json:"f44,omitempty"`
+		F6  [6]int                 `json:"f6,omitempty"`
+		F7  interface{}            `json:"f7,omitempty"`
+		F77 interface{}            `json:"f77,omitempty"`
+		F8  map[string]interface{} `json:"f8,omitempty"`
+		F88 map[string]interface{} `json:"f88,omitempty"`
+		F9  Head                   `json:"f9,omitempty"`
+		F99 *Head                  `json:"f99,omitempty"`
+	}
+
+	t1 := &Test{
+		F1:  5,
+		F2:  0,
+		F3:  "test1 test2",
+		F4:  []byte{'t', 'e', 's', 't', '1', '0', 't', 't'},
+		F7:  &Head{HF: "123"},
+		F8:  map[string]interface{}{"k": "v"},
+		F99: &Head{HF: "123"},
+	}
+
+	t2 := &Test{}
+
+	redis.SetJson(context.TODO(), "json_test", t1)
+	redis.HSetJson(context.TODO(), "json_test_dic", "f", t1)
+
+	rv := map[string]*Test{}
+	redis.Do2(context.TODO(), "hgetall", "json_test_dic").BindJsonObjMap(&rv)
+
+	pipeline := redis.NewPipeline()
+	pipeline.SetJson(context.TODO(), "json_test", t1)
+	pipeline.HSetJson(context.TODO(), "json_test_dic", "f", t1)
+	rv2 := map[string]*Test{}
+	pipeline.Do2(context.TODO(), "hgetall", "json_test_dic").BindJsonObjMap(&rv2)
+	pipeline.ExecNoNil(context.TODO())
+
+	redis.HMGetObj(context.TODO(), "fmtt", t2)
+
+}
+
 func BenchmarkTryLockWait(b *testing.B) {
 	redis, _ := NewRedis(cfg)
 	if redis == nil {

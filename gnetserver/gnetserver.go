@@ -3,12 +3,16 @@ package gnetserver
 // https://github.com/yuwf/gobase
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/yuwf/gobase/msger"
 	"github.com/yuwf/gobase/utils"
 
 	"github.com/panjf2000/gnet"
@@ -21,6 +25,8 @@ import (
 // ClientInfo是和业务相关的客户端信息结构类型
 type GNetServer[ClientId any, ClientInfo any] struct {
 	*gnet.EventServer
+	// 消息分发
+	*msger.MsgDispatch
 	// 不可需改
 	Address string // 监听地址
 	Scheme  string // scheme支持tcp和ws，为空表示tcp
@@ -40,36 +46,50 @@ type GNetServer[ClientId any, ClientInfo any] struct {
 
 // GNetClient过渡对象，便于保存id，减少GNetClient的复杂度
 type gClient[ClientId any, ClientInfo any] struct {
-	gc *GNetClient[ClientInfo]
-	id ClientId // 调用GNetServer.AddClient设置的id 目前无锁 不存在复杂使用
+	gc      *GNetClient[ClientInfo]
+	id      ClientId // 调用GNetServer.AddClient设置的id 目前无锁 不存在复杂使用
+	readbuf bytes.Buffer
 }
 
 // 创建服务器
 // scheme支持tcp和ws，为空表示tcp
-func NewGNetServer[ClientId any, ClientInfo any](port int, event GNetEvent[ClientInfo]) *GNetServer[ClientId, ClientInfo] {
+// Msg表示消息类型，必须实现util.Msger接口，否则消息无法分发
+func NewGNetServer[ClientId any, ClientInfo any, Msg any](port int, event GNetEvent[ClientInfo]) (*GNetServer[ClientId, ClientInfo], error) {
+	md, err := msger.NewMsgDispatch[Msg, GNetClient[ClientInfo]]()
+	if err != nil {
+		return nil, err
+	}
 	s := &GNetServer[ClientId, ClientInfo]{
 		Address:     fmt.Sprintf("tcp://:%d", port),
 		Scheme:      "tcp",
 		event:       event,
+		MsgDispatch: md,
 		state:       0,
 		EventServer: &gnet.EventServer{},
 		connMap:     new(sync.Map),
 		clientMap:   new(sync.Map),
 	}
-	return s
+
+	return s, nil
 }
 
-func NewGNetServerWS[ClientId any, ClientInfo any](port int, event GNetEvent[ClientInfo]) *GNetServer[ClientId, ClientInfo] {
+func NewGNetServerWS[ClientId any, ClientInfo any, Msg any](port int, event GNetEvent[ClientInfo]) (*GNetServer[ClientId, ClientInfo], error) {
+	md, err := msger.NewMsgDispatch[Msg, GNetClient[ClientInfo]]()
+	if err != nil {
+		return nil, err
+	}
 	s := &GNetServer[ClientId, ClientInfo]{
 		Address:     fmt.Sprintf("tcp://:%d", port),
 		Scheme:      "ws",
 		event:       event,
+		MsgDispatch: md,
 		state:       0,
 		EventServer: &gnet.EventServer{},
 		connMap:     new(sync.Map),
 		clientMap:   new(sync.Map),
 	}
-	return s
+
+	return s, nil
 }
 
 // 开启监听
@@ -79,6 +99,12 @@ func (s *GNetServer[ClientId, ClientInfo]) Start() error {
 		return nil
 	}
 	log.Info().Str("Addr", s.Address).Msg("GNetServer Starting")
+
+	// 先让外层注册消息
+	if s.event != nil {
+		s.event.OnMsgReg(s.MsgDispatch)
+	}
+
 	// 开启监听 gnet.Serve会阻塞
 	go func() {
 		err := gnet.Serve(s, s.Address,
@@ -160,20 +186,20 @@ func (s *GNetServer[ClientId, ClientInfo]) RemoveClient(id ClientId) *GNetClient
 
 // 主动关闭 不会回调事件的OnDisConnect
 // 使用GNetClient.Close会回调事件的OnDisConnect
-func (s *GNetServer[ClientId, ClientInfo]) CloseClient(id ClientId) {
+func (s *GNetServer[ClientId, ClientInfo]) CloseClient(id ClientId, err error) {
 	client, ok := s.clientMap.Load(id)
 	if ok {
 		gc := client.(*gClient[ClientId, ClientInfo]).gc
-		log.Info().Str("Name", gc.ConnName()).Msg("OnClosed CloseClient") // 日志为GNetServer OnClosed 便于和下面的OnClosed统一查找
+		log.Info().Err(err).Msgf("Closed CloseClient %s", gc.ConnName()) // 日志为GNetServer Closed 便于和下面的OnClosed统一查找
 		s.connMap.Delete(gc.conn)
 		s.clientMap.Delete(id)
-		gc.Close(nil) // 会回调GNetServer的OnClosed 所以上面先删除对象
+		gc.Close(err) // 会回调GNetServer的OnClosed 所以上面先删除对象
 
 		// 回调
 		func() {
 			defer utils.HandlePanic()
 			for _, h := range s.hook {
-				h.OnDisConnect(gc, true, nil)
+				h.OnDisConnect(gc, true, err)
 			}
 		}()
 	}
@@ -194,17 +220,17 @@ func (s *GNetServer[ClientId, ClientInfo]) Send(ctx context.Context, id ClientId
 		return client.(*gClient[ClientId, ClientInfo]).gc.Send(ctx, data)
 	}
 	err := fmt.Errorf("not exist client %v", id)
-	utils.LogCtx(log.Debug(), ctx).Err(err).Int("Size", len(data)).Msg("Send error")
+	utils.LogCtx(log.Debug(), ctx).Err(err).Int("size", len(data)).Msg("Send error")
 	return err
 }
 
-func (s *GNetServer[ClientId, ClientInfo]) SendMsg(ctx context.Context, id ClientId, msg utils.SendMsger) error {
+func (s *GNetServer[ClientId, ClientInfo]) SendMsg(ctx context.Context, id ClientId, msg msger.Msger) error {
 	client, ok := s.clientMap.Load(id)
 	if ok {
 		return client.(*gClient[ClientId, ClientInfo]).gc.SendMsg(ctx, msg)
 	}
 	err := fmt.Errorf("not exist client %v", id)
-	utils.LogCtx(log.Debug(), ctx).Err(err).Interface("Msg", msg).Msg("SendMsg error")
+	utils.LogCtx(log.Debug(), ctx).Err(err).Interface("msger", msg).Msg("SendMsg error")
 	return err
 }
 
@@ -232,14 +258,14 @@ func (s *GNetServer[ClientId, ClientInfo]) ClientCount() int {
 }
 
 // 队列中还未处理的消息
-func (s *GNetServer[ClientId, ClientInfo]) RecvSeqCount() int {
-	l := 0
+func (s *GNetServer[ClientId, ClientInfo]) RecvSeqCount() map[string]int {
+	rst := map[string]int{}
 	s.connMap.Range(func(key, value interface{}) bool {
 		gc := value.(*gClient[ClientId, ClientInfo]).gc
-		l += gc.RecvSeqCount()
+		rst[gc.ConnName()] = gc.RecvSeqCount()
 		return true
 	})
-	return l
+	return rst
 }
 
 // 注册hook
@@ -256,7 +282,7 @@ func (s *GNetServer[ClientId, ClientInfo]) Encode(c gnet.Conn, buf []byte) ([]by
 		func() {
 			defer utils.HandlePanic()
 			for _, h := range s.hook {
-				h.OnSend(gc, len(buf))
+				h.OnSendData(gc, len(buf))
 			}
 		}()
 	}
@@ -265,22 +291,13 @@ func (s *GNetServer[ClientId, ClientInfo]) Encode(c gnet.Conn, buf []byte) ([]by
 
 // 返回值[]byte 就是React的packet
 func (s *GNetServer[ClientId, ClientInfo]) Decode(c gnet.Conn) ([]byte, error) {
+	// 不做任何解码，内部缓存直接清理掉
+	// gnet的原理就是要求在Decode解码出消息，但不符合这里的架构逻辑 gnetclient自己缓存数据吧
 	buf := c.Read()
 	if len(buf) == 0 {
-		return nil, nil
+		return nil, errors.New("incomplete packet")
 	}
-
-	// 回调
-	client, ok := s.connMap.Load(c)
-	if ok {
-		gc := client.(*gClient[ClientId, ClientInfo]).gc
-		func() {
-			defer utils.HandlePanic()
-			for _, h := range s.hook {
-				h.OnRecv(gc, len(buf))
-			}
-		}()
-	}
+	c.ResetBuffer()
 	return buf, nil
 }
 
@@ -299,7 +316,7 @@ func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, ac
 		log.Info().Str("RemoveAddr", c.RemoteAddr().String()).Str("LocalAddr", c.LocalAddr().String()).Msg("OnOpened")
 	}
 
-	gc := newGNetClient(c, s.event, s.hook)
+	gc := newGNetClient(c, s.event, s.MsgDispatch, s.hook)
 	if s.Scheme == "ws" {
 		gc.ctx = context.WithValue(gc.ctx, CtxKey_WS, 1)
 		gc.wsh = newGNetWSHandler(gc)
@@ -307,12 +324,21 @@ func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, ac
 	client := &gClient[ClientId, ClientInfo]{
 		gc: gc,
 	}
-	// 如果clientName还为空 就用client里面的id来表示
-	if client.gc.connName == nil {
+	// 给gc.connName赋值 优先调用对象的ClientName函数
+	connName := func() string {
+		name := fmt.Sprintf("%v", client.id)
+		if len(name) == 0 || name == "0" {
+			return gc.removeAddr.String()
+		}
+		return gc.removeAddr.String() + "-" + name
+	}
+	gc.connName = connName
+	namer, ok := any(gc.info).(ClientNamer)
+	if ok {
 		gc.connName = func() string {
-			name := fmt.Sprintf("%v", client.id)
+			name := namer.ClientName()
 			if len(name) == 0 || name == "0" {
-				return gc.removeAddr.String()
+				return connName()
 			}
 			return name
 		}
@@ -320,7 +346,7 @@ func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, ac
 	s.connMap.Store(c, client)
 	if s.event != nil {
 		gc.seq.Submit(func() {
-			ctx := context.WithValue(gc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+			ctx := utils.CtxSetTrace(gc.ctx, 0, "Connected")
 			s.event.OnConnected(ctx, gc)
 		})
 	}
@@ -343,13 +369,17 @@ func (s *GNetServer[ClientId, ClientInfo]) OnClosed(c gnet.Conn, err error) (act
 			if gc.closeReason != nil {
 				err = gc.closeReason
 			}
-			log.Info().Err(err).Str("Name", gc.ConnName()).Str("RemoveAddr", gc.removeAddr.String()).Msg("OnClosed")
+			if err == nil {
+				// linux下对端正常关闭，err是nil，填充一个错误，编译理解
+				err = io.EOF
+			}
+			log.Info().Err(err).Str("RemoveAddr", gc.removeAddr.String()).Msgf("Closed %s", gc.ConnName())
 		}
 		s.connMap.Delete(c)
 		_, delClient := s.clientMap.LoadAndDelete(client.(*gClient[ClientId, ClientInfo]).id)
 		if s.event != nil {
 			gc.seq.Submit(func() {
-				ctx := context.WithValue(gc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
+				ctx := utils.CtxSetTrace(gc.ctx, 0, "Closed")
 				s.event.OnDisConnect(ctx, gc)
 			})
 		}
@@ -366,19 +396,24 @@ func (s *GNetServer[ClientId, ClientInfo]) OnClosed(c gnet.Conn, err error) (act
 }
 
 func (s *GNetServer[ClientId, ClientInfo]) React(packet []byte, c gnet.Conn) (out []byte, action gnet.Action) {
-	if c.BufferLength() == 0 {
-		return
-	}
 	client, ok := s.connMap.Load(c)
 	if ok {
 		gclient := client.(*gClient[ClientId, ClientInfo])
+		gclient.readbuf.Write(packet)
 		gc := gclient.gc
 		atomic.StoreInt64(&gc.lastRecvTime, time.Now().UnixMicro())
+		// 回调
+		func() {
+			defer utils.HandlePanic()
+			for _, h := range s.hook {
+				h.OnRecvData(gc, len(packet))
+			}
+		}()
+
 		// 是否websock
 		if gc.wsh != nil {
-			len, handshake, err := gc.wsh.recv(c.Read())
+			len, handshake, err := gc.wsh.recv(gclient.readbuf.Bytes())
 			if err != nil {
-				c.ResetBuffer() // 先调用下，防止gnet.Conn有数据还会继续调用
 				gc.Close(err)
 				return
 			}
@@ -399,15 +434,18 @@ func (s *GNetServer[ClientId, ClientInfo]) React(packet []byte, c gnet.Conn) (ou
 					}
 				}()
 			}
-			c.ShiftN(len)
+			if len > 0 {
+				gclient.readbuf.Next(len)
+			}
 		} else {
-			len, err := gc.recv(gc.ctx, c.Read())
+			len, err := gc.recv(gc.ctx, gclient.readbuf.Bytes())
 			if err != nil {
-				c.ResetBuffer() // 先调用下，防止gnet.Conn有数据还会继续调用
 				gc.Close(err)
 				return
 			}
-			c.ShiftN(len)
+			if len > 0 {
+				gclient.readbuf.Next(len)
+			}
 		}
 	}
 	return
@@ -419,8 +457,7 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 		s.connMap.Range(func(key, value interface{}) bool {
 			gclient := value.(*gClient[ClientId, ClientInfo])
 			gc := gclient.gc
-			ctx := context.WithValue(gc.ctx, utils.CtxKey_traceId, utils.GenTraceID())
-			ctx = context.WithValue(ctx, utils.CtxKey_msgId, "_tick_")
+			ctx := utils.CtxSetTrace(gc.ctx, 0, "Tick")
 			gc.seq.Submit(func() {
 				s.event.OnTick(ctx, gc)
 			})

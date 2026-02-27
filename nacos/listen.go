@@ -20,6 +20,7 @@ func (c *Client) ListenConfig(dataId, group string, loader loader.Loader, immedi
 	if immediately {
 		err := c.LoadConfig(dataId, group, loader)
 		if err != nil {
+			log.Error().Err(err).Str("dataId", dataId).Str("group", group).Msg("Nacos ListenConfig error")
 			return err
 		}
 	} else {

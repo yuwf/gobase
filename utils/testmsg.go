@@ -5,6 +5,7 @@ package utils
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 
@@ -50,11 +51,27 @@ func (tm *TestMsg) MsgMarshal() ([]byte, error) {
 func (tm *TestMsg) BodyData() []byte {
 	return tm.RecvData
 }
-func (tm *TestMsg) BodyUnMarshal(msgType reflect.Type) (interface{}, error) {
+func (tm *TestMsg) RPCId() interface{} {
+	// 如果是TestHeatBeatRespMsg，返回是RPC消息
+	if tm.Msgid == TestHeatBeatRespMsg.Msgid {
+		return TestHeatBeatReqMsg.Msgid
+	}
+	return nil
+}
+func (tm *TestMsg) GroupId() interface{} {
+	return nil
+}
+func (tm *TestMsg) TraceId() int64 {
+	return 0
+}
+func (tm *TestMsg) BodyUnMarshal(dst interface{}) error {
 	// 测试消息Data就是字符串 不用解析
-	msg := reflect.New(msgType).Interface().(TestMsgBody)
-	msg.UnMarshal(tm.RecvData)
-	return msg, nil
+	msg, ok := dst.(TestMsgBody)
+	if ok {
+		msg.UnMarshal(tm.RecvData)
+		return nil
+	}
+	return fmt.Errorf("%s is not TestMsgBody", reflect.TypeOf(dst).Name())
 }
 func (tm *TestMsg) MarshalZerologObject(e *zerolog.Event) {
 	e.Interface("Head", &tm.TestMsgHead)
@@ -141,13 +158,5 @@ var (
 			Msgid: 2,
 		},
 		SendMsg: &TestHeatBeatResp{Data: string("heatrespmsg")},
-	}
-
-	TestRegMsgID = func(msgType reflect.Type) string {
-		m, ok := reflect.New(msgType).Interface().(TestMsgBody)
-		if ok {
-			return strconv.Itoa(int(m.MsgID()))
-		}
-		return ""
 	}
 )

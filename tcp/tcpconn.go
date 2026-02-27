@@ -4,13 +4,15 @@ package tcp
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/yuwf/gobase/utils"
 )
 
 const (
@@ -22,17 +24,14 @@ const (
 )
 
 // TCPConn 事件回调接口
-// 在OnDialFail OnDialSuccess OnDisConnect回调函数中 不可调用TCPConn.Close函数
 type TCPConnEvent interface {
 	// OnDialFail 连接失败，等待下次连接 拨号模式调用, 返回nil会再次自动重连，否则不重连
 	OnDialFail(err error, tc *TCPConn) error
 	// OnDialSuccess 连接成功 拨号模式调用
 	OnDialSuccess(tc *TCPConn)
 
-	// OnDisConnect 失去连接，外部Close不会调用，拨号模式返回nil会自动重连，否则不自动重连，调用后会清空还未发送的消息队列
+	// OnDisConnect 失去连接，主动调用Close也会调用，拨号模式返回nil会自动重连，否则不自动重连，调用后会清空还未发送的消息队列
 	OnDisConnect(err error, tc *TCPConn) error
-	// OnClose 关闭了本Conn，外部Close才会调用
-	OnClose(tc *TCPConn)
 	// OnRecv 收到数据，处理层返回处理数据的长度，返回error将失去连接
 	OnRecv(data []byte, tc *TCPConn) (int, error)
 	// OnSend 发送数据，返回error将失去连接
@@ -52,8 +51,6 @@ func (*TCPConnEvenHandle) OnDialSuccess(tc *TCPConn) {
 func (*TCPConnEvenHandle) OnDisConnect(err error, tc *TCPConn) error {
 	return nil
 }
-func (*TCPConnEvenHandle) OnClose(tc *TCPConn) {
-}
 func (*TCPConnEvenHandle) OnRecv(data []byte, tc *TCPConn) (int, error) {
 	return len(data), nil
 }
@@ -70,14 +67,16 @@ type TCPConn struct {
 	event      TCPConnEvent // 事件回调接口
 
 	// 只有run协程负责修改
-	state int32    // 连接状态 原子操作
+	state int32    // 连接状态 原子操作，只有loop协程负责修改
 	conn  net.Conn // 连接对象
 
 	mq chan []byte // 写消息队列
 
 	// 外部要求退出
-	quit     chan int // 退出chan 外部写 内部读
-	quitFlag int32    // 标记是否退出，原子操作, <0内部退出 >0外部Close 0：未退出 1：表示等待退出 2：表示不等待退出
+	quit      chan struct{} // 退出chan 外部写 内部读
+	quitState int32         // 标记是否退出，原子操作, <0内部退出 >0外部Close 0：未退出 1：表示等待退出 2：表示不等待退出
+	closed    chan struct{} // 关闭chan 内部写 外部读
+	reconn    chan struct{} // 重新连接 外部写 内部读 只有在拨号模式下才有效
 }
 
 // NewTCPConn 创建TCP网络主动连接对象，拨号模式，address格式 host:port (客户端)
@@ -92,7 +91,9 @@ func NewTCPConn(address string, event TCPConnEvent) (*TCPConn, error) {
 		removeAddr: *tcpAddr,
 		event:      event,
 		state:      TCPStateInvalid,
-		quit:       make(chan int),
+		quit:       make(chan struct{}),
+		closed:     make(chan struct{}),
+		reconn:     make(chan struct{}, 1), // 开一个缓存即可
 		mq:         make(chan []byte, 10000),
 	}
 	// 开启循环
@@ -119,7 +120,8 @@ func NewTCPConned(conn net.Conn, event TCPConnEvent) (*TCPConn, error) {
 		event:      event,
 		state:      TCPStateConnected, // 默认连接成功
 		conn:       conn,
-		quit:       make(chan int),
+		quit:       make(chan struct{}),
+		closed:     make(chan struct{}),
 		mq:         make(chan []byte, 10000),
 	}
 	// 开启循环
@@ -178,24 +180,30 @@ func (tc *TCPConn) MQClear() {
 	}
 }
 
-// Close 关闭连接 在event的回调函数中不可调用等待关闭
+// Close 关闭连接
+// waitClose 是否等待关闭完成，true：等待 false：不等待，允许在event的回调函数中调用
 func (tc *TCPConn) Close(waitClose bool) {
-	quitFlag := 1
+	quitState := 1
 	if !waitClose {
-		quitFlag = 2
+		quitState = 2
 	}
 	// 判断外部是否能调用关闭
-	if atomic.CompareAndSwapInt32(&tc.quitFlag, 0, int32(quitFlag)) {
+	if atomic.CompareAndSwapInt32(&tc.quitState, 0, int32(quitState)) {
+		close(tc.quit)
 		if waitClose {
-			tc.quit <- int(atomic.LoadInt32(&tc.quitFlag))
-			if quitFlag == 1 {
-				<-tc.quit
-			}
-		} else {
-			go func() {
-				tc.quit <- int(atomic.LoadInt32(&tc.quitFlag))
-			}()
+			<-tc.closed
 		}
+	}
+}
+
+// Recon 重新连接，只有主动连接的才支持
+func (tc *TCPConn) Reconn() {
+	if !tc.dialMode {
+		return
+	}
+	select {
+	case tc.reconn <- struct{}{}:
+	default:
 	}
 }
 
@@ -203,28 +211,50 @@ func (tc *TCPConn) loop() {
 	for {
 		// 拨号模式 先拨号
 		if tc.dialMode {
-			if !tc.loopDial() {
-				atomic.CompareAndSwapInt32(&tc.quitFlag, 0, -1)
+			atomic.StoreInt32(&tc.state, TCPStateConnecting)
+
+			// 不需要等待loopDial退出，内部已经处理了合理的退出，否则会导致死锁(在OnDialSuccess的回调中调用了Close(true))
+			lexit := make(chan error, 1)
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() {
+				tc.loopDial(ctx, lexit)
+			}()
+
+			select {
+			case <-tc.quit:
+				atomic.StoreInt32(&tc.state, TCPStateStop)
+				cancel() // 取消连接
+			case exitErr := <-lexit:
+				if exitErr == nil {
+					// loopDial填充nil 表示连接成功
+					atomic.StoreInt32(&tc.state, TCPStateConnected)
+				} else {
+					atomic.CompareAndSwapInt32(&tc.quitState, 0, -1)
+					atomic.StoreInt32(&tc.state, TCPStateStop)
+				}
+			}
+
+			// 要求退出了 直接退出
+			if atomic.LoadInt32(&tc.quitState) != 0 {
 				break
 			}
 		}
 
 		// 开启器读写
-		wg := &sync.WaitGroup{} // 用来等待读写退出
-		wg.Add(2)
+		// 不需要等待loopRead 和 loopWrite退出，内部已经处理了合理的退出，否则会导致死锁(在OnRecv的回调中调用了Close(true))
 		rexit := make(chan error, 1) // 读内部退出
 		wexit := make(chan error, 1) // 写内部退出
+		conn := tc.conn              // 保存连接对象 防止在读写循环还没开始，下面的就给关闭了
 		go func() {
-			tc.loopRead(rexit)
-			wg.Done()
+			tc.loopRead(conn, rexit)
 		}()
 		go func() {
-			tc.loopWrite(wexit)
-			wg.Done()
+			tc.loopWrite(conn, wexit)
 		}()
 
 		// 监听外部退出和读写退出
 		var exitErr error
+		reconn := false
 		select {
 		case <-tc.quit:
 			atomic.StoreInt32(&tc.state, TCPStateStop)
@@ -232,66 +262,45 @@ func (tc *TCPConn) loop() {
 			atomic.StoreInt32(&tc.state, TCPStateRWExit)
 		case exitErr = <-wexit:
 			atomic.StoreInt32(&tc.state, TCPStateRWExit)
+		case <-tc.reconn:
+			reconn = true
+			exitErr = errors.New("reconn")
+			atomic.StoreInt32(&tc.state, TCPStateInvalid)
 		}
 
-		// 等待读写退出
-		wg.Wait()
-		close(rexit)
-		close(wexit)
-
+		// 关闭socket
 		tc.conn.Close()
 		tc.conn = nil
 
-		// 如果是外部要求退出 直接退出
-		if atomic.LoadInt32(&tc.state) == TCPStateStop {
-			break
-		}
 		if tc.event != nil {
-			if tc.event.OnDisConnect(exitErr, tc) != nil {
-				atomic.CompareAndSwapInt32(&tc.quitFlag, 0, -1)
+			var err error
+			func() {
+				defer utils.HandlePanic()
+				err = tc.event.OnDisConnect(exitErr, tc)
+			}()
+			if err != nil {
+				atomic.CompareAndSwapInt32(&tc.quitState, 0, -1)
 				break
 			}
 		}
 		// 清空待发送的消息
 		tc.MQClear()
+
 		// 如果不是拨号模式 直接退出
 		if !tc.dialMode {
-			atomic.CompareAndSwapInt32(&tc.quitFlag, 0, -1)
+			atomic.CompareAndSwapInt32(&tc.quitState, 0, -1)
+		}
+
+		// 要求退出了 直接退出
+		if atomic.LoadInt32(&tc.quitState) != 0 {
 			break
 		}
-	}
 
-	quitFlag := atomic.LoadInt32(&tc.quitFlag)
-	if quitFlag > 0 && tc.event != nil {
-		tc.event.OnClose(tc)
-	}
-	if quitFlag == 1 {
-		// 清空下quit，防止内部close途中，外部调用Close
-		select {
-		case <-tc.quit:
-		default:
-		}
-		tc.quit <- int(atomic.LoadInt32(&tc.quitFlag)) // 反写让Close退出
-	}
-}
-
-func (tc *TCPConn) loopDial() bool {
-	// 开始连接
-	atomic.StoreInt32(&tc.state, TCPStateConnecting)
-	for {
-		conn, err := net.DialTimeout("tcp", tc.removeAddr.String(), time.Second*30)
-		if err != nil || conn == nil {
-			if tc.event != nil {
-				if tc.event.OnDialFail(err, tc) != nil {
-					atomic.StoreInt32(&tc.state, TCPStateStop)
-					return false
-				}
-			}
-			// 连接失败 1秒后继续连
+		// 如果是要求重连，等待1秒后继续重连
+		if reconn {
 			timer := time.NewTimer(time.Second)
 			select {
 			case <-tc.quit:
-				atomic.StoreInt32(&tc.state, TCPStateStop)
 			case <-timer.C:
 				continue
 			}
@@ -301,34 +310,93 @@ func (tc *TCPConn) loopDial() bool {
 				default:
 				}
 			}
-			// 如果是外部要求退出 直接退出
-			if atomic.LoadInt32(&tc.state) == TCPStateStop {
-				return false
+
+			// 再次检查是否退出了
+			if atomic.LoadInt32(&tc.quitState) != 0 {
+				break
 			}
-			continue
 		}
-		tc.conn = conn
-		break
 	}
-	// 连接成功
-	atomic.StoreInt32(&tc.state, TCPStateConnected)
-	tc.localAddr = *tc.conn.LocalAddr().(*net.TCPAddr) // 写下本地地址
-	if tc.event != nil {
-		tc.event.OnDialSuccess(tc)
-	}
-	return true
+
+	close(tc.closed)
 }
 
-func (tc *TCPConn) loopRead(exit chan error) {
+// 内部会一直尝试连接 直到外部要求退出或者连接成功
+// 成功是 lexit 发送 nil, 外部要求退出是 lexit 发送错误
+func (tc *TCPConn) loopDial(ctx context.Context, exit chan error) {
+	// 开始连接
+	var conn net.Conn
+	for {
+		var err error
+		// 连接
+		d := net.Dialer{Timeout: time.Second * 30}
+		conn, err = d.DialContext(ctx, "tcp", tc.removeAddr.String())
+
+		// 先检查下连接状态
+		if atomic.LoadInt32(&tc.state) != TCPStateConnecting {
+			exit <- fmt.Errorf("Dial state is not Connecting")
+			return
+		}
+
+		// 连接成功
+		if err == nil && conn != nil {
+			break
+		}
+
+		if tc.event != nil {
+			func() {
+				defer utils.HandlePanic()
+				err = tc.event.OnDialFail(err, tc)
+			}()
+
+			if err != nil {
+				exit <- err // 外部要求不在连接了
+				return
+			}
+		}
+		// 连接失败 1秒后继续连
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-tc.quit:
+		case <-timer.C:
+			continue
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C: // try to drain the channel
+			default:
+			}
+		}
+
+		// 再次检查下连接状态
+		if atomic.LoadInt32(&tc.state) != TCPStateConnecting {
+			exit <- fmt.Errorf("Dial state is not Connecting")
+			return
+		}
+	}
+	// 连接成功
+	tc.conn = conn
+	tc.localAddr = *conn.LocalAddr().(*net.TCPAddr) // 写下本地地址
+	if tc.event != nil {
+		func() {
+			defer utils.HandlePanic()
+			tc.event.OnDialSuccess(tc)
+		}()
+	}
+	exit <- nil
+}
+
+func (tc *TCPConn) loopRead(conn net.Conn, exit chan error) {
 	readbuf := new(bytes.Buffer)
 	buf := make([]byte, 1024*16)
 	for {
 		// 先检查下连接状态
 		if atomic.LoadInt32(&tc.state) != TCPStateConnected {
+			exit <- fmt.Errorf("Read state is not Connected")
 			return
 		}
-		tc.conn.SetReadDeadline(time.Now().Add(time.Second))
-		n, err := tc.conn.Read(buf)
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, err := conn.Read(buf)
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				continue
@@ -362,29 +430,37 @@ func (tc *TCPConn) loopRead(exit chan error) {
 	}
 }
 
-func (tc *TCPConn) loopWrite(exit chan error) {
+func (tc *TCPConn) loopWrite(conn net.Conn, exit chan error) {
 	for {
 		// 先检查下连接状态
 		if atomic.LoadInt32(&tc.state) != TCPStateConnected {
-			break
+			exit <- fmt.Errorf("Write state is not Connected")
+			return
 		}
+		exitFlag := false
 		timer := time.NewTimer(time.Second)
 		select {
+		case <-tc.quit:
+			exitFlag = true
 		case <-timer.C:
 			continue
 		case buf := <-tc.mq:
 			if tc.event != nil {
 				var err error
-				buf, err = tc.event.OnSend(buf, tc)
+				func() {
+					defer utils.HandlePanic()
+					buf, err = tc.event.OnSend(buf, tc)
+				}()
 				if err != nil {
 					exit <- fmt.Errorf("OnSend %s", err.Error())
-					return
+					exitFlag = true
+					break
 				}
 			}
-			_, err := tc.conn.Write(buf)
+			_, err := conn.Write(buf)
 			if err != nil {
 				exit <- fmt.Errorf("Write %s", err.Error())
-				return
+				exitFlag = true
 			}
 		}
 		if !timer.Stop() {
@@ -392,6 +468,9 @@ func (tc *TCPConn) loopWrite(exit chan error) {
 			case <-timer.C: // try to drain the channel
 			default:
 			}
+		}
+		if exitFlag {
+			break
 		}
 	}
 }

@@ -22,12 +22,6 @@ const typeErrFmt = "%v(%v) not to %v"
 
 var RedisTag = "redis"
 
-// GET HGET LPOP RPOP SPOP 会返回空错误
-// BindValues 也会可能会返回redis.Nil
-func IsNilError(err error) bool {
-	return err == redis.Nil
-}
-
 // 获取第一个key位置
 func GetFirstKeyPos(cmd redis.Cmder) int {
 	vo := reflect.ValueOf(cmd).Elem()
@@ -630,7 +624,7 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 		// 元素是指针，指针指向的类型必须是结构
 		if elemtype.Elem().Kind() != reflect.Struct {
 			err := errors.New("bind param elem kind must be struct or *struct")
-			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisPipeline BindJsonObjSlice bind param kind must be struct or *Struct")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisPipeline BindJsonObjSlice bind param kind must be struct or *struct")
 			return err
 		}
 	} else if elemtype.Kind() != reflect.Struct {
@@ -713,6 +707,141 @@ func (c *RedisCommond) BindJsonObjSlice(v interface{}) error {
 		err := c.callback(cmd.Val())
 		if err != nil {
 			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjSlice fail")
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *RedisCommond) BindJsonObjMap(v interface{}) error {
+	// 参数检查
+	vt := reflect.TypeOf(v)
+	if vt.Kind() != reflect.Ptr {
+		err := errors.New("bind param kind must be pointer")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjMap fail")
+		return err
+	}
+	if vt.Elem().Kind() != reflect.Map {
+		err := errors.New("bind param kind must be map")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjMap fail")
+		return err
+	}
+	// keytype只能是基础类型
+	keytype := vt.Elem().Key()
+	isBaseType := false
+	switch keytype.Kind() {
+	case reflect.Bool:
+		isBaseType = true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		isBaseType = true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		isBaseType = true
+	case reflect.Slice:
+		if keytype.Elem().Kind() == reflect.Uint8 {
+			isBaseType = true
+		}
+	case reflect.String:
+		isBaseType = true
+	}
+	if !isBaseType {
+		err := errors.New("bind param key must be base type")
+		utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjMap fail")
+		return err
+	}
+
+	elemtype := vt.Elem().Elem() // 第一层是map，第二层是slice中的元素
+	if elemtype.Kind() == reflect.Pointer {
+		// 元素是指针，指针指向的类型必须是结构
+		if elemtype.Elem().Kind() != reflect.Struct {
+			err := errors.New("bind param elem kind must be struct or *struct")
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisPipeline BindJsonObjMap bind param kind must be struct or *struct")
+			return err
+		}
+	} else if elemtype.Kind() != reflect.Struct {
+		err := errors.New("bind param elem kind must be struct or *struct")
+		utils.LogCtx(log.Error(), c.ctx).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjMap fail")
+		return err
+	}
+
+	vo := reflect.ValueOf(v)
+	m := vo.Elem() // 第一层是map的地址 第二层是map
+	if m.IsNil() {
+		m = reflect.MakeMap(vt.Elem())
+		ind := reflect.Indirect(vo)
+		ind.Set(m)
+	}
+
+	// 绑定回调函数
+	c.callback = func(reply interface{}) error {
+		switch r := reply.(type) {
+		case int64:
+		case string:
+		case []byte:
+		case []interface{}:
+			for i := 0; i+1 < len(r); i += 2 {
+				if r[i] == nil {
+					continue
+				}
+				key := reflect.New(keytype).Elem()
+				err := InterfaceToValue(r[i], key)
+				if err != nil {
+					return err
+				}
+
+				var value reflect.Value
+				if elemtype.Kind() == reflect.Pointer {
+					value = reflect.New(elemtype.Elem())
+				} else {
+					value = reflect.New(elemtype).Elem()
+				}
+				switch r2 := r[i+1].(type) {
+				case int64:
+				case string:
+					if elemtype.Kind() == reflect.Pointer {
+						json.Unmarshal([]byte(r2), value.Interface())
+					} else {
+						json.Unmarshal([]byte(r2), value.Addr().Interface())
+					}
+					m.SetMapIndex(key, value)
+				case []byte:
+					if elemtype.Kind() == reflect.Pointer {
+						json.Unmarshal(r2, value.Interface())
+					} else {
+						json.Unmarshal(r2, value.Addr().Interface())
+					}
+					m.SetMapIndex(key, value)
+				case []interface{}:
+				case nil:
+				case redis.Error:
+				}
+
+				m.SetMapIndex(key, value)
+			}
+			return nil
+		case nil:
+			// 空值
+			return nil
+		case redis.Error:
+			return r
+		}
+		return fmt.Errorf(typeErrFmt, reflect.TypeOf(reply), reply, m.Type())
+	}
+
+	// 直接调用的Redis 此时已经有结果值了
+	if c.Cmd != nil {
+		if c.Cmd.Err() != nil {
+			return c.Cmd.Err()
+		}
+		cmd, ok := c.Cmd.(*redis.Cmd)
+		if !ok {
+			// 调用绑定的都应该是Cmd才对
+			err := fmt.Errorf("%s not *redis.Cmd", reflect.TypeOf(c.Cmd))
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjMap fail")
+			return err
+		}
+		err := c.callback(cmd.Val())
+		if err != nil {
+			utils.LogCtx(log.Error(), c.ctx).Err(err).Str("cmd", c.CmdString()).Msg("RedisCommond BindJsonObjMap fail")
 			return err
 		}
 	}

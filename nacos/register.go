@@ -4,8 +4,12 @@ package nacos
 
 import (
 	"errors"
-	"sync/atomic"
+	"fmt"
+	"sync"
 
+	"github.com/nacos-group/nacos-sdk-go/v2/clients"
+	"github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client"
+	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 	"github.com/rs/zerolog/log"
 )
@@ -30,17 +34,32 @@ type RegistryConfig struct {
 	ClusterName string            `json:"clusterName,omitempty"` //optional // 集群隔离，对应不同的人都连接相同Nacos时，可以起不同的名字
 }
 
+// 每个Register对象会创建一个naming_client.INamingClient对象，见Client中nacosNamingCli的说明
+// Close后naming_client.INamingClient对象有goruntine泄露，如果需要频繁的创建Register和Close会有问题
 type Register struct {
-	c     *Client
-	conf  RegistryConfig
-	state int32 // 注册状态 原子操作 0：未注册 1：注册中 2：已注册 3:取消注册中
+	mu             sync.Mutex
+	c              *Client
+	conf           RegistryConfig
+	ins            string
+	nacosNamingCli naming_client.INamingClient
 }
 
 func (c *Client) CreateRegister(conf *RegistryConfig) (*Register, error) {
+	ins := fmt.Sprintf("%s#%d#%s", conf.Ip, conf.Port, conf.ClusterName)
+	cNaming, err := clients.CreateNamingClient(map[string]interface{}{
+		constant.KEY_SERVER_CONFIGS: c.serverConfigs,
+		constant.KEY_CLIENT_CONFIG:  c.clientConfig,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("GroupName", conf.GroupName).Str("ServiceName", conf.ServiceName).Str("Instance", ins).Msg("Nacos Reg CreateNamingClient error")
+		return nil, err
+	}
+
 	register := &Register{
-		c:     c,
-		conf:  *conf, // 配置拷贝一份 防止被外部修改
-		state: 0,
+		c:              c,
+		conf:           *conf, // 配置拷贝一份 防止被外部修改
+		ins:            ins,
+		nacosNamingCli: cNaming,
 	}
 	register.conf.ServiceName = c.SanitizeString(conf.ServiceName)
 	register.conf.ClusterName = c.SanitizeString(conf.ClusterName)
@@ -50,11 +69,17 @@ func (c *Client) CreateRegister(conf *RegistryConfig) (*Register, error) {
 }
 
 func (r *Register) Reg() error {
-	if !atomic.CompareAndSwapInt32(&r.state, 0, 1) {
-		log.Error().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Msg("Nacos already register")
-		return nil
+	if r.nacosNamingCli == nil {
+		err := errors.New("closed")
+		log.Error().Err(err).Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos Reg error")
+		return nil // 不返回错误
 	}
-	log.Debug().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Msg("Nacos registering")
+
+	log.Debug().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos Reging")
+
+	// 加锁
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	regConf := vo.RegisterInstanceParam{
 		Ip:          r.conf.Ip,
@@ -74,26 +99,31 @@ func (r *Register) Reg() error {
 		持久化实例则会持久化被 Nacos 服务端，此时即使注册实例的客户端进程不在
 		这个实例也不会从服务端删除，只会将健康状态设为不健康*/
 	}
-	success, err := r.c.nacosNamingCli.RegisterInstance(regConf)
+	success, err := r.nacosNamingCli.RegisterInstance(regConf)
 	if err != nil {
-		log.Error().Err(err).Msg("Nacos RegisterInstance error")
+		log.Error().Err(err).Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos Reg RegisterInstance error")
 		return err
 	}
 	if !success {
-		log.Error().Msg("Nacos RegisterInstance error")
+		log.Error().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos Reg RegisterInstance error")
 		return errors.New("fail")
 	}
-	atomic.StoreInt32(&r.state, 2)
 
-	log.Info().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Msg("Nacos register success")
+	log.Info().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos Reg success")
 	return nil
 }
 
 func (r *Register) DeReg() error {
-	if !atomic.CompareAndSwapInt32(&r.state, 2, 3) {
-		log.Error().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Msg("Nacos not register")
-		return nil
+	if r.nacosNamingCli == nil {
+		err := errors.New("closed")
+		log.Error().Err(err).Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos DeReg error")
+		return nil // 不返回错误
 	}
+
+	log.Debug().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos DeReging")
+	// 加锁
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	regConf := vo.DeregisterInstanceParam{
 		Ip:          r.conf.Ip,
@@ -104,19 +134,29 @@ func (r *Register) DeReg() error {
 		Ephemeral:   true,
 	}
 
-	success, err := r.c.nacosNamingCli.DeregisterInstance(regConf)
+	success, err := r.nacosNamingCli.DeregisterInstance(regConf)
 	if err != nil {
-		atomic.StoreInt32(&r.state, 2)
-		log.Error().Err(err).Msg("Nacos DeregisterInstance error")
+		log.Error().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Err(err).Msg("Nacos DeReg DeregisterInstance error")
 		return err
 	}
 	if !success {
-		atomic.StoreInt32(&r.state, 2)
-		log.Error().Msg("Nacos DeregisterInstance error")
+		log.Error().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos DeReg DeregisterInstance error")
 		return errors.New("fail")
 	}
 
-	atomic.StoreInt32(&r.state, 0)
-	log.Info().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Msgf("Nacos deregistered")
+	log.Info().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos DeReg success")
 	return nil
+}
+
+// 注意Close后，不能在调用上面的函数
+func (r *Register) Close() {
+	// 加锁
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	log.Info().Str("GroupName", r.conf.GroupName).Str("ServiceName", r.conf.ServiceName).Str("Instance", r.ins).Msg("Nacos Close")
+
+	t := r.nacosNamingCli
+	r.nacosNamingCli = nil
+	t.CloseClient() // 经测试里面有goruntine泄露
 }

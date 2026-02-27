@@ -2,7 +2,14 @@ package mrcache
 
 // https://github.com/yuwf/gobase
 
-import "github.com/yuwf/gobase/goredis"
+import (
+	_ "embed"
+
+	"github.com/yuwf/gobase/goredis"
+)
+
+//go:embed json.lua
+var luaJsonScript string
 
 // 【注意】
 // lua层返回return nil 或者直接return， goredis都会识别为空值，即redis.Nil
@@ -281,7 +288,7 @@ var rowsDelAllScript = goredis.NewScript(`
 	return #dataKeys - 1
 `)
 
-// row 设置数据 没有返回值
+// rows 设置数据 没有返回值
 // key：索引key
 // 参数：第一个是有效期 第二个为keyValuesStr 其他: field op value field op value ..
 // 返回值：err=nil时 1：空：数据为空  2：OK
@@ -318,6 +325,94 @@ var rowsModifyScript = goredis.NewScript(`
 		redis.call('HMSET', dataKey, unpack(setkv))
 	end
 	return 'OK'
+`)
+
+// rows 设置数据 没有返回值
+// key：索引key
+// 参数：第一个是有效期 第二个为keyValuesStr 第三个值表示是否去重（0or1） 其他: field op num value..  field op num value..
+// 返回值：err=nil时 1：空：数据为空  2：返回修改的值列表 和传入的对称
+var rowsJsonArrayModifyScript = goredis.NewScript(luaJsonScript + `
+	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
+	if rst == 0 then
+		return
+	end
+	-- 判断索引中和对应的key是否存在
+	local keyValuesStr = ARGV[2]
+	if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
+		return
+	end
+	local dataKey = KEYS[1] .. "_" .. keyValuesStr
+	local rst = redis.call('EXPIRE', dataKey, ARGV[1])
+	if rst == 0 then
+		return -- 数据不一致了 返回空 重新读
+	end
+
+	local duplicate = tonumber(ARGV[3])
+
+	local setkv = {}
+	local rst = {} -- 返回修改的值列表
+	local pos = 4
+	while pos < #ARGV do
+		local field = ARGV[pos]
+		pos = pos + 1
+		local op = ARGV[pos]
+		pos = pos + 1
+		local num = tonumber(ARGV[pos])
+		pos = pos + 1
+
+		local v = redis.call('HGET', dataKey, field)
+		if not v then
+			v = "[]"
+		end
+
+		local jsonv = json.decode(v)
+		local change = {}
+		
+		if op == "add" then
+			for i = 1, num do
+				local item = ARGV[pos]
+				pos = pos + 1
+				if duplicate == 0 then -- 不去重 直接添加
+					jsonv[#jsonv + 1] = item
+					change[#change+1] = item
+				else
+					local exist = false
+					for i, v in ipairs(jsonv) do
+						if v == item then
+							exist = true
+							break
+						end
+					end
+					if not exist then
+						jsonv[#jsonv + 1] = item
+						change[#change+1] = item
+					end
+				end
+			end
+		elseif op == "del" then
+			for i = 1, num do
+				local item = ARGV[pos]
+				pos = pos + 1
+				for i = #jsonv, 1, -1 do -- 涉及删除 需要倒序遍历
+					if jsonv[i] == item then
+						table.remove(jsonv, i)
+						change[#change+1] = item
+						if duplicate == 0 then
+							break
+						end
+					end
+				end
+			end
+		end
+
+		setkv[#setkv+1] = field
+		setkv[#setkv+1] = json.encode(jsonv)
+		rst[#rst+1] = change
+	end
+	if #setkv > 0 then
+		redis.call('HMSET', dataKey, unpack(setkv))
+	end
+	return rst
 `)
 
 // rows 修改数据 有返回值

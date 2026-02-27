@@ -79,13 +79,20 @@ func (l *JsonLoader[T]) Load(src []byte, path string) error {
 	}
 
 	if src != nil {
-		err := json.Unmarshal(src, conf)
+		// 优先调用对象实现的Unmarshal
+		unmarshal, ok := any(conf).(Unmarshal)
+		var err error
+		if ok {
+			err = unmarshal.Unmarshal(src)
+		} else {
+			err = json.Unmarshal(src, conf)
+		}
 		if err != nil {
 			log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf(conf).Elem().String()).Msg("JsonLoader Load Unmarshal error")
 			return err
 		}
 	}
-	log.Info().Str("path", path).Str("T", reflect.TypeOf(conf).Elem().String()).Interface("conf", conf).Msg("JsonLoader Load Success")
+	log.Info().Str("path", path).Str("T", reflect.TypeOf(conf).Elem().String()).Msg("JsonLoader Load Success")
 
 	// 调用对象的Normalize函数
 	normalizer, ok := any(conf).(Normalizer)
@@ -140,12 +147,18 @@ func (l *JsonLoader[T]) LoadFile(path string) error {
 		creater.Create()
 	}
 
-	err = json.Unmarshal(src, conf)
+	// 优先调用对象实现的Unmarshal
+	unmarshal, ok := any(conf).(Unmarshal)
+	if ok {
+		err = unmarshal.Unmarshal(src)
+	} else {
+		err = json.Unmarshal(src, conf)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("path", path).Str("T", reflect.TypeOf(conf).Elem().String()).Msg("JsonLoader LoadFile Unmarshal error")
 		return err
 	}
-	log.Info().Str("path", path).Str("T", reflect.TypeOf(conf).Elem().String()).Interface("conf", conf).Msg("JsonLoader LoadFile Success")
+	log.Info().Str("path", path).Str("T", reflect.TypeOf(conf).Elem().String()).Msg("JsonLoader LoadFile Success")
 
 	// 调用对象的Normalize函数
 	normalizer, ok := any(conf).(Normalizer)
@@ -189,7 +202,15 @@ func (l *JsonLoader[T]) LoadBy(t *T) error {
 		log.Error().Err(err).Str("T", reflect.TypeOf(t).Elem().String()).Msg("JsonLoader LoadBy error")
 		return err
 	}
-	src, err := json.Marshal(t)
+	// 优先调用对象实现的Marshal
+	marshal, ok := any(t).(Marshal)
+	var src []byte
+	var err error
+	if ok {
+		src, err = marshal.Marshal()
+	} else {
+		src, err = json.Marshal(t)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("T", reflect.TypeOf(t).Elem().String()).Msg("JsonLoader LoadBy Marshal error")
 		return err
@@ -205,12 +226,19 @@ func (l *JsonLoader[T]) LoadBy(t *T) error {
 	if ok {
 		creater.Create()
 	}
+	*conf = *t // 直接拷贝 不能使用下面的json在解析，比如Create中变量设置了未1， 但默认值为0不会写到src中，会导致0拷贝不过去
 
-	err = json.Unmarshal(src, conf)
-	if err != nil {
-		log.Error().Err(err).Str("T", reflect.TypeOf(conf).Elem().String()).Msg("JsonLoader LoadBy Unmarshal error")
-		return err
-	}
+	// // 优先调用对象实现的Unmarshal
+	// unmarshal, ok := any(conf).(Unmarshal)
+	// if ok {
+	// 	err = unmarshal.Unmarshal(src)
+	// } else {
+	// 	err = json.Unmarshal(src, conf)
+	// }
+	// if err != nil {
+	// 	log.Error().Err(err).Str("T", reflect.TypeOf(conf).Elem().String()).Msg("JsonLoader LoadBy Unmarshal error")
+	// 	return err
+	// }
 
 	// 调用对象的Normalize函数
 	normalizer, ok := any(conf).(Normalizer)

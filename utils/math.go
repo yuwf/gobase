@@ -33,6 +33,15 @@ func If[T any](condition bool, trueVal, falseVal T) T {
 	}
 }
 
+func FindIndex[T any](list []T, predicate func(i int) bool) int {
+	for i, _ := range list {
+		if predicate(i) {
+			return i
+		}
+	}
+	return -1
+}
+
 const epsilon float64 = 1e-10
 
 func FloatEqual[T Float](a, b T) bool {
@@ -91,6 +100,22 @@ func Delete[T comparable](collection []T, value T) []T {
 		}
 	}
 	return collection[:b]
+}
+
+// 内部数据会移位，不会修改原切片数据顺序
+func DeleteOrdered[T comparable](collection []T, value T) []T {
+	l := len(collection)
+	if l == 0 {
+		return collection
+	}
+	j := 0 // 新的下标
+	for i := 0; i < l; i++ {
+		if collection[i] != value {
+			collection[j] = collection[i]
+			j++
+		}
+	}
+	return collection[:j]
 }
 
 func Clamp[T Ordered](value T, min T, max T) T {
@@ -207,6 +232,14 @@ func IsSorted[T Ordered](collection []T) bool {
 		}
 	}
 	return true
+}
+
+func ToInterfaceSlice[T any](slice []T) []interface{} {
+	res := make([]interface{}, len(slice))
+	for i, v := range slice {
+		res[i] = v
+	}
+	return res
 }
 
 // 通配符匹配 支持?和*
