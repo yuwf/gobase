@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"unsafe"
 )
 
 // 结构信息
@@ -49,19 +48,16 @@ func GetStructInfoByTag(instance interface{}, tagName string) (*StructValue, err
 	}
 
 	elemts := make([]reflect.Value, 0, len(st.Fields))
-	ptr := uintptr(structvalue.UnsafeAddr())
-	// 遍历每个字段，基于偏移量提取字段值 使用 unsafe.Pointer 来读取字段值
 	for _, field := range st.Fields {
-		elemts = append(elemts, reflect.NewAt(field.Type, unsafe.Pointer(ptr+field.Offset)).Elem())
+		elemts = append(elemts, structvalue.FieldByIndex(field.Index))
 	}
 
-	sInfo := &StructValue{
+	return &StructValue{
 		StructType: st,
 		I:          instance,
 		V:          structvalue,
 		Elemts:     elemts,
-	}
-	return sInfo, nil
+	}, nil
 }
 
 // 根据StructType获取结构信息 instance可以是结构也可以是结构地址
@@ -81,22 +77,19 @@ func GetStructInfoByStructType(instance interface{}, st *StructType) (*StructVal
 	}
 
 	elemts := make([]reflect.Value, 0, len(st.Fields))
-	ptr := uintptr(structvalue.UnsafeAddr())
-	// 遍历每个字段，基于偏移量提取字段值 使用 unsafe.Pointer 来读取字段值
 	for _, field := range st.Fields {
-		elemts = append(elemts, reflect.NewAt(field.Type, unsafe.Pointer(ptr+field.Offset)).Elem())
+		elemts = append(elemts, structvalue.FieldByIndex(field.Index))
 	}
 
-	sInfo := &StructValue{
+	return &StructValue{
 		StructType: st,
 		I:          instance,
 		V:          structvalue,
 		Elemts:     elemts,
-	}
-	return sInfo, nil
+	}, nil
 }
 
-func (s *StructValue) ElemsSlice() []interface{} {
+func (s *StructValue) ElemsInterface() []interface{} {
 	result := make([]interface{}, 0, len(s.Elemts))
 	for _, elemt := range s.Elemts {
 		result = append(result, elemt.Interface())
@@ -104,7 +97,7 @@ func (s *StructValue) ElemsSlice() []interface{} {
 	return result
 }
 
-func (s *StructValue) TagElemsMap() map[string]interface{} {
+func (s *StructValue) TagElemsInterface() map[string]interface{} {
 	result := make(map[string]interface{})
 	for i, elemt := range s.Elemts {
 		result[s.Tags[i]] = elemt.Interface()

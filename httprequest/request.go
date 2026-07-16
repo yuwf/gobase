@@ -192,8 +192,12 @@ func JsonRequest2[T any](ctx context.Context, method, addr string, body interfac
 	}
 
 	// 添加上json格式头
-	call.Header.Set("Content-Type", "application/json")
-	call.Header.Set("Accept", "application/json")
+	if call.Header == nil {
+		if call.Header.Get("Content-Type") == "" {
+			call.Header.Set("Content-Type", "application/json")
+			call.Header.Set("Accept", "application/json")
+		}
+	}
 
 	call.call(ctx)
 	if call.Err != nil {

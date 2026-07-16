@@ -310,11 +310,11 @@ func (s *TCPServer[ClientId, ClientInfo]) ClientCount() int {
 }
 
 // 队列中还未处理的消息
-func (s *TCPServer[ClientId, ClientInfo]) RecvSeqCount() map[string]int {
-	rst := map[string]int{}
+func (s *TCPServer[ClientId, ClientInfo]) RecvSeqCount() map[interface{}]int {
+	rst := map[interface{}]int{}
 	s.connMap.Range(func(key, value interface{}) bool {
 		tc := value.(*tClient[ClientId, ClientInfo]).tc
-		rst[tc.ConnName()] = tc.RecvSeqCount()
+		rst[tc] = tc.RecvSeqCount()
 		return true
 	})
 	return rst
@@ -365,8 +365,8 @@ func (s *TCPServer[ClientId, ClientInfo]) OnAccept(c net.Conn) {
 	}
 	s.connMap.Store(conn, client)
 	if s.event != nil {
-		tc.seq.Submit(func() {
-			ctx := utils.CtxSetTrace(tc.ctx, 0, "Connected")
+		ctx := utils.CtxSetTrace(tc.ctx, 0, "Connected")
+		tc.seq.Submit(ctx, func() {
 			s.event.OnConnected(ctx, tc)
 		})
 	}
@@ -395,8 +395,8 @@ func (s *TCPServer[ClientId, ClientInfo]) OnDisConnect(err error, c *tcp.TCPConn
 		_, delClient := s.clientMap.LoadAndDelete(client.(*tClient[ClientId, ClientInfo]).id)
 		tc.clear()
 		if s.event != nil {
-			tc.seq.Submit(func() {
-				ctx := utils.CtxSetTrace(tc.ctx, 0, "DisConnected")
+			ctx := utils.CtxSetTrace(tc.ctx, 0, "DisConnected")
+			tc.seq.Submit(ctx, func() {
 				s.event.OnDisConnect(ctx, tc)
 			})
 		}
@@ -490,7 +490,7 @@ func (s *TCPServer[ClientId, ClientInfo]) loopTick() {
 				tclient := value.(*tClient[ClientId, ClientInfo])
 				tc := tclient.tc
 				ctx := utils.CtxSetTrace(tc.ctx, 0, "Tick")
-				tc.seq.Submit(func() {
+				tc.seq.Submit(ctx, func() {
 					s.event.OnTick(ctx, tc)
 				})
 				return true

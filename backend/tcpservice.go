@@ -36,8 +36,8 @@ type TcpService[ServiceInfo any] struct {
 	g        *TcpGroup[ServiceInfo] // 上层对象
 	conf     *ServiceConfig         // 服务器发现的配置
 	address  string                 // 地址
-	seq      utils.Sequence         // 消息顺序处理工具 协程安全
-	groupSeq utils.GroupSequence    // 分组执行的消息, 消息设置为非顺序处理的才会分组
+	seq      utils.Sequence         // 消息顺序处理工具
+	groupSeq utils.GroupSequence    // 分组消息顺序处理工具
 	info     *ServiceInfo           // 客户端信息，内容修改需要外层加锁控制
 	conn     *tcp.TCPConn           // 连接对象，协程安全
 
@@ -46,8 +46,9 @@ type TcpService[ServiceInfo any] struct {
 
 	ctx context.Context // 本连接的上下文
 
-	//RPC消息使用 [rpcid:chan respmsg]
-	rpc *sync.Map
+	//RPC消息使用
+	rpc      *sync.Map // 同步rpc使用 [rpcid:chan *msger.RecvMsger]
+	asyncRpc *sync.Map // 异步rpc使用 [rpcid:*asyncRPC]
 
 	// 外部要求退出
 	quit      chan struct{} // 退出chan 外部写 内部读
@@ -65,6 +66,7 @@ func NewTcpService[ServiceInfo any](conf *ServiceConfig, g *TcpGroup[ServiceInfo
 		connLogined: 0,
 		ctx:         context.WithValue(context.TODO(), CtxKey_scheme, "tcp"),
 		rpc:         new(sync.Map),
+		asyncRpc:    new(sync.Map),
 		quit:        make(chan struct{}),
 		quitState:   0,
 		closed:      make(chan struct{}),
@@ -99,6 +101,14 @@ func (ts *TcpService[ServiceInfo]) clear() {
 		if ok {
 			ch := rpc.(chan msger.RecvMsger)
 			close(ch) // 删除的地方负责关闭
+		}
+		return true
+	})
+	ts.asyncRpc.Range(func(key, value interface{}) bool {
+		rpc, ok := ts.asyncRpc.LoadAndDelete(key)
+		if ok {
+			asyncRpc := rpc.(*asyncRPC)
+			close(asyncRpc.ch) // 删除的地方负责关闭
 		}
 		return true
 	})
@@ -244,16 +254,11 @@ func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interfa
 	// 先添加一个channel记录，防止Send还没出来就收到了回复，并且判断是否存在一样的
 	ch := make(chan msger.RecvMsger, 1) // 使用缓冲channel
 	if _, loaded := ts.rpc.LoadOrStore(rpcIdV, ch); loaded {
-		close(ch) // 关闭新创建的channel
 		err := errors.New("rpcId exist")
 		utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Interface("msger", req).Msgf("SendRPCMsg %s error", ts.ConnName())
 		return nil, err
 	}
-	defer func() {
-		if _, ok := ts.rpc.LoadAndDelete(rpcIdV); ok {
-			close(ch) // 删除的地方负责关闭
-		}
-	}()
+
 	// 回调
 	entry := time.Now()
 	defer func() {
@@ -262,9 +267,12 @@ func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interfa
 			h.OnSendRPCMsg(ts, rpcId, req, time.Since(entry), len(data))
 		}
 	}()
+
 	// 发送
 	err = ts.conn.Send(data)
 	if err != nil {
+		// 发送失败，先删除channel记录
+		ts.rpc.Delete(rpcIdV)
 		utils.LogCtx(log.Error(), ctx).Err(err).Str("rpcId", rpcIdV).Interface("msger", req).Msgf("SendRPCMsg %s error", ts.ConnName())
 		return nil, err
 	}
@@ -287,12 +295,13 @@ func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interfa
 		}
 	case <-timer.C:
 		err = errors.New("timeout")
+		ts.rpc.Delete(rpcIdV) // 超时删除channel记录
 	}
 	if resp == nil && err == nil { //clear函数的调用会触发此情况
 		err = errors.New("close")
 	}
 	if err != nil {
-		utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("SendRPCMsg %s resp error", ts.ConnName())
+		utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("RecvRPCMsg %s error", ts.ConnName())
 		return nil, err
 	}
 
@@ -300,16 +309,23 @@ func (ts *TcpService[ServiceInfo]) SendRPCMsg(ctx context.Context, rpcId interfa
 	if respBody != nil {
 		err = resp.BodyUnMarshal(respBody)
 		if err != nil {
-			utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("SendRPCMsg %s resp error", ts.ConnName())
+			utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("RecvRPCMsg %s error", ts.ConnName())
 			return resp, err
 		}
 	}
 
 	// 日志
 	if logLevel >= int(log.Logger.GetLevel()) {
-		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("rpcId", rpcIdV).Interface("msger", resp).Msgf("SendRPCMsg %s resp", ts.ConnName())
+		utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("rpcId", rpcIdV).Interface("msger", resp).Msgf("RecvRPCMsg %s resp", ts.ConnName())
 	}
 	return resp, nil
+}
+
+// 异步RPC记录的结构体
+type asyncRPC struct {
+	*msger.AsyncRPCCallback                      // 异步回调函数
+	ch                      chan msger.RecvMsger // 通讯通道
+	ctx                     context.Context      // 上下文
 }
 
 // SendRPCMsgAsync 发送异步RPC消息，需要依赖event.DecodeMsg返回消息的RPCId()来判断是否rpc调用
@@ -334,30 +350,25 @@ func (ts *TcpService[ServiceInfo]) SendAsyncRPCMsg(ctx context.Context, rpcId in
 		utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Interface("msger", req).Msgf("SendAsyncRPCMsg %s error", ts.ConnName())
 		return err
 	}
+	asyncRpc := &asyncRPC{
+		AsyncRPCCallback: cb,
+		ch:               make(chan msger.RecvMsger, 1), // 使用缓冲channel
+		ctx:              ctx,
+	}
 
 	// 先添加一个channel记录，防止Send还没出来就收到了回复，并且判断是否存在一样的
-	ch := make(chan msger.RecvMsger, 1) // 使用缓冲channel
-	if _, loaded := ts.rpc.LoadOrStore(rpcIdV, ch); loaded {
-		close(ch) // 关闭新创建的channel
+	if _, loaded := ts.asyncRpc.LoadOrStore(rpcIdV, asyncRpc); loaded {
 		err := errors.New("rpcId exist")
 		utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Interface("msger", req).Msgf("SendAsyncRPCMsg %s error", ts.ConnName())
 		return err
 	}
-	// 回调
+
 	entry := time.Now()
-	defer func() {
-		defer utils.HandlePanic()
-		for _, h := range ts.g.tb.hook {
-			h.OnSendRPCMsg(ts, rpcId, req, time.Since(entry), len(data))
-		}
-	}()
 	// 发送
 	err = ts.conn.Send(data)
 	if err != nil {
 		// 发送失败，先删除channel记录
-		if _, ok := ts.rpc.LoadAndDelete(rpcIdV); ok {
-			close(ch) // 删除的地方负责关闭
-		}
+		ts.asyncRpc.Delete(rpcIdV)
 		utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Interface("msger", req).Msgf("SendAsyncRPCMsg %s error", ts.ConnName())
 		return err
 	}
@@ -369,16 +380,19 @@ func (ts *TcpService[ServiceInfo]) SendAsyncRPCMsg(ctx context.Context, rpcId in
 
 	// 异步等待回复
 	utils.Submit(func() {
+		// 回调
 		defer func() {
-			if _, ok := ts.rpc.LoadAndDelete(rpcIdV); ok {
-				close(ch) // 删除的地方负责关闭
+			defer utils.HandlePanic()
+			for _, h := range ts.g.tb.hook {
+				h.OnSendRPCMsg(ts, rpcId, req, time.Since(entry), len(data))
 			}
 		}()
+
 		// 等待rpc回复
 		timer := time.NewTimer(timeout)
 		var resp msger.RecvMsger
 		select {
-		case resp = <-ch:
+		case resp = <-asyncRpc.ch:
 			if !timer.Stop() {
 				select {
 				case <-timer.C: // try to drain the channel
@@ -387,61 +401,19 @@ func (ts *TcpService[ServiceInfo]) SendAsyncRPCMsg(ctx context.Context, rpcId in
 			}
 		case <-timer.C:
 			err = errors.New("timeout")
+			ts.asyncRpc.Delete(rpcIdV) // 超时删除channel记录
 		}
 		if resp == nil && err == nil { //clear函数的调用会触发此情况
 			err = errors.New("close")
 		}
-
-		handle := func(resp msger.RecvMsger, body interface{}, err error) {
-			if cb == nil {
-				return
-			}
-			// 消息放入协程池中
-			if TcpParamConf.Get().MsgSeq {
-				ts.seq.Submit(func() {
-					cb.Call(resp, body, err)
-				})
-			} else {
-				if resp == nil {
-					cb.Call(resp, body, err) // 已经在异步协程中了 直接调用
-					return
-				}
-				groupId := resp.GroupId()
-				if groupId != nil {
-					ts.groupSeq.Submit(groupId, func() {
-						cb.Call(resp, body, err)
-					})
-				} else {
-					cb.Call(resp, body, err) // 已经在异步协程中了 直接调用
-				}
-			}
-		}
-
 		if err != nil {
-			utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("SendAsyncRPCMsg %s resp error", ts.ConnName())
-			handle(nil, nil, err)
+			utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("SendAsyncRPCMsg %s error", ts.ConnName())
+			ts.seq.Submit(ctx, func() {
+				cb.Call(nil, nil, err)
+			})
 			return
 		}
-
-		// 解析消息体
-		var respBody interface{}
-		if cb != nil {
-			if respBodyType := cb.RespBodyElemType(); respBodyType != nil {
-				respBody = reflect.New(respBodyType).Interface()
-				err = resp.BodyUnMarshal(respBody)
-				if err != nil {
-					utils.LogCtx(log.Error(), ctx).Str("rpcId", rpcIdV).Err(err).Msgf("SendAsyncRPCMsg %s resp error", ts.ConnName())
-					handle(resp, nil, err)
-					return
-				}
-			}
-		}
-
-		// 日志
-		if logLevel >= int(log.Logger.GetLevel()) {
-			utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("rpcId", rpcIdV).Interface("msger", resp).Msgf("SendAsyncRPCMsg %s resp", ts.ConnName())
-		}
-		handle(resp, respBody, nil)
+		// 成功了，回调由onMsg处理
 	})
 
 	return nil
@@ -472,7 +444,7 @@ func (ts *TcpService[ServiceInfo]) loopTick() {
 		}
 		if ts.g.tb.event != nil {
 			ctx := utils.CtxSetTrace(ts.ctx, 0, "Tick")
-			ts.seq.Submit(func() {
+			ts.seq.Submit(ctx, func() {
 				ts.g.tb.event.OnTick(ctx, ts)
 			})
 		}
@@ -515,8 +487,8 @@ func (ts *TcpService[ServiceInfo]) OnDialSuccess(t *tcp.TCPConn) {
 	ts.g.tb.addConnVersion(ts.g.serviceName)
 
 	if ts.g.tb.event != nil {
-		ts.seq.Submit(func() {
-			ctx := utils.CtxSetTrace(ts.ctx, 0, "Connected")
+		ctx := utils.CtxSetTrace(ts.ctx, 0, "Connected")
+		ts.seq.Submit(ctx, func() {
 			ts.g.tb.event.OnConnected(ctx, ts)
 		})
 	}
@@ -531,13 +503,13 @@ func (ts *TcpService[ServiceInfo]) OnDialSuccess(t *tcp.TCPConn) {
 }
 
 func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error {
-	log.Error().
-		Str("ServiceId", ts.conf.ServiceId).
-		Err(err).
-		Str("Addr", ts.address).
-		Strs("RoutingTag", ts.conf.RoutingTag).
-		Int32("ConfDestroy", atomic.LoadInt32(&ts.confDestroy)).
-		Msgf("Disconnect %s", ts.ConnName())
+	var l *zerolog.Event
+	if err != nil {
+		l = log.Error().Err(err)
+	} else {
+		l = log.Info()
+	}
+	l.Str("ServiceId", ts.conf.ServiceId).Str("Addr", ts.address).Int32("ConfDestroy", atomic.LoadInt32(&ts.confDestroy)).Msgf("Disconnect %s", ts.ConnName())
 
 	// 登录状态还原
 	atomic.StoreInt32(&ts.connLogined, 0)
@@ -548,8 +520,8 @@ func (ts *TcpService[ServiceInfo]) OnDisConnect(err error, t *tcp.TCPConn) error
 	ts.clear()
 
 	if ts.g.tb.event != nil {
-		ts.seq.Submit(func() {
-			ctx := utils.CtxSetTrace(ts.ctx, 0, "DisConnected")
+		ctx := utils.CtxSetTrace(ts.ctx, 0, "DisConnected")
+		ts.seq.Submit(ctx, func() {
 			ts.g.tb.event.OnDisConnect(ctx, ts)
 		})
 	}
@@ -636,8 +608,9 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 			if mner, _ := any(mr).(msger.MsgerName); mner != nil {
 				traceName = mner.MsgName()
 			}
-			ctx := utils.CtxSetTrace(ts.ctx, mr.TraceId(), traceName)
+			ctx := utils.CtxSetTrace(ts.ctx, mr.TraceId(), "msg:"+traceName)
 
+			// 同步rpc消息放到此处处理，必须收到rpc消息立刻给调用方(调用方如果是从消息处理流程过来的，他们会在同一个线程中执行)
 			rpcId := mr.RPCId()
 			if rpcId != nil {
 				// rpc
@@ -646,13 +619,12 @@ func (ts *TcpService[ServiceInfo]) recv(data []byte) (int, error) {
 				if ok {
 					ch := rpc.(chan msger.RecvMsger)
 					ch <- mr
-					close(ch) // 删除的地方负责关闭
 				} else {
 					// 没找到可能是超时了也可能是DecodeMsg没正确返回 也交给OnMsg执行
-					ts.handle(ctx, mr)
+					ts.hystrix(ctx, mr)
 				}
 			} else {
-				ts.handle(ctx, mr)
+				ts.hystrix(ctx, mr)
 			}
 		}
 		if decodeLen >= len(data) {
@@ -674,55 +646,71 @@ func (ts *TcpService[ServiceInfo]) decode(ctx context.Context, buf []byte) (msge
 	return mr, l, err
 }
 
-func (ts *TcpService[ServiceInfo]) handle(ctx context.Context, mr msger.RecvMsger) {
+func (ts *TcpService[ServiceInfo]) hystrix(ctx context.Context, mr msger.RecvMsger) {
 	// 熔断
 	if name, ok := msger.ParamConf.Get().IsHystrixMsg(mr.MsgID()); ok {
 		hystrix.DoC(ctx, name, func(ctx context.Context) error {
-			// 消息放入协程池中
-			if TcpParamConf.Get().MsgSeq {
-				ts.seq.Submit(func() {
-					ts.onMsg(ctx, mr)
-				})
-			} else {
-				groupId := mr.GroupId()
-				if groupId != nil {
-					ts.groupSeq.Submit(groupId, func() {
-						ts.onMsg(ctx, mr)
-					})
-				} else {
-					utils.Submit(func() {
-						ts.onMsg(ctx, mr)
-					})
-				}
-			}
+			ts.handle(ctx, mr)
 			return nil
 		}, func(ctx context.Context, err error) error {
 			utils.LogCtx(log.Error(), ctx).Err(err).Interface("msger", mr).Msg("RecvMsg Hystrix")
 			return err
 		})
 	} else {
-		// 消息放入协程池中
-		if TcpParamConf.Get().MsgSeq {
-			ts.seq.Submit(func() {
-				ts.onMsg(ctx, mr)
-			})
-		} else {
-			groupId := mr.GroupId()
-			if groupId != nil {
-				ts.groupSeq.Submit(groupId, func() {
-					ts.onMsg(ctx, mr)
-				})
-			} else {
-				utils.Submit(func() {
-					ts.onMsg(ctx, mr)
-				})
-			}
-		}
+		ts.handle(ctx, mr)
 	}
 }
 
-func (ts *TcpService[ServiceInfo]) onMsg(ctx context.Context, mr msger.RecvMsger) {
-	if handle, _ := ts.g.tb.Dispatch(ctx, mr, ts, fmt.Sprintf("RecvMsg %s Dispatch", ts.ConnName())); handle {
+func (ts *TcpService[ServiceInfo]) handle(ctx context.Context, mr msger.RecvMsger) {
+	groupId := mr.GroupId()
+	if groupId != nil {
+		ts.groupSeq.Submit(ctx, groupId, func() {
+			ts.onMsg(ctx, mr, groupId)
+		})
+	} else {
+		ts.seq.Submit(ctx, func() {
+			ts.onMsg(ctx, mr, groupId)
+		})
+	}
+}
+
+func (ts *TcpService[ServiceInfo]) onMsg(ctx context.Context, mr msger.RecvMsger, groupId interface{}) {
+	// 异步rpc消息放到此处处理，也遵循了消息的顺序处理
+	rpcId := mr.RPCId()
+	if rpcId != nil {
+		// rpc
+		rpcIdV := fmt.Sprintf("%v", rpcId)
+		rpc, ok := ts.asyncRpc.LoadAndDelete(rpcIdV)
+		if ok {
+			asyncRpc := rpc.(*asyncRPC)
+			asyncRpc.ch <- mr
+			ctx = asyncRpc.ctx
+
+			// 解析消息体
+			var respBody interface{}
+			if respBodyType := asyncRpc.RespBodyElemType(); respBodyType != nil {
+				respBody = reflect.New(respBodyType).Interface()
+				err := mr.BodyUnMarshal(respBody)
+				if err != nil {
+					utils.LogCtx(log.Error(), ctx).Err(err).Str("rpcId", rpcIdV).Msgf("RecvAsyncRPCMsg %s error", ts.ConnName())
+					asyncRpc.Call(mr, nil, err)
+					return
+				}
+			}
+
+			// 日志
+			logLevel := msger.ParamConf.Get().LogLevel.MsgLevel(mr)
+			if logLevel >= int(log.Logger.GetLevel()) {
+				utils.LogCtx(log.WithLevel(zerolog.Level(logLevel)), ctx).Str("rpcId", rpcIdV).Interface("msger", mr).Msgf("RecvAsyncRPCMsg %s resp", ts.ConnName())
+			}
+			asyncRpc.Call(mr, respBody, nil)
+			return
+		}
+		// 没找到可能是超时了也可能是DecodeMsg没正确返回 也交给下面执行
+	}
+
+	async := TcpParamConf.Get().AsyncDispatch && groupId == nil
+	if handle, _ := ts.g.tb.Dispatch(ctx, mr, ts, async, fmt.Sprintf("RecvMsg %s Dispatch", ts.ConnName())); handle {
 	} else {
 		// 日志
 		logLevel := msger.ParamConf.Get().LogLevel.MsgLevel(mr)

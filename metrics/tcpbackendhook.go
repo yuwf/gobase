@@ -24,8 +24,8 @@ var (
 	tcpBackendConnRecvMsgCount *prometheus.CounterVec
 	tcpBackendConnRecvSeqCount *prometheus.GaugeVec
 
-	tcpBackendSendCount prometheus.Counter
-	tcpBackendSendSize  prometheus.Counter
+	tcpBackendSendCount *prometheus.CounterVec
+	tcpBackendSendSize  *prometheus.CounterVec
 
 	tcpBackendSendMsgCount *prometheus.CounterVec
 	tcpBackendSendMsgSize  *prometheus.CounterVec
@@ -52,18 +52,18 @@ func (h *tcpBackendHook[ServiceInfo]) init() {
 		tcpBackendConnRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_conn_sendmsg_size"}, []string{"connname"})
 		tcpBackendConnRecvSeqCount = DefaultReg().NewGaugeVec(prometheus.GaugeOpts{Name: "tcpbackend_conn_recvseq_count"}, []string{"connname"})
 
-		tcpBackendSendCount = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "tcpbackend_send_count"})
-		tcpBackendSendSize = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "tcpbackend_send_size"})
+		tcpBackendSendCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_send_count"}, []string{"connname"})
+		tcpBackendSendSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_send_size"}, []string{"connname"})
 
-		tcpBackendSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendmsg_count"}, []string{"name"})
-		tcpBackendSendMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendmsg_size"}, []string{"name"})
+		tcpBackendSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendmsg_count"}, []string{"connname", "name"})
+		tcpBackendSendMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendmsg_size"}, []string{"connname", "name"})
 
-		tcpBackendSendRPCMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendrpcmsg_count"}, []string{"name"})
-		tcpBackendSendRPCMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendrpcmsg_size"}, []string{"name"})
-		tcpBackendSendRPCMsgTime = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendrpcmsg_time"}, []string{"name"})
+		tcpBackendSendRPCMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendrpcmsg_count"}, []string{"connname", "name"})
+		tcpBackendSendRPCMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendrpcmsg_size"}, []string{"connname", "name"})
+		tcpBackendSendRPCMsgTime = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_sendrpcmsg_time"}, []string{"connname", "name"})
 
-		tcpBackendRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_recvmsg_count"}, []string{"name"})
-		tcpBackendRecvMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_recvmsg_size"}, []string{"name"})
+		tcpBackendRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_recvmsg_count"}, []string{"connname", "name"})
+		tcpBackendRecvMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpbackend_recvmsg_size"}, []string{"connname", "name"})
 	})
 }
 
@@ -76,14 +76,23 @@ func (h *tcpBackendHook[ServiceInfo]) OnRemove(ts *backend.TcpService[ServiceInf
 	h.init()
 	tcpBackendServer.DeleteLabelValues(ts.ConnName())
 	tcpBackendConned.DeleteLabelValues(ts.ConnName())
-	tcpBackendConnSendDataSize.DeleteLabelValues(ts.ConnName())
-	tcpBackendConnRecvDataSize.DeleteLabelValues(ts.ConnName())
 
 	tcpBackendConnSendDataSize.DeleteLabelValues(ts.ConnName())
 	tcpBackendConnRecvDataSize.DeleteLabelValues(ts.ConnName())
 	tcpBackendConnSendMsgCount.DeleteLabelValues(ts.ConnName())
 	tcpBackendConnRecvMsgCount.DeleteLabelValues(ts.ConnName())
 	tcpBackendConnRecvSeqCount.DeleteLabelValues(ts.ConnName())
+
+	tcpBackendSendCount.DeleteLabelValues(ts.ConnName())
+	tcpBackendSendSize.DeleteLabelValues(ts.ConnName())
+
+	tcpBackendSendMsgCount.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
+	tcpBackendSendMsgSize.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
+	tcpBackendSendRPCMsgCount.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
+	tcpBackendSendRPCMsgSize.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
+	tcpBackendSendRPCMsgTime.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
+	tcpBackendRecvMsgCount.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
+	tcpBackendRecvMsgSize.DeletePartialMatch(prometheus.Labels{"connname": ts.ConnName()})
 }
 
 func (h *tcpBackendHook[ServiceInfo]) OnConnected(ts *backend.TcpService[ServiceInfo]) {
@@ -110,19 +119,19 @@ func (h *tcpBackendHook[ServiceInfo]) OnRecvData(ts *backend.TcpService[ServiceI
 func (h *tcpBackendHook[ServiceInfo]) OnSend(ts *backend.TcpService[ServiceInfo], len_ int) {
 	h.init()
 	tcpBackendConnSendMsgCount.WithLabelValues(ts.ConnName()).Inc()
-	tcpBackendSendCount.Inc()
-	tcpBackendSendSize.Add(float64(len_))
+	tcpBackendSendCount.WithLabelValues(ts.ConnName()).Inc()
+	tcpBackendSendSize.WithLabelValues(ts.ConnName()).Add(float64(len_))
 }
 
 func (h *tcpBackendHook[ServiceInfo]) OnSendMsg(ts *backend.TcpService[ServiceInfo], mr msger.Msger, len_ int) {
 	h.init()
 	tcpBackendConnSendMsgCount.WithLabelValues(ts.ConnName()).Inc()
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		tcpBackendSendMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		tcpBackendSendMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
+		tcpBackendSendMsgCount.WithLabelValues(ts.ConnName(), mner.MsgName()).Inc()
+		tcpBackendSendMsgSize.WithLabelValues(ts.ConnName(), mner.MsgName()).Add(float64(len_))
 	} else {
-		tcpBackendSendMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		tcpBackendSendMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
+		tcpBackendSendMsgCount.WithLabelValues(ts.ConnName(), mr.MsgID()).Inc()
+		tcpBackendSendMsgSize.WithLabelValues(ts.ConnName(), mr.MsgID()).Add(float64(len_))
 	}
 }
 
@@ -130,13 +139,13 @@ func (h *tcpBackendHook[ServiceInfo]) OnSendRPCMsg(ts *backend.TcpService[Servic
 	tcpBackendConnSendMsgCount.WithLabelValues(ts.ConnName()).Inc()
 	h.init()
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		tcpBackendSendRPCMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		tcpBackendSendRPCMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
-		tcpBackendSendRPCMsgTime.WithLabelValues(mner.MsgName()).Add(float64(elapsed.Nanoseconds()))
+		tcpBackendSendRPCMsgCount.WithLabelValues(ts.ConnName(), mner.MsgName()).Inc()
+		tcpBackendSendRPCMsgSize.WithLabelValues(ts.ConnName(), mner.MsgName()).Add(float64(len_))
+		tcpBackendSendRPCMsgTime.WithLabelValues(ts.ConnName(), mner.MsgName()).Add(float64(elapsed.Nanoseconds()))
 	} else {
-		tcpBackendSendRPCMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		tcpBackendSendRPCMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
-		tcpBackendSendRPCMsgTime.WithLabelValues(mr.MsgID()).Add(float64(elapsed.Nanoseconds()))
+		tcpBackendSendRPCMsgCount.WithLabelValues(ts.ConnName(), mr.MsgID()).Inc()
+		tcpBackendSendRPCMsgSize.WithLabelValues(ts.ConnName(), mr.MsgID()).Add(float64(len_))
+		tcpBackendSendRPCMsgTime.WithLabelValues(ts.ConnName(), mr.MsgID()).Add(float64(elapsed.Nanoseconds()))
 	}
 }
 
@@ -144,10 +153,10 @@ func (h *tcpBackendHook[ServiceInfo]) OnRecvMsg(ts *backend.TcpService[ServiceIn
 	h.init()
 	tcpBackendConnRecvMsgCount.WithLabelValues(ts.ConnName()).Inc()
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		tcpBackendRecvMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		tcpBackendRecvMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
+		tcpBackendRecvMsgCount.WithLabelValues(ts.ConnName(), mner.MsgName()).Inc()
+		tcpBackendRecvMsgSize.WithLabelValues(ts.ConnName(), mner.MsgName()).Add(float64(len_))
 	} else {
-		tcpBackendRecvMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		tcpBackendRecvMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
+		tcpBackendRecvMsgCount.WithLabelValues(ts.ConnName(), mr.MsgID()).Inc()
+		tcpBackendRecvMsgSize.WithLabelValues(ts.ConnName(), mr.MsgID()).Add(float64(len_))
 	}
 }

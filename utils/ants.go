@@ -4,6 +4,7 @@ package utils
 
 import (
 	"container/list"
+	"context"
 	"fmt"
 	"runtime"
 	"sync"
@@ -16,26 +17,13 @@ import (
 // ants包的一个简单过渡
 
 var (
-	defaultAntsPool *ants.Pool
+	defaultAntsPool *ants.Pool = NewAntsPool()
 	antWG           sync.WaitGroup
 
 	sequenceGroupPool sync.Pool // 分组任务队列使用 *Sequence 列表
 )
 
 func init() {
-	// ExpiryDuration：清理 goroutine 的时间间隔。每隔一段时间，Ants 就会对池中未被使用的 goroutine 进行清理，减少内存占用；
-	// PreAlloc：是否在初始化工作池时预分配内存。对于一个超大容量，且任务耗时长的工作池来说，预分配内存可以大幅降低 goroutine 池中的内存重新分配损耗；
-	// MaxBlockingTasks：阻塞任务的最大数，0代表无限制；
-	// Nonblocking：工作池是否是非阻塞的，这决定了 Pool.Submit 接口在提交任务时是否会被阻塞；
-	// PanicHandler：任务崩溃时的处理函数；
-	// Logger：日志记录器
-	defaultAntsPool, _ = ants.NewPool(ants.DEFAULT_ANTS_POOL_SIZE,
-		ants.WithPanicHandler(func(r interface{}) {
-			buf := make([]byte, 2048)
-			l := runtime.Stack(buf, false)
-			err := fmt.Errorf("%v: %s", r, buf[:l])
-			log.Error().Err(err).Msg("Panic")
-		}))
 	sequenceGroupPool.New = func() any {
 		return &Sequence{}
 	}
@@ -46,17 +34,39 @@ func DefaultAntsPool() *ants.Pool {
 	return defaultAntsPool
 }
 
+func NewAntsPool() *ants.Pool {
+	// ExpiryDuration：清理 goroutine 的时间间隔。每隔一段时间，Ants 就会对池中未被使用的 goroutine 进行清理，减少内存占用；
+	// PreAlloc：是否在初始化工作池时预分配内存。对于一个超大容量，且任务耗时长的工作池来说，预分配内存可以大幅降低 goroutine 池中的内存重新分配损耗；
+	// MaxBlockingTasks：阻塞任务的最大数，0代表无限制；
+	// Nonblocking：工作池是否是非阻塞的，这决定了 Pool.Submit 接口在提交任务时是否会被阻塞；
+	// PanicHandler：任务崩溃时的处理函数；
+	// Logger：日志记录器
+	pool, _ := ants.NewPool(ants.DEFAULT_ANTS_POOL_SIZE,
+		ants.WithPanicHandler(func(r interface{}) {
+			buf := make([]byte, 2048)
+			l := runtime.Stack(buf, false)
+			err := fmt.Errorf("%v: %s", r, buf[:l])
+			log.Error().Err(err).Msg("Panic")
+		}))
+	return pool
+}
+
 // 提交一个任务
 func Submit(task func()) {
+	SubmitToPool(defaultAntsPool, task)
+}
+
+func SubmitToPool(antsPool *ants.Pool, task func()) {
 	if task == nil {
 		return
 	}
-	if defaultAntsPool.Submit(task) != nil {
+	call := func() {
+		defer HandlePanic() // 遇到过ants库处理完panic时，无法投递下一个任务，使用Sequence后续任务无法运行的情况
+		task()
+	}
+	if antsPool.Submit(call) != nil {
 		// 任务提交失败，直接开启goruntine
-		go func() {
-			HandlePanic()
-			task()
-		}()
+		go call()
 	}
 }
 
@@ -97,15 +107,37 @@ func WaitProcess(timeout time.Duration) {
 	}
 }
 
-// 协成池调用任务队列 保证任务顺序执行
-type Sequence struct {
-	mutex sync.Mutex
-	tasks list.List
-	run   bool
-	done  chan struct{}
+type sequenceTask struct {
+	ctx     context.Context
+	task    func()
+	funname string
 }
 
-func (s *Sequence) Submit(task func()) {
+func (t *sequenceTask) funName() string {
+	if t.funname != "" {
+		return t.funname
+	}
+	t.funname, _ = GetFuncName(t.task)
+	return t.funname
+}
+
+// 协成池调用任务队列 保证任务顺序执行
+type Sequence struct {
+	Pool    *ants.Pool // 为空就使用默认的ants池
+	mutex   sync.Mutex
+	logName string // 日志名称,默认为空,不打印日志，一般调试用的
+	tasks   list.List
+	run     bool
+	done    chan struct{}
+}
+
+func (s *Sequence) OpenLog(name string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.logName = name
+}
+
+func (s *Sequence) Submit(ctx context.Context, task func()) {
 	if task == nil {
 		return
 	}
@@ -113,14 +145,18 @@ func (s *Sequence) Submit(task func()) {
 	defer s.mutex.Unlock() // 退出时解锁
 
 	// 添加任务
-	s.tasks.PushBack(task)
+	st := &sequenceTask{ctx: ctx, task: task}
+	if len(s.logName) > 0 {
+		LogCtx(log.Debug(), ctx).Int("len", s.tasks.Len()).Str("name", s.logName).Str("fun", st.funName()).Msgf("Sequence Submit")
+	}
+	s.tasks.PushBack(st)
 
 	// 开启协成池调用handle
 	if !s.run {
 		s.run = true
 		s.done = make(chan struct{})
 
-		Submit(s.handle)
+		SubmitToPool(If(s.Pool != nil, s.Pool, defaultAntsPool), s.handle)
 	}
 }
 
@@ -135,6 +171,10 @@ func (s *Sequence) Wait() {
 func (s *Sequence) Clear() {
 	s.mutex.Lock()         // 加锁
 	defer s.mutex.Unlock() // 退出时解锁
+
+	if len(s.logName) > 0 {
+		log.Debug().Int("len", s.tasks.Len()).Str("name", s.logName).Msgf("Sequence clear")
+	}
 
 	// 删除还未执行的任务
 	for s.tasks.Len() > 0 {
@@ -153,20 +193,29 @@ func (s *Sequence) handle() {
 	s.mutex.Lock() // 加锁
 	if s.tasks.Len() == 0 {
 		// 这里的逻辑理论只有触发Clear函数才会走到
+		if len(s.logName) > 0 {
+			log.Debug().Int("len", s.tasks.Len()).Str("name", s.logName).Msgf("Sequence is null")
+		}
 		s.run = false
 		close(s.done)
 		s.mutex.Unlock() // 解锁
 		return           // 退出
 	}
-	task := s.tasks.Remove(s.tasks.Front()).(func()) // 移除当前完成的任务
-	s.mutex.Unlock()                                 // 解锁
+	task := s.tasks.Remove(s.tasks.Front()).(*sequenceTask) // 移除当前完成的任务
+	if len(s.logName) > 0 {
+		LogCtx(log.Debug(), task.ctx).Int("len", s.tasks.Len()+1).Str("name", s.logName).Str("fun", task.funName()).Msgf("Sequence do")
+	}
+	s.mutex.Unlock() // 解锁
 
 	// 任务执行完之后调用，防止任务有崩溃，放到defer中调用
 	defer func() {
 		s.mutex.Lock() // 加锁
+		if len(s.logName) > 0 {
+			LogCtx(log.Debug(), task.ctx).Int("len", s.tasks.Len()).Str("name", s.logName).Str("fun", task.funName()).Msgf("Sequence done")
+		}
 		// 如果任务列表不为空继续开启下一个handle
 		if s.tasks.Len() > 0 {
-			Submit(s.handle)
+			SubmitToPool(If(s.Pool != nil, s.Pool, defaultAntsPool), s.handle)
 		} else {
 			s.run = false
 			close(s.done)
@@ -175,17 +224,18 @@ func (s *Sequence) handle() {
 	}()
 
 	// 执行task
-	task()
+	task.task()
 }
 
 type GroupSequence struct {
+	Pool   *ants.Pool // 为空就使用默认的ants池
 	mutex  sync.Mutex
 	groups map[interface{}]*Sequence
 	done   chan struct{}
 }
 
 // 提交一个顺序执行的任务，每个组顺序执行
-func (g *GroupSequence) Submit(groupId interface{}, task func()) {
+func (g *GroupSequence) Submit(ctx context.Context, groupId interface{}, task func()) {
 	if task == nil {
 		return
 	}
@@ -221,11 +271,12 @@ func (g *GroupSequence) Submit(groupId interface{}, task func()) {
 	}
 
 	if seq, ok := g.groups[groupId]; ok {
-		seq.Submit(fun)
+		seq.Submit(ctx, fun)
 	} else {
 		seq := sequenceGroupPool.Get().(*Sequence)
+		seq.Pool = g.Pool
 		g.groups[groupId] = seq
-		seq.Submit(fun)
+		seq.Submit(ctx, fun)
 	}
 }
 

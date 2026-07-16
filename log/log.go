@@ -46,6 +46,14 @@ func InitLog(prefix string) (func(), error) {
 	SetLevel(0)
 	EnableStdout()
 
+	// 初始化日志文件路径
+	logwrite.path = os.Getenv("LOG_PATH")
+	if len(logwrite.path) == 0 {
+		logwrite.path = "./"
+	} else if logwrite.path[len(logwrite.path)-1] != '/' {
+		logwrite.path += "/"
+	}
+
 	//默认用同步的，异步需要配置环境变量LOG_ASYNC
 	exit := func() {
 		log.Info().Msg("Log exist success")

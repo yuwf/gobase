@@ -38,8 +38,8 @@ type GNetClient[ClientInfo any] struct {
 	event      GNetEvent[ClientInfo] // 事件处理器
 	md         *msger.MsgDispatch    // 消息分发
 	hook       []GNetHook[ClientInfo]
-	seq        utils.Sequence             // 消息顺序处理工具 协程安全
-	groupSeq   utils.GroupSequence        // 分组执行的消息, 消息设置为非顺序处理的才会分组
+	seq        utils.Sequence             // 消息顺序处理工具
+	groupSeq   utils.GroupSequence        // 分组消息顺序处理工具
 	info       *ClientInfo                // 客户端信息 内容修改需要外层加锁控制
 	connName   func() string              // 日志调使用，输出连接名字，优先会调用ClientInfo.ClientName()函数
 	wsh        *gnetWSHandler[ClientInfo] // websocket处理
@@ -239,14 +239,6 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 			break
 		}
 		if mr != nil {
-			traceName := mr.MsgID()
-			if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-				traceName = mner.MsgName()
-			}
-			ctx2 := utils.CtxSetTrace(ctx, 0, traceName) // 拷贝出一个新的context，防止污染了其他消息
-
-			gc.handle(ctx2, mr)
-
 			// 回调
 			func() {
 				defer utils.HandlePanic()
@@ -254,6 +246,12 @@ func (gc *GNetClient[ClientInfo]) recv(ctx context.Context, buf []byte) (int, er
 					h.OnRecvMsg(gc, mr, l)
 				}
 			}()
+
+			traceName := mr.MsgID()
+			if mner, _ := any(mr).(msger.MsgerName); mner != nil {
+				traceName = mner.MsgName()
+			}
+			gc.hystrix(utils.CtxSetTrace(ctx, 0, "msg:"+traceName), mr)
 		}
 		if len(buf)-readlen == 0 {
 			break // 不需要继续读取了
@@ -278,55 +276,37 @@ func (gc *GNetClient[ClientInfo]) decode(ctx context.Context, buf []byte) (msger
 	return mr, l, err
 }
 
-func (gc *GNetClient[ClientInfo]) handle(ctx context.Context, mr msger.RecvMsger) {
+func (gc *GNetClient[ClientInfo]) hystrix(ctx context.Context, mr msger.RecvMsger) {
 	// 熔断
 	if name, ok := msger.ParamConf.Get().IsHystrixMsg(mr.MsgID()); ok {
 		hystrix.DoC(ctx, name, func(ctx context.Context) error {
-			// 消息放入协程池中
-			if ParamConf.Get().MsgSeq {
-				gc.seq.Submit(func() {
-					gc.onMsg(ctx, mr)
-				})
-			} else {
-				groupId := mr.GroupId()
-				if groupId != nil {
-					gc.groupSeq.Submit(groupId, func() {
-						gc.onMsg(ctx, mr)
-					})
-				} else {
-					utils.Submit(func() {
-						gc.onMsg(ctx, mr)
-					})
-				}
-			}
+			gc.handle(ctx, mr)
 			return nil
 		}, func(ctx context.Context, err error) error {
 			utils.LogCtx(log.Error(), ctx).Err(err).Interface("msger", mr).Msg("RecvMsg Hystrix")
 			return err
 		})
 	} else {
-		// 消息放入协程池中
-		if ParamConf.Get().MsgSeq {
-			gc.seq.Submit(func() {
-				gc.onMsg(ctx, mr)
-			})
-		} else {
-			groupId := mr.GroupId()
-			if groupId != nil {
-				gc.groupSeq.Submit(groupId, func() {
-					gc.onMsg(ctx, mr)
-				})
-			} else {
-				utils.Submit(func() {
-					gc.onMsg(ctx, mr)
-				})
-			}
-		}
+		gc.handle(ctx, mr)
 	}
 }
 
-func (gc *GNetClient[ClientInfo]) onMsg(ctx context.Context, mr msger.RecvMsger) {
-	if handle, _ := gc.md.Dispatch(ctx, mr, gc, fmt.Sprintf("RecvMsg %s Dispatch", gc.ConnName())); handle {
+func (gc *GNetClient[ClientInfo]) handle(ctx context.Context, mr msger.RecvMsger) {
+	groupId := mr.GroupId()
+	if groupId != nil {
+		gc.groupSeq.Submit(ctx, groupId, func() {
+			gc.onMsg(ctx, mr, groupId)
+		})
+	} else {
+		gc.seq.Submit(ctx, func() {
+			gc.onMsg(ctx, mr, groupId)
+		})
+	}
+}
+
+func (gc *GNetClient[ClientInfo]) onMsg(ctx context.Context, mr msger.RecvMsger, groupId interface{}) {
+	async := ParamConf.Get().AsyncDispatch && groupId == nil
+	if handle, _ := gc.md.Dispatch(ctx, mr, gc, async, fmt.Sprintf("RecvMsg %s Dispatch", gc.ConnName())); handle {
 	} else {
 		// 日志
 		logLevel := msger.ParamConf.Get().LogLevel.MsgLevel(mr)

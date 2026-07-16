@@ -5,14 +5,17 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/utils"
 
 	"github.com/dlclark/regexp2"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -48,7 +51,7 @@ func init() {
 	}
 }
 
-func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
+func goredisHook(ctx context.Context, cmd redis.Cmder, cmds []redis.Cmder, elapsed time.Duration) {
 	redisOnce.Do(func() {
 		redisErrorCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "redis_error_count"}, []string{"cmd", "key"})
 		if GoRedisHistogram {
@@ -64,16 +67,16 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 		redisTraceTime = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "redis_trace_time"}, []string{"name"})
 	})
 
-	if cmd.Cmd != nil && len(cmd.Cmd.Args()) > 0 {
+	if cmd != nil && len(cmd.Args()) > 0 {
 		// 找到key
-		cmdName := fmt.Sprint(cmd.Cmd.Args()[0])
+		cmdName := fmt.Sprint(cmd.Args()[0])
 		var key string
-		pos := goredis.GetFirstKeyPos(cmd.Cmd)
-		if pos < len(cmd.Cmd.Args()) {
+		pos := goredis.GetFirstKeyPos(cmd)
+		if pos < len(cmd.Args()) {
 			//for i := 1; i < pos; i++ {
-			//	cmdName += fmt.Sprint(cmd.Cmd.Args()[i])
+			//	cmdName += fmt.Sprint(cmd.Args()[i])
 			//}
-			k := fmt.Sprint(cmd.Cmd.Args()[pos])
+			k := fmt.Sprint(cmd.Args()[pos])
 			for _, exp := range redisKeyRegexp {
 				k, err := exp.Replace(k, "*", 0, -1)
 				if err == nil && (len(key) == 0 || len(k) < len(key)) {
@@ -82,15 +85,18 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 			}
 		}
 		cmdName = strings.ToUpper(cmdName)
+		if len(key) > 64 {
+			key = key[:64] + "..."
+		}
 
-		if cmd.Cmd.Err() != nil && !goredis.IsNilError(cmd.Cmd.Err()) {
+		if cmd.Err() != nil && !goredis.IsNil(cmd.Err()) {
 			redisErrorCount.WithLabelValues(cmdName, key).Inc()
 		}
 		if redisLatency != nil {
-			redisLatency.WithLabelValues(cmdName, key).Observe(float64(cmd.Elapsed.Nanoseconds()))
+			redisLatency.WithLabelValues(cmdName, key).Observe(float64(elapsed.Nanoseconds()))
 		} else {
 			redisCount.WithLabelValues(cmdName, key).Inc()
-			redisSum.WithLabelValues(cmdName, key).Add(float64(cmd.Elapsed.Nanoseconds()))
+			redisSum.WithLabelValues(cmdName, key).Add(float64(elapsed.Nanoseconds()))
 		}
 
 		// 消息统计
@@ -98,7 +104,59 @@ func goredisHook(ctx context.Context, cmd *goredis.RedisCommond) {
 			if traceName := ctx.Value(utils.CtxKey_traceName); traceName != nil {
 				if s, ok := traceName.(string); ok && len(s) > 0 {
 					redisTraceCount.WithLabelValues(s).Inc()
-					redisTraceTime.WithLabelValues(s).Add(float64(cmd.Elapsed.Nanoseconds()))
+					redisTraceTime.WithLabelValues(s).Add(float64(elapsed.Nanoseconds()))
+				}
+			}
+		}
+	}
+	if len(cmds) > 0 {
+		keys := map[string]int{}
+		for _, cmd := range cmds {
+			// 找到key
+			cmdName := fmt.Sprint(cmd.Args()[0])
+			var key string
+			pos := goredis.GetFirstKeyPos(cmd)
+			if pos < len(cmd.Args()) {
+				//for i := 1; i < pos; i++ {
+				//	cmdName += fmt.Sprint(cmd.Args()[i])
+				//}
+				k := fmt.Sprint(cmd.Args()[pos])
+				for _, exp := range redisKeyRegexp {
+					k, err := exp.Replace(k, "*", 0, -1)
+					if err == nil && (len(key) == 0 || len(k) < len(key)) {
+						key = k
+					}
+				}
+			}
+			cmdName = strings.ToUpper(cmdName)
+			keys[key]++
+
+			if cmd.Err() != nil && !goredis.IsNil(cmd.Err()) {
+				redisErrorCount.WithLabelValues(cmdName, key).Inc()
+			}
+			// 管道命令无法统计每条命令的耗时，只能统计管道命令的耗时
+		}
+		keys2 := make([]string, 0, len(keys))
+		for k, v := range keys {
+			keys2 = append(keys2, k+":"+fmt.Sprintf("%d", v))
+		}
+		sort.Strings(keys2) // 排序防止key组合太多
+		key := strings.Join(keys2, ",")
+		if len(key) > 128 {
+			key = key[:128] + "..."
+		}
+		if redisLatency != nil {
+			redisLatency.WithLabelValues("pipeline", key).Observe(float64(elapsed.Nanoseconds()))
+		} else {
+			redisCount.WithLabelValues("pipeline", key).Inc()
+			redisSum.WithLabelValues("pipeline", key).Add(float64(elapsed.Nanoseconds()))
+		}
+		// 消息统计
+		if ctx != nil {
+			if traceName := ctx.Value(utils.CtxKey_traceName); traceName != nil {
+				if s, ok := traceName.(string); ok && len(s) > 0 {
+					redisTraceCount.WithLabelValues(s).Add(float64(len(cmds)))
+					redisTraceTime.WithLabelValues(s).Add(float64(elapsed.Nanoseconds()))
 				}
 			}
 		}

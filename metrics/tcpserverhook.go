@@ -24,7 +24,7 @@ var (
 	tcpServerHandShakeCount *prometheus.CounterVec
 	tcpServerDisConnCount   *prometheus.CounterVec
 
-	// 每个连接的信息，有开关控制
+	// 每个连接的信息，有开关控制，指标名包含remote地址，不可用对象的ConnName，他不稳定
 	tcpServerConnSendDataSize *prometheus.CounterVec
 	tcpServerConnRecvDataSize *prometheus.CounterVec
 	tcpServerConnSendMsgCount *prometheus.CounterVec // 所有的发送
@@ -35,14 +35,14 @@ var (
 	tcpServerRecvDataSize *prometheus.CounterVec
 	tcpServerRecvSeqCount *prometheus.GaugeVec
 
-	tcpServerSendCount prometheus.Counter
-	tcpServerSendSize  prometheus.Counter
+	tcpServerSendCount *prometheus.CounterVec
+	tcpServerSendSize  *prometheus.CounterVec
 
 	tcpServerSendMsgCount *prometheus.CounterVec
 	tcpServerSendMsgSize  *prometheus.CounterVec
 
-	tcpServerSendTextCount prometheus.Counter
-	tcpServerSendTextSize  prometheus.Counter
+	tcpServerSendTextCount *prometheus.CounterVec
+	tcpServerSendTextSize  *prometheus.CounterVec
 
 	tcpServerSendRPCMsgCount *prometheus.CounterVec
 	tcpServerSendRPCMsgSize  *prometheus.CounterVec
@@ -70,32 +70,32 @@ func (h *tcpServerHook[ClientInfo]) init() {
 
 		//
 		if TCPServerConn {
-			tcpServerConnSendDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_senddata_size"}, []string{"addr", "connname"})
-			tcpServerConnRecvDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_recvdata_size"}, []string{"addr", "connname"})
-			tcpServerConnSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_sendmsg_count"}, []string{"addr", "connname"})
-			tcpServerConnRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_recvmsg_count"}, []string{"addr", "connname"})
-			tcpServerConnRecvSeqCount = DefaultReg().NewGaugeVec(prometheus.GaugeOpts{Name: "tcpserver_conn_recvseqmsg_count"}, []string{"addr", "connname"})
+			tcpServerConnSendDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_senddata_size"}, []string{"addr", "remote"})
+			tcpServerConnRecvDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_recvdata_size"}, []string{"addr", "remote"})
+			tcpServerConnSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_sendmsg_count"}, []string{"addr", "remote"})
+			tcpServerConnRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_conn_recvmsg_count"}, []string{"addr", "remote"})
+			tcpServerConnRecvSeqCount = DefaultReg().NewGaugeVec(prometheus.GaugeOpts{Name: "tcpserver_conn_recvseqmsg_count"}, []string{"addr", "remote"})
 		}
 
 		tcpServerSendDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_senddata_size"}, []string{"addr"})
 		tcpServerRecvDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_recvdata_size"}, []string{"addr"})
 		tcpServerRecvSeqCount = DefaultReg().NewGaugeVec(prometheus.GaugeOpts{Name: "tcpserver_recvseqmsg_count"}, []string{"addr"})
 
-		tcpServerSendCount = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "tcpserver_send_count"})
-		tcpServerSendSize = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "tcpserver_send_size"})
+		tcpServerSendCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_send_count"}, []string{"addr"})
+		tcpServerSendSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_send_size"}, []string{"addr"})
 
-		tcpServerSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendmsg_count"}, []string{"name"})
-		tcpServerSendMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendmsg_size"}, []string{"name"})
+		tcpServerSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendmsg_count"}, []string{"addr", "name"})
+		tcpServerSendMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendmsg_size"}, []string{"addr", "name"})
 
-		tcpServerSendTextCount = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "tcpserver_sendtext_count"})
-		tcpServerSendTextSize = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "tcpserver_sendtext_size"})
+		tcpServerSendTextCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendtext_count"}, []string{"addr"})
+		tcpServerSendTextSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendtext_size"}, []string{"addr"})
 
-		tcpServerSendRPCMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendrpcmsg_count"}, []string{"name"})
-		tcpServerSendRPCMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendrpcmsg_size"}, []string{"name"})
-		tcpServerSendRPCMsgTime = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendrpcmsg_time"}, []string{"name"})
+		tcpServerSendRPCMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendrpcmsg_count"}, []string{"addr", "name"})
+		tcpServerSendRPCMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendrpcmsg_size"}, []string{"addr", "name"})
+		tcpServerSendRPCMsgTime = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_sendrpcmsg_time"}, []string{"addr", "name"})
 
-		tcpServerRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_recvmsg_count"}, []string{"name"})
-		tcpServerRecvMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_recvmsg_size"}, []string{"name"})
+		tcpServerRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_recvmsg_count"}, []string{"addr", "name"})
+		tcpServerRecvMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "tcpserver_recvmsg_size"}, []string{"addr", "name"})
 	})
 }
 
@@ -135,20 +135,21 @@ func (h *tcpServerHook[ClientInfo]) OnDisConnect(tc *tcpserver.TCPClient[ClientI
 	}
 	tcpServerConnCloseReason.WithLabelValues(h.addr, errDesc).Add(1)
 
+	remote := tc.RemoteAddr()
 	if tcpServerConnSendDataSize != nil {
-		tcpServerConnSendDataSize.DeleteLabelValues(h.addr, tc.ConnName())
+		tcpServerConnSendDataSize.DeleteLabelValues(h.addr, remote.String())
 	}
 	if tcpServerConnRecvDataSize != nil {
-		tcpServerConnRecvDataSize.DeleteLabelValues(h.addr, tc.ConnName())
+		tcpServerConnRecvDataSize.DeleteLabelValues(h.addr, remote.String())
 	}
 	if tcpServerConnSendMsgCount != nil {
-		tcpServerConnSendMsgCount.DeleteLabelValues(h.addr, tc.ConnName())
+		tcpServerConnSendMsgCount.DeleteLabelValues(h.addr, remote.String())
 	}
 	if tcpServerConnRecvMsgCount != nil {
-		tcpServerConnRecvMsgCount.DeleteLabelValues(h.addr, tc.ConnName())
+		tcpServerConnRecvMsgCount.DeleteLabelValues(h.addr, remote.String())
 	}
 	if tcpServerConnRecvSeqCount != nil {
-		tcpServerConnRecvSeqCount.DeleteLabelValues(h.addr, tc.ConnName())
+		tcpServerConnRecvSeqCount.DeleteLabelValues(h.addr, remote.String())
 	}
 }
 
@@ -166,7 +167,8 @@ func (h *tcpServerHook[ClientInfo]) OnSendData(tc *tcpserver.TCPClient[ClientInf
 	h.init()
 	tcpServerSendDataSize.WithLabelValues(h.addr).Add(float64(len))
 	if tcpServerConnSendDataSize != nil {
-		tcpServerConnSendDataSize.WithLabelValues(h.addr, tc.ConnName()).Add(float64(len))
+		addr := tc.RemoteAddr()
+		tcpServerConnSendDataSize.WithLabelValues(h.addr, addr.String()).Add(float64(len))
 	}
 }
 
@@ -174,69 +176,75 @@ func (h *tcpServerHook[ClientInfo]) OnRecvData(tc *tcpserver.TCPClient[ClientInf
 	h.init()
 	tcpServerRecvDataSize.WithLabelValues(h.addr).Add(float64(len))
 	if tcpServerConnRecvDataSize != nil {
-		tcpServerConnRecvDataSize.WithLabelValues(h.addr, tc.ConnName()).Add(float64(len))
+		remote := tc.RemoteAddr()
+		tcpServerConnRecvDataSize.WithLabelValues(h.addr, remote.String()).Add(float64(len))
 	}
 }
 
 func (h *tcpServerHook[ClientInfo]) OnSend(tc *tcpserver.TCPClient[ClientInfo], len_ int) {
 	h.init()
 	if tcpServerConnSendMsgCount != nil {
-		tcpServerConnSendMsgCount.WithLabelValues(h.addr, tc.ConnName()).Inc()
+		addr := tc.RemoteAddr()
+		tcpServerConnSendMsgCount.WithLabelValues(h.addr, addr.String()).Inc()
 	}
-	tcpServerSendCount.Inc()
-	tcpServerSendSize.Add(float64(len_))
+	tcpServerSendCount.WithLabelValues(h.addr).Inc()
+	tcpServerSendSize.WithLabelValues(h.addr).Add(float64(len_))
 }
 
 func (h *tcpServerHook[ClientInfo]) OnSendMsg(tc *tcpserver.TCPClient[ClientInfo], mr msger.Msger, len_ int) {
 	h.init()
 	if tcpServerConnSendMsgCount != nil {
-		tcpServerConnSendMsgCount.WithLabelValues(h.addr, tc.ConnName()).Inc()
+		remote := tc.RemoteAddr()
+		tcpServerConnSendMsgCount.WithLabelValues(h.addr, remote.String()).Inc()
 	}
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		tcpServerSendMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		tcpServerSendMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
+		tcpServerSendMsgCount.WithLabelValues(h.addr, mner.MsgName()).Inc()
+		tcpServerSendMsgSize.WithLabelValues(h.addr, mner.MsgName()).Add(float64(len_))
 	} else {
-		tcpServerSendMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		tcpServerSendMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
+		tcpServerSendMsgCount.WithLabelValues(h.addr, mr.MsgID()).Inc()
+		tcpServerSendMsgSize.WithLabelValues(h.addr, mr.MsgID()).Add(float64(len_))
 	}
 }
 
 func (h *tcpServerHook[ClientInfo]) OnSendText(tc *tcpserver.TCPClient[ClientInfo], len_ int) {
 	h.init()
 	if tcpServerConnSendMsgCount != nil {
-		tcpServerConnSendMsgCount.WithLabelValues(h.addr, tc.ConnName()).Inc()
+		remote := tc.RemoteAddr()
+		tcpServerConnSendMsgCount.WithLabelValues(h.addr, remote.String()).Inc()
 	}
-	tcpServerSendTextCount.Inc()
-	tcpServerSendTextSize.Add(float64(len_))
+	tcpServerSendTextCount.WithLabelValues(h.addr).Inc()
+	tcpServerSendTextSize.WithLabelValues(h.addr).Add(float64(len_))
 }
 
 func (h *tcpServerHook[ClientInfo]) OnSendRPCMsg(tc *tcpserver.TCPClient[ClientInfo], rpcId interface{}, mr msger.Msger, elapsed time.Duration, len_ int) {
 	h.init()
 	if tcpServerConnSendMsgCount != nil {
-		tcpServerConnSendMsgCount.WithLabelValues(h.addr, tc.ConnName()).Inc()
+		remote := tc.RemoteAddr()
+		tcpServerConnSendMsgCount.WithLabelValues(h.addr, remote.String()).Inc()
 	}
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		tcpServerSendRPCMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		tcpServerSendRPCMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
-		tcpServerSendRPCMsgTime.WithLabelValues(mner.MsgName()).Add(float64(elapsed.Nanoseconds()))
+		tcpServerSendRPCMsgCount.WithLabelValues(h.addr, mner.MsgName()).Inc()
+		tcpServerSendRPCMsgSize.WithLabelValues(h.addr, mner.MsgName()).Add(float64(len_))
+		tcpServerSendRPCMsgTime.WithLabelValues(h.addr, mner.MsgName()).Add(float64(elapsed.Nanoseconds()))
 	} else {
-		tcpServerSendRPCMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		tcpServerSendRPCMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
-		tcpServerSendRPCMsgTime.WithLabelValues(mr.MsgID()).Add(float64(elapsed.Nanoseconds()))
+		tcpServerSendRPCMsgCount.WithLabelValues(h.addr, mr.MsgID()).Inc()
+		tcpServerSendRPCMsgSize.WithLabelValues(h.addr, mr.MsgID()).Add(float64(len_))
+		tcpServerSendRPCMsgTime.WithLabelValues(h.addr, mr.MsgID()).Add(float64(elapsed.Nanoseconds()))
 	}
 }
 
 func (h *tcpServerHook[ClientInfo]) OnRecvMsg(tc *tcpserver.TCPClient[ClientInfo], mr msger.RecvMsger, len_ int) {
 	h.init()
 	if tcpServerConnRecvMsgCount != nil {
-		tcpServerConnRecvMsgCount.WithLabelValues(h.addr, tc.ConnName()).Inc()
+		remote := tc.RemoteAddr()
+		tcpServerConnRecvMsgCount.WithLabelValues(h.addr, remote.String()).Inc()
 	}
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		tcpServerRecvMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		tcpServerRecvMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
+		tcpServerRecvMsgCount.WithLabelValues(h.addr, mner.MsgName()).Inc()
+		tcpServerRecvMsgSize.WithLabelValues(h.addr, mner.MsgName()).Add(float64(len_))
 	} else {
-		tcpServerRecvMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		tcpServerRecvMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
+		tcpServerRecvMsgCount.WithLabelValues(h.addr, mr.MsgID()).Inc()
+		tcpServerRecvMsgSize.WithLabelValues(h.addr, mr.MsgID()).Add(float64(len_))
 	}
 }
 
@@ -244,10 +252,11 @@ func (h *tcpServerHook[ClientInfo]) OnTick() {
 	h.init()
 	seqs := h.server.RecvSeqCount()
 	num := 0
-	for connName, l := range seqs {
+	for i, l := range seqs {
+		remote := i.(*tcpserver.TCPClient[ClientInfo]).RemoteAddr()
 		num += l
 		if tcpServerConnRecvSeqCount != nil {
-			tcpServerConnRecvSeqCount.WithLabelValues(h.addr, connName).Set(float64(num))
+			tcpServerConnRecvSeqCount.WithLabelValues(h.addr, remote.String()).Set(float64(num))
 		}
 	}
 	tcpServerRecvSeqCount.WithLabelValues(h.addr).Set(float64(num))

@@ -3,7 +3,10 @@ package nacos
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/yuwf/gobase/loader"
@@ -61,7 +64,7 @@ func (c *Client) CancelListenConfig(dataId, group string) error {
 }
 
 // 回调外部不要修改infos参数
-func (c *Client) ListenService(serviceName, groupName string, clusters []string, fun func(infos []*RegistryInfo)) error {
+func (c *Client) ListenService(serviceName, groupName string, clusters []string, fun func(ctx context.Context, infos []*RegistryInfo)) error {
 	serviceName = c.SanitizeString(serviceName)
 	clusters = c.SanitizeStrings(clusters)
 	log.Info().Str("serviceName", serviceName).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService")
@@ -89,7 +92,8 @@ func (c *Client) ListenService(serviceName, groupName string, clusters []string,
 			})
 			if !isSame(last, rst) {
 				last = rst
-				fun(rst)
+				ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("nacos_watch:%s:%s", serviceName, groupName))
+				fun(ctx, rst)
 			}
 		},
 	})
@@ -101,7 +105,7 @@ func (c *Client) ListenService(serviceName, groupName string, clusters []string,
 }
 
 // 回调外部不要修改infos参数
-func (c *Client) ListenService2(serviceName, groupName string, clusters []string, fun func(addInfos, delInfos []*RegistryInfo)) error {
+func (c *Client) ListenService2(serviceName, groupName string, clusters []string, fun func(ctx context.Context, addInfos, delInfos []*RegistryInfo)) error {
 	serviceName = c.SanitizeString(serviceName)
 	clusters = c.SanitizeStrings(clusters)
 	log.Info().Str("serviceName", serviceName).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService2")
@@ -130,7 +134,8 @@ func (c *Client) ListenService2(serviceName, groupName string, clusters []string
 			addInfos, delInfos := diff(last, rst)
 			if len(addInfos) != 0 || len(delInfos) != 0 {
 				last = rst
-				fun(addInfos, delInfos)
+				ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("nacos_watch:%s:%s", serviceName, groupName))
+				fun(ctx, addInfos, delInfos)
 			}
 		},
 	})
@@ -142,7 +147,7 @@ func (c *Client) ListenService2(serviceName, groupName string, clusters []string
 }
 
 // 回调外部不要修改infos参数
-func (c *Client) ListenServices(serviceNames []string, groupName string, clusters []string, fun func(infos []*RegistryInfo)) error {
+func (c *Client) ListenServices(serviceNames []string, groupName string, clusters []string, fun func(ctx context.Context, infos []*RegistryInfo)) error {
 	serviceNames = c.SanitizeStrings(serviceNames)
 	clusters = c.SanitizeStrings(clusters)
 	log.Info().Strs("serviceNames", serviceNames).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService")
@@ -179,7 +184,8 @@ func (c *Client) ListenServices(serviceNames []string, groupName string, cluster
 					for _, s := range last {
 						all = append(all, s...)
 					}
-					fun(all)
+					ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("nacos_watch:%s:%s", strings.Join(serviceNames, ","), groupName))
+					fun(ctx, all)
 				}
 			},
 		})
@@ -203,7 +209,7 @@ func (c *Client) ListenServices(serviceNames []string, groupName string, cluster
 }
 
 // 回调外部不要修改infos参数
-func (c *Client) ListenServices2(serviceNames []string, groupName string, clusters []string, fun func(addInfos, delInfos []*RegistryInfo)) error {
+func (c *Client) ListenServices2(serviceNames []string, groupName string, clusters []string, fun func(ctx context.Context, addInfos, delInfos []*RegistryInfo)) error {
 	serviceNames = c.SanitizeStrings(serviceNames)
 	clusters = c.SanitizeStrings(clusters)
 	log.Info().Strs("serviceNames", serviceNames).Str("groupName", groupName).Strs("clusters", clusters).Msg("Nacos ListenService")
@@ -237,7 +243,8 @@ func (c *Client) ListenServices2(serviceNames []string, groupName string, cluste
 				addInfos, delInfos := diff(last[index], rst)
 				if len(addInfos) != 0 || len(delInfos) != 0 {
 					last[index] = rst
-					fun(addInfos, delInfos)
+					ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("nacos_watch:%s:%s", strings.Join(serviceNames, ","), groupName))
+					fun(ctx, addInfos, delInfos)
 				}
 			},
 		})

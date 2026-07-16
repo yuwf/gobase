@@ -4,12 +4,14 @@ package goredis
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
 	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )
@@ -40,14 +42,14 @@ func BenchmarkRedis(b *testing.B) {
 	pipe.Do(context.TODO(), "SET", "fdasdfd", "sdfsdfd", "PX", 10, "NX")
 	pipe.Do(context.TODO(), "SET", "fdasdfd", "sdfsdfd", "PX", 10, "NX")
 
-	pipe.Do(context.WithValue(context.TODO(), CtxKey_nonilerr, 1), "get", "sadfasdfasdf")
+	pipe.Do(context.TODO(), "get", "sadfasdfasdf")
 	pipe.Exec(context.TODO())
 
 	redis.Set(context.TODO(), "tttt", "123", 0)
 
 	//redis.Do(context.TODO(), "set", "tttt")
 
-	redis.Do2(context.TODO(), "get", "tttt").Bind(&v)
+	redis.Cmd(context.TODO(), "get", "tttt").Bind(&v)
 
 	script := NewScript(`
 		redis.call("SET", KEYS[1], ARGV[1])
@@ -75,8 +77,50 @@ func BenchmarkRedis(b *testing.B) {
 		return redis.call("GET", KEYS[1])
 	`)
 	//var s string
-	t := redis.DoScript(context.TODO(), script, []string{"script"}, "script---")
+	t := redis.Script(context.TODO(), script, []string{"script"}, "script---")
 	fmt.Println(t.Text())
+}
+
+func BenchmarkSubscribe(b *testing.B) {
+	redis, _ := NewRedis(cfg)
+	if redis == nil {
+		return
+	}
+	pubsub := redis.CreateSubscribe(context.TODO())
+	pubsub.Subscribe(context.TODO(), "test")
+	go func() {
+		time.Sleep(time.Second * 1)
+		redis.Publish(context.TODO(), "test", "aaa")
+		time.Sleep(time.Second * 5)
+		redis.Publish(context.TODO(), "test", "close")
+	}()
+	ch := pubsub.Channel()
+	for msg := range ch {
+		fmt.Println(msg)
+		if msg.Payload == "close" {
+			pubsub.Close()
+			fmt.Println(pubsub.Receive(context.TODO()))
+		}
+	}
+
+	pubsub2 := redis.CreateSubscribe(context.TODO())
+	pubsub2.Subscribe(context.TODO(), "test")
+	go func() {
+		time.Sleep(time.Second * 1)
+		redis.Publish(context.TODO(), "test", "aaa")
+		time.Sleep(time.Second * 5)
+		redis.Publish(context.TODO(), "test", "close")
+	}()
+	for {
+		msg, err := pubsub2.ReceiveMessage(context.TODO())
+		fmt.Println(msg, err)
+		if err == nil {
+			break
+		}
+		if msg.Payload == "close" {
+			pubsub2.Close()
+		}
+	}
 }
 
 func BenchmarkPipelineScript(b *testing.B) {
@@ -232,14 +276,14 @@ func BenchmarkRedisJson(b *testing.B) {
 	redis.HSetJson(context.TODO(), "json_test_dic", "f", t1)
 
 	rv := map[string]*Test{}
-	redis.Do2(context.TODO(), "hgetall", "json_test_dic").BindJsonObjMap(&rv)
+	redis.Cmd(context.TODO(), "hgetall", "json_test_dic").BindJsonObjMap(&rv)
 
 	pipeline := redis.NewPipeline()
 	pipeline.SetJson(context.TODO(), "json_test", t1)
 	pipeline.HSetJson(context.TODO(), "json_test_dic", "f", t1)
 	rv2 := map[string]*Test{}
-	pipeline.Do2(context.TODO(), "hgetall", "json_test_dic").BindJsonObjMap(&rv2)
-	pipeline.ExecNoNil(context.TODO())
+	pipeline.Cmd(context.TODO(), "hgetall", "json_test_dic").BindJsonObjMap(&rv2)
+	pipeline.Exec(context.TODO())
 
 	redis.HMGetObj(context.TODO(), "fmtt", t2)
 
@@ -327,17 +371,17 @@ func BenchmarkRedisWatchRegister(b *testing.B) {
 
 	infos := []*RegistryInfo{
 		{
-			RegistryName:   "Name",
-			RegistryID:     "123",
-			RegistryAddr:   "192.168.0.1",
-			RegistryPort:   123,
-			RegistryScheme: "tcp",
+			Name:   "Name",
+			ID:     "123",
+			Addr:   "192.168.0.1",
+			Port:   123,
+			Scheme: "tcp",
 		},
 		{
-			RegistryName: "Name",
-			RegistryID:   "456",
-			RegistryAddr: "192.168.0.1",
-			RegistryPort: 456,
+			Name: "Name",
+			ID:   "456",
+			Addr: "192.168.0.1",
+			Port: 456,
 		},
 	}
 	r := redis.CreateRegisters("testregister", infos)
@@ -345,17 +389,17 @@ func BenchmarkRedisWatchRegister(b *testing.B) {
 
 	time.Sleep(time.Second * 10)
 	r.Add(&RegistryInfo{
-		RegistryName: "Name",
-		RegistryID:   "789",
-		RegistryAddr: "192.168.0.1",
-		RegistryPort: 789,
+		Name: "Name",
+		ID:   "789",
+		Addr: "192.168.0.1",
+		Port: 789,
 	})
 	time.Sleep(time.Second * 5)
 	r.Remove(&RegistryInfo{
-		RegistryName: "Name",
-		RegistryID:   "456",
-		RegistryAddr: "192.168.0.1",
-		RegistryPort: 456,
+		Name: "Name",
+		ID:   "456",
+		Addr: "192.168.0.1",
+		Port: 456,
 	})
 	time.Sleep(time.Second * 5)
 	r.DeReg()
@@ -374,52 +418,89 @@ func BenchmarkRedisWatchServices(b *testing.B) {
 		return
 	}
 
-	redis.WatchServices("testregister", nil, func(infos []*RegistryInfo) {
-		log.Info().Interface("infos", infos).Msg("WatchServices")
+	redis.WatchServices("testregister", nil, func(ctx context.Context, infos []*RegistryInfo) {
+		utils.LogCtx(log.Info(), ctx).Interface("infos", infos).Msg("WatchServices")
 	})
 
 	select {}
 }
 
-func BenchmarkInterfaceToValue(b *testing.B) {
-	type S struct {
-		F1  int         `json:"f1"`
-		Fs  string      `json:"fs"`
-		Fbs []byte      `json:"fbs"`
-		Fi  interface{} `json:"fi"`
-		// Fc  chan interface{} `json:"fc"` 不支持json化
+func BenchmarkRedisWatchServicesExist(b *testing.B) {
+	redis, _ := NewRedis(cfg)
+	if redis == nil {
+		return
 	}
-	s := S{
-		F1:  1,
-		Fs:  "fss",
-		Fbs: []byte{'1', '2', '3'},
-		Fi:  map[string]string{"11": "22"},
-		// Fc: make(chan interface{}),
+
+	watch, _ := redis.WatchServices("testregister", nil, func(ctx context.Context, infos []*RegistryInfo) {
+		utils.LogCtx(log.Info(), ctx).Interface("infos", infos).Msg("WatchServices")
+	})
+
+	go func() {
+		time.Sleep(time.Second * 10)
+		watch.Close()
+	}()
+
+	select {}
+}
+
+// 道具基础信息，按kid%100尾号分表
+type TestItem struct {
+	Kid        int64     `db:"kid" json:"kid,omitempty"`                            // 主键ID，也是道具ID
+	CreateTime time.Time `db:"create_time" json:"create_time,omitempty" redis:"ct"` // 创建时间
+	Tid        int32     `db:"tid" json:"tid,omitempty"`                            // 模板ID
+	Num        int32     `db:"num" json:"num,omitempty"`                            // 道具数量
+	BindKid    int64     `db:"bind_kid" json:"bind_kid,omitempty"`                  // 拥有者kid 0表示未绑定
+}
+
+func (i *TestItem) RedisUnmarshal(reply any) error {
+	switch r := reply.(type) {
+	case string:
+		return json.Unmarshal([]byte(r), i)
+	case []byte:
+		return json.Unmarshal(r, i)
+	default:
+		return errors.New("invalid type")
 	}
-	var arr = [...]byte{'a', 'b', 'c'}
-	var str string
+}
 
-	//
-	sli1 := []byte{'a', 'b'}
-	sli2 := []byte{}
-	err := InterfaceToValue(sli1, reflect.ValueOf(&sli2))
-	fmt.Println(err, sli2)
+func (i *TestItem) RedisMarshal() (interface{}, error) {
+	return json.Marshal(i)
+}
 
-	// Array to String
-	err = InterfaceToValue(&arr, reflect.ValueOf(&str))
-	fmt.Println(err, str)
+func BenchmarkReplyToValue(b *testing.B) {
+	redis, _ := NewRedis(cfg)
+	if redis == nil {
+		return
+	}
 
-	// Struct to
-	err = InterfaceToValue(&s, reflect.ValueOf(&str))
-	fmt.Println(err, str)
-	ss := S{}
-	err = InterfaceToValue(str, reflect.ValueOf(&ss))
-	fmt.Println(err, ss)
+	type Test struct {
+		F1 int `redis:"f1"`
+		F2 int `redis:"f2"`
+	}
 
-	var i *int
-	err = InterfaceToValue(str, reflect.ValueOf(&i).Elem())
-	fmt.Println(err, ss)
-	i = nil
-	InterfaceToValue(str, reflect.ValueOf(i)) // 这种写法会崩溃
+	// string to slice
+	var sli1 = []byte{}
+	var sli2 []byte
+	var sli3 []byte
+	var test Test
+	var inter interface{}
+	redis.Set(context.TODO(), "_test_str_", "aabb", 0)
+	redis.Set(context.TODO(), "_test_str_empty_", "", 0)
+	err1 := redis.Cmd(context.TODO(), "get", "_test_str_").Bind(&sli1)
+	err2 := redis.Cmd(context.TODO(), "get", "_test_str_").Bind(&sli2)
+	err3 := redis.Cmd(context.TODO(), "get", "_test_str_empty_").Bind(&sli3)      // 空字符串
+	err4 := redis.Cmd(context.TODO(), "get", "_test_str_empty_").Bind(any(&test)) // 空字符串 会绑定失败
+	err5 := redis.Cmd(context.TODO(), "get", "_test_str_").Bind(&inter)           // inter直接绑定值
+	fmt.Println(err1, sli1, err2, sli2, err3, sli3, err4, test, err5, inter)
 
+	var map1 = map[string]int64{"a": 1, "b": 2}
+	var map2 map[string]int64
+	var inters []interface{}
+	var map3 map[interface{}]interface{}
+	redis.HMSet(context.TODO(), "_test_ht_", "f1", 1, "f2", 2)
+	err1 = redis.Cmd(context.TODO(), "hgetall", "_test_ht_").Bind(&map1)
+	err2 = redis.Cmd(context.TODO(), "hgetall", "_test_ht_").Bind(&map2)
+	err3 = redis.Cmd(context.TODO(), "hgetall", "_test_ht_").Bind(&inters)
+	err4 = redis.Cmd(context.TODO(), "hgetall", "_test_ht_").Bind(&map3)
+	fmt.Println(err1, map1, err2, map2, err3, inters, err4, map3)
 }

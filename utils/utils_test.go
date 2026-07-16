@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/petermattis/goid"
 	"github.com/rs/zerolog/log"
@@ -41,7 +40,7 @@ func BenchmarkSequence(b *testing.B) {
 	seq.Wait()
 	for i := 0; i < 20; i++ {
 		n := i
-		seq.Submit(func() {
+		seq.Submit(context.Background(), func() {
 			if n == 10 {
 				panic("no") // 不会输出10
 			}
@@ -107,13 +106,12 @@ func TextCtxAddLog(ctx context.Context) {
 	LogCtx(log.Debug(), ctx).Msg("BenchmarkCtx")
 }
 
-
 func BenchmarkGroupSequence1(b *testing.B) {
 	var seq GroupSequence
 	seq.Wait()
 	for i := 0; i < 20; i++ {
 		n := i
-		seq.Submit(RandString(10), func() {
+		seq.Submit(context.Background(), RandString(10), func() {
 			fmt.Println(goid.Get(), n)
 		})
 	}
@@ -125,9 +123,9 @@ func BenchmarkGroupSequence2(b *testing.B) {
 	var seq GroupSequence
 	for i := 0; i < 20; i++ {
 		n := i
-		seq.Submit("my", func() {
+		seq.Submit(context.Background(), "my", func() {
 			if n == 10 {
-				seq.Submit("my", func() {
+				seq.Submit(context.Background(), "my", func() {
 					fmt.Println("my", n*10) // 会输出100 但这个在my组中100肯定最后输出
 				})
 				panic("no") // 不会输出10
@@ -138,7 +136,7 @@ func BenchmarkGroupSequence2(b *testing.B) {
 	}
 	for i := 0; i < 20; i++ {
 		n := i
-		seq.Submit("my2", func() {
+		seq.Submit(context.Background(), "my2", func() {
 			time.Sleep(time.Second * 2)
 			fmt.Println("    my2", n)
 		})
@@ -152,14 +150,14 @@ func BenchmarkGroupSequenceDebug(b *testing.B) {
 	key := RandString(10)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	seq.Submit(key, func() {
+	seq.Submit(context.Background(), key, func() {
 		fmt.Println(goid.Get(), "begin")
 		time.Sleep(time.Second * 4)
 		fmt.Println(goid.Get(), "end")
 		wg.Done()
 	})
 	wg.Wait()
-	seq.Submit(key, func() {
+	seq.Submit(context.Background(), key, func() {
 		fmt.Println(goid.Get(), "do it")
 	})
 	time.Sleep(time.Second * 10)
@@ -228,6 +226,9 @@ func BenchmarkNTP(b *testing.B) {
 }
 
 func BenchmarkStruct(b *testing.B) {
+	type Elem struct {
+		Name string `db:"Name" json:"Name,omitempty"` //名字  不可为空
+	}
 	type Test struct {
 		Id         int       `db:"Id" json:"Id,omitempty"`                             //自增住建  不可为空
 		CreateTime time.Time `db:"create_time" redis:"ct" json:"CreateTime,omitempty"` //用户ID  redis 记录ct
@@ -237,6 +238,9 @@ func BenchmarkStruct(b *testing.B) {
 		Name       string    `db:"Name" json:"Name,omitempty"`                         //名字  不可为空
 		Age        int       `db:"Age" json:"Age,omitempty"`                           //年龄
 		Mark       *string   `db:"Mark" json:"Mark,omitempty"`                         //标记 可以为空
+		E          Elem      `db:"E" json:"E,omitempty"`                               //嵌套结构体
+		E2         *Elem     `db:"E2" json:"E2,omitempty"`                             //嵌套结构体
+		abc        int       `db:"abc" json:"abc,omitempty"`                           //不导出字段 反射时会被忽略
 	}
 
 	st, _ := GetStructTypeByTag[Test]("db")
@@ -244,19 +248,12 @@ func BenchmarkStruct(b *testing.B) {
 	t := &Test{Id: 100, Name: "abc"}
 	ts, _ := GetStructInfoByStructType(t, st)
 	t.Age = 123
-	fmt.Println(ts.ElemsSlice())
+	fmt.Println(ts.ElemsInterface())
 
 	entry := time.Now()
 	for i := 0; i < 100000; i++ {
 		t := &Test{Id: 100, Name: "abc"}
-		st.InstanceElemsSlice(t)
-	}
-	fmt.Println(time.Since(entry))
-
-	entry = time.Now()
-	for i := 0; i < 100000; i++ {
-		t := &Test{Id: 100, Name: "abc"}
-		st.InstanceElemsSliceUnSafe(unsafe.Pointer(t))
+		st.InstanceElems(t)
 	}
 	fmt.Println(time.Since(entry))
 
@@ -264,7 +261,7 @@ func BenchmarkStruct(b *testing.B) {
 	for i := 0; i < 100000; i++ {
 		t := &Test{Id: 100, Name: "abc"}
 		ts, _ := GetStructInfoByStructType(t, st)
-		ts.ElemsSlice()
+		ts.ElemsInterface()
 	}
 	fmt.Println(time.Since(entry))
 
@@ -272,10 +269,9 @@ func BenchmarkStruct(b *testing.B) {
 	for i := 0; i < 100000; i++ {
 		t := &Test{Id: 100, Name: "abc"}
 		ts, _ := GetStructInfoByTag(t, "db")
-		ts.ElemsSlice()
+		ts.ElemsInterface()
 	}
 	fmt.Println(time.Since(entry))
-
 }
 
 func BenchmarkRecursiveMutex(b *testing.B) {

@@ -355,7 +355,7 @@ func (w responseWriterWrapper) WriteString(s string) (int, error) {
 func (gs *GinServer) context(c *gin.Context) {
 	traceIdStr := c.GetHeader(utils.HttpTraceIdHeader)
 	traceId, _ := strconv.ParseInt(traceIdStr, 10, 0)
-	ctx := utils.CtxSetTrace(context.TODO(), traceId, c.Request.URL.Path)
+	ctx := utils.CtxSetTrace(context.TODO(), traceId, "gin:"+c.Request.URL.Path)
 	c.Set("ctx", ctx)
 }
 

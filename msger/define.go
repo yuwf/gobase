@@ -4,8 +4,6 @@ package msger
 
 import (
 	"reflect"
-	"runtime"
-	"strings"
 )
 
 const (
@@ -27,22 +25,6 @@ type MsgHandler struct {
 	FunNameShort string
 	MsgType      reflect.Type // 处理消息的类型
 	RespType     reflect.Type // 回复消息的类型
+	ReplyType    reflect.Type // ReplyResp的类型
 	RespId       string       // 回复消息的id
-}
-
-// 获取函数名
-func getFuncName(fun reflect.Value) (string, string) {
-	funName := runtime.FuncForPC(fun.Pointer()).Name()
-	funName = strings.Replace(funName, "-fm", "", -1)
-	funNameShort := funName
-
-	slice := strings.Split(funName, "/")
-	shortSlice := strings.Split(funName, ".")
-	if len(slice) > 0 {
-		funName = slice[len(slice)-1]
-	}
-	if len(shortSlice) > 0 {
-		funNameShort = shortSlice[len(shortSlice)-1]
-	}
-	return funName, funNameShort
 }

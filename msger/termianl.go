@@ -38,6 +38,6 @@ type ServerTermianl interface {
 	// 加入的Client数量
 	ClientCount() int
 
-	// 消息堆积数量, connname:int
-	RecvSeqCount() map[string]int
+	// 消息堆积数量 连接对象:int
+	RecvSeqCount() map[interface{}]int
 }

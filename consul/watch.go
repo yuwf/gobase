@@ -3,10 +3,13 @@ package consul
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"time"
 
 	"github.com/yuwf/gobase/loader"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/rs/zerolog/log"
@@ -62,7 +65,7 @@ func (c *Client) WatchListKV(path string, loader loader.Loaders, immediately boo
 }
 
 // WatchService 监控服务器变化 RegistryConfig值填充Registry前缀的变量 回调外部不要修改infos参数
-func (c *Client) WatchServices(tag string, fun func(infos []*RegistryInfo)) {
+func (c *Client) WatchServices(tag string, fun func(ctx context.Context, infos []*RegistryInfo)) {
 	log.Info().Str("tag", tag).Msg("Consul WatchService")
 	go func() {
 		last := []*RegistryInfo{} // 当前所
@@ -121,21 +124,22 @@ func (c *Client) WatchServices(tag string, fun func(infos []*RegistryInfo)) {
 			}
 			// 排序
 			sort.SliceStable(rst, func(i, j int) bool {
-				if rst[i].RegistryID < rst[j].RegistryID {
-					return true
+				if rst[i].RegistryID != rst[j].RegistryID {
+					return rst[i].RegistryID < rst[j].RegistryID
 				}
 				return rst[i].RegistryName < rst[j].RegistryName
 			})
 			if !isSame(last, rst) {
 				last = rst
-				fun(rst)
+				ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("consul_watch:%s", tag))
+				fun(ctx, rst)
 			}
 		}
 	}()
 }
 
 // WatchServices2 监控服务器变化 RegistryConfig值填充Registry前缀的变量 回调外部不要修改addInfos delInfos参数
-func (c *Client) WatchServices2(tag string, fun func(addInfos, delInfos []*RegistryInfo)) {
+func (c *Client) WatchServices2(tag string, fun func(ctx context.Context, addInfos, delInfos []*RegistryInfo)) {
 	log.Info().Str("tag", tag).Msg("Consul WatchServices2")
 	go func() {
 		last := []*RegistryInfo{} // 当前所
@@ -194,14 +198,15 @@ func (c *Client) WatchServices2(tag string, fun func(addInfos, delInfos []*Regis
 			}
 			// 排序
 			sort.SliceStable(rst, func(i, j int) bool {
-				if rst[i].RegistryID < rst[j].RegistryID {
-					return true
+				if rst[i].RegistryID != rst[j].RegistryID {
+					return rst[i].RegistryID < rst[j].RegistryID
 				}
 				return rst[i].RegistryName < rst[j].RegistryName
 			})
 			addInfos, delInfos := diff(last, rst)
 			if len(addInfos) != 0 || len(delInfos) != 0 {
-				fun(addInfos, delInfos)
+				ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("consul_watch:%s", tag))
+				fun(ctx, addInfos, delInfos)
 				last = rst
 			}
 		}
@@ -209,7 +214,7 @@ func (c *Client) WatchServices2(tag string, fun func(addInfos, delInfos []*Regis
 }
 
 // WatchServiceServices 监控具体分组的服务器变化 RegistryConfig值填充Registry前缀的变量 回调外部不要修改infos参数
-func (c *Client) WatchServiceServices(service, tag string, fun func(infos []*RegistryInfo)) {
+func (c *Client) WatchServiceServices(service, tag string, fun func(ctx context.Context, infos []*RegistryInfo)) {
 	log.Info().Str("service", service).Str("tag", tag).Msg("Consul WatchServiceServices")
 	go func() {
 		last := []*RegistryInfo{} // 当前所
@@ -235,21 +240,22 @@ func (c *Client) WatchServiceServices(service, tag string, fun func(infos []*Reg
 			}
 			// 排序
 			sort.SliceStable(rst, func(i, j int) bool {
-				if rst[i].RegistryID < rst[j].RegistryID {
-					return true
+				if rst[i].RegistryID != rst[j].RegistryID {
+					return rst[i].RegistryID < rst[j].RegistryID
 				}
 				return rst[i].RegistryName < rst[j].RegistryName
 			})
 			if !isSame(last, rst) {
 				last = rst
-				fun(rst)
+				ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("consul_watch:%s:%s", service, tag))
+				fun(ctx, rst)
 			}
 		}
 	}()
 }
 
 // WatchServiceServices 监控具体分组的服务器变化 RegistryConfig值填充Registry前缀的变量 回调外部不要修改addInfos delInfos参数
-func (c *Client) WatchServiceServices2(service, tag string, fun func(addInfos, delInfos []*RegistryInfo)) {
+func (c *Client) WatchServiceServices2(service, tag string, fun func(ctx context.Context, addInfos, delInfos []*RegistryInfo)) {
 	log.Info().Str("service", service).Str("tag", tag).Msg("Consul WatchServiceServices2")
 	go func() {
 		last := []*RegistryInfo{} // 当前所
@@ -275,14 +281,15 @@ func (c *Client) WatchServiceServices2(service, tag string, fun func(addInfos, d
 			}
 			// 排序
 			sort.SliceStable(rst, func(i, j int) bool {
-				if rst[i].RegistryID < rst[j].RegistryID {
-					return true
+				if rst[i].RegistryID != rst[j].RegistryID {
+					return rst[i].RegistryID < rst[j].RegistryID
 				}
 				return rst[i].RegistryName < rst[j].RegistryName
 			})
 			addInfos, delInfos := diff(last, rst)
 			if len(addInfos) != 0 || len(delInfos) != 0 {
-				fun(addInfos, delInfos)
+				ctx := utils.CtxSetTrace(context.Background(), 0, fmt.Sprintf("consul_watch:%s:%s", service, tag))
+				fun(ctx, addInfos, delInfos)
 				last = rst
 			}
 		}

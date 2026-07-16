@@ -3,6 +3,7 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"sync"
@@ -136,7 +137,7 @@ func (g *TcpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string, status 
 }
 
 // 更新组，返回剩余个数、新增个数、修改个数、删除个数
-func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) (int, int, int, int) {
+func (g *TcpGroup[ServiceInfo]) update(ctx context.Context, serviceConfs ServiceIdConfMap) (int, int, int, int) {
 	var remove []*TcpService[ServiceInfo]
 	var add []*TcpService[ServiceInfo]
 	var modify []*TcpService[ServiceInfo]
@@ -146,7 +147,7 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) (int, int,
 	for serviceId, service := range g.services {
 		_, ok := serviceConfs[serviceId]
 		if !ok {
-			l := log.Info().Str("ServiceName", service.conf.ServiceName).
+			l := utils.LogCtx(log.Info(), ctx).Str("ServiceName", service.conf.ServiceName).
 				Str("ServiceId", service.conf.ServiceId).
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
@@ -169,7 +170,7 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) (int, int,
 		if ok {
 			// 判断是否修改了，如果需改了关闭之前的重新创建
 			if service.conf.ServiceAddr != conf.ServiceAddr || service.conf.ServicePort != conf.ServicePort {
-				log.Info().Str("ServiceName", service.conf.ServiceName).
+				utils.LogCtx(log.Info(), ctx).Str("ServiceName", service.conf.ServiceName).
 					Str("ServiceId", service.conf.ServiceId).
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
@@ -187,7 +188,7 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) (int, int,
 				modify = append(modify, service)
 			} else {
 				if atomic.CompareAndSwapInt32(&service.confDestroy, 1, 0) {
-					log.Info().Str("ServiceName", service.conf.ServiceName).
+					utils.LogCtx(log.Info(), ctx).Str("ServiceName", service.conf.ServiceName).
 						Str("ServiceId", service.conf.ServiceId).
 						Str("RegistryAddr", service.conf.ServiceAddr).
 						Int("RegistryPort", service.conf.ServicePort).
@@ -202,7 +203,7 @@ func (g *TcpGroup[ServiceInfo]) update(serviceConfs ServiceIdConfMap) (int, int,
 			}
 		} else {
 			// 新增
-			log.Info().Str("ServiceName", conf.ServiceName).
+			utils.LogCtx(log.Info(), ctx).Str("ServiceName", conf.ServiceName).
 				Str("ServiceId", conf.ServiceId).
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).

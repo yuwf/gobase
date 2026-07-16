@@ -7,7 +7,6 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -78,14 +77,12 @@ type TruncatedLog_ struct {
 
 func (l *TruncatedLog_) MarshalZerologObject(e *zerolog.Event) {
 	if l.Obj == nil {
-		e.Err(errors.New("nil"))
 		return
 	}
 
 	v := reflect.ValueOf(l.Obj)
 	if v.Kind() == reflect.Pointer {
 		if v.IsNil() {
-			e.Err(errors.New("nil pointer"))
 			return
 		}
 		v = v.Elem()

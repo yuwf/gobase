@@ -19,7 +19,9 @@ type AlertConfig struct {
 	Only           []string `json:"only,omitempty"`   // log只向指定的ip或者hostname发送报警， 支持?*通配符 不区分大小写
 	Ignore         []string `json:"ignore,omitempty"` // log输出忽略的ip或者hostname， 支持?*通配符 不区分大小写
 	ErrorPrefix    []string `json:"errorprefix,omitempty"`
+	ErrorSuffix    []string `json:"errorsuffix,omitempty"`
 	MulErrorPrefix []string `json:"mulerrorprefix,omitempty"` // 单一节点报警，一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点
+	MulErrorSuffix []string `json:"mulerrorsuffix,omitempty"` // 单一节点报警，一个错误多个节点可能都会报警 会先调用 LogAlertCheck 判断是否报警节点
 	Default        bool     `json:"default,omitempty"`        // 是否为默认的内置的错误报警，不设置就用第1个
 
 	errorTrie    *trie
@@ -93,10 +95,16 @@ func (c *ParamConfig) Normalize() {
 
 		// 构建报警数据
 		for _, s := range v.ErrorPrefix {
-			v.errorTrie.Insert(s)
+			v.errorTrie.InsertPrefix(s)
 		}
 		for _, s := range v.MulErrorPrefix {
-			v.mulErrorTrie.Insert(s)
+			v.mulErrorTrie.InsertPrefix(s)
+		}
+		for _, s := range v.ErrorSuffix {
+			v.errorTrie.InsertSuffix(s)
+		}
+		for _, s := range v.MulErrorSuffix {
+			v.mulErrorTrie.InsertSuffix(s)
 		}
 		if v.Default {
 			c.defaultAddr = append(c.defaultAddr, v.AlertAddr)
@@ -113,10 +121,10 @@ func (c *ParamConfig) Normalize() {
 	// 内置的报警 加入到默认的报警器中
 	if defut != -1 && defut < len(c.Configs) {
 		for _, s := range inneErrorPrefix {
-			c.Configs[defut].errorTrie.Insert(s)
+			c.Configs[defut].errorTrie.InsertPrefix(s)
 		}
 		for _, s := range inneMulErrorPrefix {
-			c.Configs[defut].mulErrorTrie.Insert(s)
+			c.Configs[defut].mulErrorTrie.InsertPrefix(s)
 		}
 	}
 }

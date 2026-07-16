@@ -198,11 +198,11 @@ func BenchmarkGNetServerRegGoRedis(b *testing.B) {
 		return
 	}
 	var info = &goredis.RegistryInfo{
-		RegistryName:   "name",
-		RegistryID:     "id",
-		RegistryAddr:   "127.0.0.1",
-		RegistryPort:   1237,
-		RegistryScheme: "tcp",
+		Name:   "name",
+		ID:     "id",
+		Addr:   "127.0.0.1",
+		Port:   1237,
+		Scheme: "tcp",
 	}
 	reg := r.CreateRegister("test-service", info)
 	reg.Reg()

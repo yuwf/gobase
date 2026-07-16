@@ -80,7 +80,7 @@ func BenchmarkReg(b *testing.B) {
 
 	// 发送一个消息
 	t := &Client[string]{}
-	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, "")
+	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, false, "")
 
 	s.WaitAllMsgDone(time.Second * 30)
 }
@@ -92,7 +92,7 @@ func BenchmarkRegMsg(b *testing.B) {
 
 	// 发送一个消息
 	t := &Client[string]{}
-	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, "")
+	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, false, "")
 
 	s.WaitAllMsgDone(time.Second * 30)
 }
@@ -104,7 +104,7 @@ func BenchmarkRegReqResp(b *testing.B) {
 
 	// 发送一个消息
 	t := &Client[string]{}
-	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, "")
+	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, false, "")
 
 	s.WaitAllMsgDone(time.Second * 30)
 }
@@ -116,7 +116,7 @@ func BenchmarkRegReqReply(b *testing.B) {
 
 	// 发送一个消息
 	t := &Client[string]{}
-	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, "")
+	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, false, "")
 
 	s.WaitAllMsgDone(time.Second * 30)
 }
@@ -129,7 +129,7 @@ func BenchmarkRegReqRespTimeOut(b *testing.B) {
 
 	// 发送一个消息
 	t := &Client[string]{}
-	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, "")
+	s.Dispatch(context.TODO(), utils.TestHeatBeatReqMsg, t, false, "")
 
 	s.WaitAllMsgDone(time.Second * 30)
 }

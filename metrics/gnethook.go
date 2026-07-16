@@ -26,14 +26,14 @@ var (
 	gnetRecvDataSize *prometheus.CounterVec
 	gnetRecvSeqCount *prometheus.GaugeVec
 
-	gnetSendCount prometheus.Counter
-	gnetSendSize  prometheus.Counter
+	gnetSendCount *prometheus.CounterVec
+	gnetSendSize  *prometheus.CounterVec
 
 	gnetSendMsgCount *prometheus.CounterVec
 	gnetSendMsgSize  *prometheus.CounterVec
 
-	gnetSendTextCount prometheus.Counter
-	gnetSendTextSize  prometheus.Counter
+	gnetSendTextCount *prometheus.CounterVec
+	gnetSendTextSize  *prometheus.CounterVec
 
 	gnetRecvMsgCount *prometheus.CounterVec
 	gnetRecvMsgSize  *prometheus.CounterVec
@@ -58,17 +58,17 @@ func (h *gNetHook[ClientInfo]) init() {
 		gnetRecvDataSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_recvdata_size"}, []string{"addr"})
 		gnetRecvSeqCount = DefaultReg().NewGaugeVec(prometheus.GaugeOpts{Name: "gnet_recvseq_count"}, []string{"addr"})
 
-		gnetSendCount = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "gnet_send_count"})
-		gnetSendSize = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "gnet_send_size"})
+		gnetSendCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_send_count"}, []string{"addr"})
+		gnetSendSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_send_size"}, []string{"addr"})
 
-		gnetSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_sendmsg_count"}, []string{"name"})
-		gnetSendMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_sendmsg_size"}, []string{"name"})
+		gnetSendMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_sendmsg_count"}, []string{"addr", "name"})
+		gnetSendMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_sendmsg_size"}, []string{"addr", "name"})
 
-		gnetSendTextCount = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "gnet_sendtext_count"})
-		gnetSendTextSize = DefaultReg().NewCounter(prometheus.CounterOpts{Name: "gnet_sendtext_size"})
+		gnetSendTextCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_sendtext_count"}, []string{"addr"})
+		gnetSendTextSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_sendtext_size"}, []string{"addr"})
 
-		gnetRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_recvmsg_count"}, []string{"name"})
-		gnetRecvMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_recvmsg_size"}, []string{"name"})
+		gnetRecvMsgCount = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_recvmsg_count"}, []string{"addr", "name"})
+		gnetRecvMsgSize = DefaultReg().NewCounterVec(prometheus.CounterOpts{Name: "gnet_recvmsg_size"}, []string{"addr", "name"})
 	})
 }
 
@@ -131,35 +131,35 @@ func (h *gNetHook[ClientInfo]) OnRecvData(gc *gnetserver.GNetClient[ClientInfo],
 
 func (h *gNetHook[ClientInfo]) OnSend(gc *gnetserver.GNetClient[ClientInfo], len_ int) {
 	h.init()
-	gnetSendCount.Inc()
-	gnetSendSize.Add(float64(len_))
+	gnetSendCount.WithLabelValues(h.addr).Inc()
+	gnetSendSize.WithLabelValues(h.addr).Add(float64(len_))
 }
 
 func (h *gNetHook[ClientInfo]) OnSendMsg(gc *gnetserver.GNetClient[ClientInfo], mr msger.Msger, len_ int) {
 	h.init()
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		gnetSendMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		gnetSendMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
+		gnetSendMsgCount.WithLabelValues(h.addr, mner.MsgName()).Inc()
+		gnetSendMsgSize.WithLabelValues(h.addr, mner.MsgName()).Add(float64(len_))
 	} else {
-		gnetSendMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		gnetSendMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
+		gnetSendMsgCount.WithLabelValues(h.addr, mr.MsgID()).Inc()
+		gnetSendMsgSize.WithLabelValues(h.addr, mr.MsgID()).Add(float64(len_))
 	}
 }
 
 func (h *gNetHook[ClientInfo]) OnSendText(gc *gnetserver.GNetClient[ClientInfo], len_ int) {
 	h.init()
-	gnetSendTextCount.Inc()
-	gnetSendTextSize.Add(float64(len_))
+	gnetSendTextCount.WithLabelValues(h.addr).Inc()
+	gnetSendTextSize.WithLabelValues(h.addr).Add(float64(len_))
 }
 
 func (h *gNetHook[ClientInfo]) OnRecvMsg(gc *gnetserver.GNetClient[ClientInfo], mr msger.RecvMsger, len_ int) {
 	h.init()
 	if mner, _ := any(mr).(msger.MsgerName); mner != nil {
-		gnetRecvMsgCount.WithLabelValues(mner.MsgName()).Inc()
-		gnetRecvMsgSize.WithLabelValues(mner.MsgName()).Add(float64(len_))
+		gnetRecvMsgCount.WithLabelValues(h.addr, mner.MsgName()).Inc()
+		gnetRecvMsgSize.WithLabelValues(h.addr, mner.MsgName()).Add(float64(len_))
 	} else {
-		gnetRecvMsgCount.WithLabelValues(mr.MsgID()).Inc()
-		gnetRecvMsgSize.WithLabelValues(mr.MsgID()).Add(float64(len_))
+		gnetRecvMsgCount.WithLabelValues(h.addr, mr.MsgID()).Inc()
+		gnetRecvMsgSize.WithLabelValues(h.addr, mr.MsgID()).Add(float64(len_))
 	}
 }
 

@@ -3,6 +3,7 @@ package utils
 // https://github.com/yuwf/gobase
 
 import (
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -78,4 +79,40 @@ func GetCallerDesc(skip int) *CallerDesc {
 	callerCache.Store(key, desc)
 
 	return desc
+}
+
+var funcNameCache sync.Map
+
+// 获取函数名, 长名字(package.function), 短名字(function)
+func GetFuncName(fn interface{}) (string, string) {
+	return GetFuncNameByValue(reflect.ValueOf(fn))
+}
+
+func GetFuncNameByValue(fn reflect.Value) (string, string) {
+	if !fn.IsValid() || fn.Kind() != reflect.Func {
+		return "", ""
+	}
+
+	ptr := fn.Pointer()
+	if cached, ok := funcNameCache.Load(ptr); ok {
+		ret := cached.([2]string)
+		return ret[0], ret[1]
+	}
+
+	f := runtime.FuncForPC(ptr)
+	if f == nil {
+		return "", ""
+	}
+	full := strings.TrimSuffix(f.Name(), "-fm") // 去掉-fm后缀
+	if i := strings.LastIndexByte(full, '/'); i >= 0 {
+		full = full[i+1:]
+	}
+	short := full
+	if i := strings.LastIndexByte(short, '.'); i >= 0 {
+		short = short[i+1:]
+	}
+
+	// 存入缓存
+	funcNameCache.Store(ptr, [2]string{full, short})
+	return full, short
 }

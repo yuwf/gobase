@@ -29,9 +29,8 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
-	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
-	ctx = context.WithValue(ctx, CtxKey_cmddesc, "TryLock")
+	ctx = utils.CtxSetNolog(ctx) // 命令传递下去不需要日志了
+	ctx = utils.CtxAddLog(ctx, "TryLock", key)
 
 	entry := time.Now()
 	cmd := r.Do(ctx, "SET", key, uuid, "PX", timeout.Milliseconds(), "NX")
@@ -46,7 +45,6 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 		if logOut && zerolog.DebugLevel >= log.Logger.GetLevel() {
 			// Debug就行 毕竟是try
 			utils.LogCtx(log.Debug(), ctx).Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Msg("Redis TryLock Fail")
 		}
@@ -54,12 +52,11 @@ func (r *Redis) TryLock(ctx context.Context, key string, timeout time.Duration) 
 	} else {
 		if logOut && zerolog.DebugLevel >= log.Logger.GetLevel() {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Msg("Redis TryLock Success")
 		}
 		return func() {
-			r.DoScript(ctx, deleteLockKeyScript, []string{key}, uuid)
+			r.Script(ctx, deleteLockKeyScript, []string{key}, uuid)
 		}, nil
 	}
 }
@@ -70,9 +67,8 @@ func (r *Redis) TryLockWait(ctx context.Context, key string, timeout time.Durati
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
-	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
-	ctx = context.WithValue(ctx, CtxKey_cmddesc, "TryLockWait")
+	ctx = utils.CtxSetNolog(ctx) // 命令传递下去不需要日志了
+	ctx = utils.CtxAddLog(ctx, "TryLockWait", key)
 
 	entry := time.Now()
 	logtime := entry
@@ -107,7 +103,6 @@ func (r *Redis) TryLockWait(ctx context.Context, key string, timeout time.Durati
 			logtime = time.Now()
 			lock := r.Get(ctx, key)
 			utils.LogCtx(log.Info(), ctx).Int32("elapsed", int32(now.Sub(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Str("lock", lock.String()).
 				Msg("Redis TryLockWait Waiting")
@@ -122,7 +117,6 @@ func (r *Redis) TryLockWait(ctx context.Context, key string, timeout time.Durati
 	if err != nil {
 		// Debug就行 毕竟是try
 		utils.LogCtx(log.Debug(), ctx).Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-			Str("key", key).
 			Str("uuid", uuid).
 			Int("spinCnt", spinCnt).
 			Msg("Redis TryLockWait Fail")
@@ -130,13 +124,12 @@ func (r *Redis) TryLockWait(ctx context.Context, key string, timeout time.Durati
 	} else {
 		if logOut && zerolog.DebugLevel >= log.Logger.GetLevel() {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Int("spinCnt", spinCnt).
 				Msg("Redis TryLockWait Success")
 		}
 		return func() {
-			r.DoScript(ctx, deleteLockKeyScript, []string{key}, uuid)
+			r.Script(ctx, deleteLockKeyScript, []string{key}, uuid)
 		}, nil
 	}
 }
@@ -154,13 +147,13 @@ var keyLockWaitScript = NewScript(`
 // 1:key 不存在 keylock 不存在 写入keylock      返回 func nil  func用来删除keylock
 // 2:key 不存在 keylock   存在 等待keylock消失  返回 nil nil
 // 3:key   存在                直接退出         返回 nil nil
+// 【注意需要外层来保证key和keylock的hash tag一致，否则会出错】
 func (r *Redis) KeyLockWait(ctx context.Context, key, keylock string, timeout time.Duration) (func(), error) {
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
-	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
-	ctx = context.WithValue(ctx, CtxKey_cmddesc, "KeyLockWait")
+	ctx = utils.CtxSetNolog(ctx) // 命令传递下去不需要日志了
+	ctx = utils.CtxAddLog(ctx, "KeyLockWait", key)
 
 	entry := time.Now()
 	logtime := entry
@@ -170,7 +163,7 @@ func (r *Redis) KeyLockWait(ctx context.Context, key, keylock string, timeout ti
 		spinCnt++
 
 		if spinCnt == 1 {
-			cmd := r.DoScript(ctx, keyLockWaitScript, []string{key, keylock}, []interface{}{uuid, timeout.Milliseconds()})
+			cmd := r.Script(ctx, keyLockWaitScript, []string{key, keylock}, []interface{}{uuid, timeout.Milliseconds()})
 			if cmd.Err() != nil {
 			} else {
 				ok, _ := cmd.Int()
@@ -198,7 +191,6 @@ func (r *Redis) KeyLockWait(ctx context.Context, key, keylock string, timeout ti
 			logtime = time.Now()
 			lock := r.Get(ctx, key)
 			utils.LogCtx(log.Info(), ctx).Int32("elapsed", int32(now.Sub(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Str("lock", lock.String()).
 				Msg("Redis KeyLockWait Waiting")
@@ -213,7 +205,6 @@ func (r *Redis) KeyLockWait(ctx context.Context, key, keylock string, timeout ti
 	if err != nil {
 		// Debug就行 毕竟是try
 		utils.LogCtx(log.Debug(), ctx).Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-			Str("key", key).
 			Str("uuid", uuid).
 			Int("spinCnt", spinCnt).
 			Msg("Redis KeyLockWait Fail")
@@ -221,13 +212,12 @@ func (r *Redis) KeyLockWait(ctx context.Context, key, keylock string, timeout ti
 	} else {
 		if logOut && zerolog.DebugLevel >= log.Logger.GetLevel() {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Int("spinCnt", spinCnt).
 				Msg("Redis KeyLockWait Success")
 		}
 		return func() {
-			r.DoScript(ctx, deleteLockKeyScript, []string{keylock}, uuid)
+			r.Script(ctx, deleteLockKeyScript, []string{keylock}, uuid)
 		}, nil
 	}
 }
@@ -237,9 +227,8 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 	uuid := utils.LocalIPString() + "-" + strconv.Itoa(os.Getpid()) + "-" + utils.RandString(16)
 
 	logOut := !utils.CtxHasNolog(ctx)
-	ctx = utils.CtxSetNolog(ctx)                     // 命令传递下去不需要日志了
-	ctx = context.WithValue(ctx, CtxKey_nonilerr, 1) // 不要nil错误
-	ctx = context.WithValue(ctx, CtxKey_cmddesc, "Lock")
+	ctx = utils.CtxSetNolog(ctx) // 命令传递下去不需要日志了
+	ctx = utils.CtxAddLog(ctx, "Lock", key)
 
 	entry := time.Now()
 	logtime := entry
@@ -263,7 +252,6 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 			logtime = time.Now()
 			lock := r.Get(ctx, key)
 			utils.LogCtx(log.Info(), ctx).Int32("elapsed", int32(now.Sub(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Str("lock", lock.String()).
 				Msg("Redis Lock Waiting")
@@ -277,7 +265,6 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 
 	if err != nil {
 		utils.LogCtx(log.Error(), ctx).Err(err).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-			Str("key", key).
 			Str("uuid", uuid).
 			Int("spinCnt", spinCnt).
 			Msg("Redis Lock Fail")
@@ -285,13 +272,12 @@ func (r *Redis) Lock(ctx context.Context, key string, timeout time.Duration) (fu
 	} else {
 		if logOut && zerolog.DebugLevel >= log.Logger.GetLevel() {
 			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(time.Since(entry)/time.Millisecond)).
-				Str("key", key).
 				Str("uuid", uuid).
 				Int("spinCnt", spinCnt).
 				Msg("Redis Lock Success")
 		}
 		return func() {
-			r.DoScript(ctx, deleteLockKeyScript, []string{key}, uuid)
+			r.Script(ctx, deleteLockKeyScript, []string{key}, uuid)
 		}, nil
 	}
 }

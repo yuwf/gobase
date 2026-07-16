@@ -9,8 +9,8 @@ import (
 
 type CtxKey string
 
-var GetTraceID func(ctx context.Context) int64 // 外部重写获取追踪id的函数
-var genTraceId int64                           // 内部使用的全局traceid
+var OutTraceIDFunc func(ctx context.Context) int64 // 外部重写获取追踪id的函数
+var genTraceId int64                               // 内部使用的全局traceid
 
 // 链路追踪使用，一般为底层产生
 const CtxKey_traceId = CtxKey("_traceId_")     // 通过CtxSetTraceID接口设置 context产生时，设置的唯一ID，用来链路追踪，int64
@@ -19,6 +19,17 @@ const CtxKey_traceName = CtxKey("_traceName_") // 接受消息时设置的msgId�
 const CtxKey_nolog = CtxKey("_nolog_")     // 通过CtxSetNolog接口设置   不打印日志，错误日志还会打印 值：不受限制 一般写1
 const CtxKey_callers = CtxKey("_callers_") // 通过CtxAddCaller接口添加  值：*_ctx_callers_对象
 const CtxKey_log = CtxKey("_log_")         // 通过CtxAddLog接口添加     值: *_ctx_log_对象
+
+func GetTraceID(ctx context.Context) int64 {
+	var traceId int64
+	// 如果外部设置了traceId获取函数，就用外部的函数
+	if OutTraceIDFunc != nil {
+		traceId = OutTraceIDFunc(ctx)
+	} else {
+		traceId = atomic.AddInt64(&genTraceId, 1)
+	}
+	return traceId
+}
 
 // 设置追踪ID
 func CtxSetTrace(parent context.Context, traceId int64, traceName string) context.Context {
@@ -31,11 +42,7 @@ func CtxSetTrace(parent context.Context, traceId int64, traceName string) contex
 	}
 
 	if traceId == 0 {
-		if GetTraceID != nil {
-			traceId = GetTraceID(context.Background())
-		} else {
-			traceId = atomic.AddInt64(&genTraceId, 1)
-		}
+		traceId = GetTraceID(parent)
 	}
 	ctx := context.WithValue(parent, CtxKey_traceId, traceId)
 	ctx = context.WithValue(ctx, CtxKey_traceName, traceName)

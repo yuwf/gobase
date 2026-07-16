@@ -169,13 +169,15 @@ func (tc *TCPConn) MQLen() int {
 	return len(tc.mq)
 }
 
-// 清空未发送的消息
-func (tc *TCPConn) MQClear() {
+// 清空未发送的消息并返回来
+func (tc *TCPConn) MQClear() [][]byte {
+	var msgs [][]byte
 	for {
 		select {
-		case <-tc.mq:
+		case msg := <-tc.mq:
+			msgs = append(msgs, msg)
 		default:
-			return
+			return msgs
 		}
 	}
 }

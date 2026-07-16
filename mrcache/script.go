@@ -3,19 +3,14 @@ package mrcache
 // https://github.com/yuwf/gobase
 
 import (
-	_ "embed"
-
 	"github.com/yuwf/gobase/goredis"
 )
-
-//go:embed json.lua
-var luaJsonScript string
 
 // 【注意】
 // lua层返回return nil 或者直接return， goredis都会识别为空值，即redis.Nil
 // local rst = redis.call 如果命令出错会直接返回error，不会再给rst了
 // hmset的返回值有点坑，在lua中返回的table n['ok']='OK'
-// 空值nil不要写入到redis中，给reids写nil值时，redis会写入空字符串，对一些自增类型的值，后面自增会有问题
+// 空值nil不要写入到redis中，给reids写nil值时，redis会写入空字符串，对一些自增类型的值，后面自增会有问题，所以空值直接删除字段
 
 // 自增 总key
 // 参数：第一个自增的field，正常情况用tablename，第二个参数表示拆表的个数(tablecount，0:不拆表)，第三个表示第几个表
@@ -35,11 +30,229 @@ var incrScript = goredis.NewScript(`
 	return rst
 `)
 
+// dirty /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 添加脏数据
+// KEYS[1]：脏数据列表key
+// ARGV[1..]：脏数据key ..
+var dirtyKeyAddScript = goredis.NewScript(`
+	redis.replicate_commands()
+	local t = redis.call('TIME')
+	local stamp = tonumber(t[1]) + tonumber(t[2])/1000000
+
+	local set = {}
+	for i = 1, #ARGV do
+		set[#set + 1] = stamp
+		set[#set + 1] = ARGV[i]
+	end
+
+	if #set > 0 then
+		redis.call("ZADD", KEYS[1], "NX", unpack(set))
+	end
+	return 'OK'
+`)
+
+// 获取脏数据key
+// KEYS[1]：脏数据列表key
+// KEYS[2]：正在处理的任务key
+// KEYS[3]：上次过期检查时间key
+// ARGV[1]：最多同时处理的数量
+// ARGV[2]：处理超时时间，单位：秒，超时的会重新放入dirty列表
+// ARGV[3] worker uuid
+// 返回值：脏数据key ..
+var dirtyKeyGetScript = goredis.NewScript(`
+	redis.replicate_commands()
+	local t = redis.call('TIME')
+	local stamp = tonumber(t[1]) + tonumber(t[2])/1000000
+
+	local dirtyKey = KEYS[1]
+	local processingKey = KEYS[2]  -- 正在处理的任务
+	local lastCheckKey = KEYS[3]   -- 上次过期检查时间
+	local maxProcessing = tonumber(ARGV[1])
+	local timeout = tonumber(ARGV[2])
+	local uuid = ARGV[3]
+
+	local processingMap
+	local processingCount = 0
+
+	-- 先处理超时任务，1秒只处理一次
+	if redis.call("SET", lastCheckKey, stamp, "NX", "EX", 1) then
+		local processing = redis.call("HGETALL", processingKey)
+		processingMap = {}
+
+		local delFields = {}
+		local dirtyArgs = {}
+		for i = 1, #processing, 2 do
+			local key = processing[i]
+			local value = processing[i + 1]
+
+			local pos = string.find(value, "|", 1, true)
+			local beginStamp
+			if pos then
+				beginStamp = tonumber(string.sub(value, 1, pos - 1))
+			end
+			if not beginStamp then
+				delFields[#delFields + 1] = key -- processing格式异常(stamp|uuid)，直接清理
+			elseif beginStamp + timeout <= stamp then
+				delFields[#delFields + 1] = key
+				dirtyArgs[#dirtyArgs + 1] = stamp
+				dirtyArgs[#dirtyArgs + 1] = key
+			else
+				processingMap[key] = true
+				processingCount = processingCount + 1
+			end
+		end
+
+		if #delFields > 0 then
+			redis.call("HDEL", processingKey, unpack(delFields))
+			if #dirtyArgs > 0 then
+				redis.call("ZADD", dirtyKey, "NX", unpack(dirtyArgs))
+			end
+		end
+	end
+
+	local keys = redis.call("ZRANGE", dirtyKey, 0, maxProcessing * 2 - 1) -- 每次多获取一些，防止队列任务开头正好是正在处理的任务，影响并发
+	if #keys == 0 then
+		return {}
+	end
+
+	if not processingMap then
+		-- 读取下正在处理的任务
+		local processing = redis.call("HKEYS", processingKey)
+		processingMap = {}
+		processingCount = #processing
+		for i = 1, #processing do
+			processingMap[processing[i]] = true
+		end
+	end
+	-- 并发限制
+	if processingCount >= maxProcessing then
+		return {}
+	end
+	local canMove = maxProcessing - processingCount
+
+	local moved = {}
+	local processingArgs = {}
+	for i = 1, #keys do
+		local key = keys[i]
+		if not processingMap[key] then
+			moved[#moved + 1] = key
+			processingArgs[#processingArgs + 1] = key
+			processingArgs[#processingArgs + 1] = tostring(stamp) .. "|" .. uuid
+
+			if #moved >= canMove then
+				break
+			end
+		end
+	end
+
+	if #moved > 0 then
+		redis.call("ZREM", dirtyKey, unpack(moved))
+		redis.call("HSET", processingKey, unpack(processingArgs))
+	end
+	return moved
+`)
+
+// 任务处理完成
+// KEYS[1]：脏数据正在处理列表key
+// ARGV[1]：脏数据key
+// ARGV[2]：worker uuid
+// 返回值：
+// 0：任务不存在
+// 1：成功完成
+// 2：uuid不匹配（任务已超时，被其他worker重新领取）
+var dirtyKeyDoneScript = goredis.NewScript(`
+	local processingKey = KEYS[1]
+	local key = ARGV[1]
+	local uuid = ARGV[2]
+
+	local value = redis.call("HGET", processingKey, key)
+	if not value then
+		return 0
+	end
+
+	local pos = string.find(value, "|", 1, true)
+	local beginStamp
+	if pos then
+		beginStamp = tonumber(string.sub(value, 1, pos - 1))
+	end
+	if not beginStamp then
+		redis.call("HDEL", processingKey, key) -- processing格式异常(stamp|uuid)，直接清理
+		return 0
+	end
+
+	local owner = string.sub(value, pos + 1)
+	if owner ~= uuid then
+		return 2
+	end
+
+	redis.call("HDEL", processingKey, key)
+	return 1
+`)
+
+// 获取脏数据
+// KEYS[1]：相关的key
+// ARGV[1...]：field field .. 额外读取的字段
+// 返回值：
+// - redis.Nil:数据为空
+// - {version,{field value ..}}
+var dirtyDataGetScript = goredis.NewScript(`
+	local key = KEYS[1]
+	local values = redis.call("HMGET", key, "_dirty_", "_dver_")
+	local dirty = values[1]
+	if not dirty or dirty == "" then
+		return {0,{}}
+	end
+
+	local dver = tonumber(values[2]) or 0
+	local fields = {}
+	for field in string.gmatch(dirty, "[^,]+") do
+		fields[#fields + 1] = field
+	end
+	if #fields == 0 then
+		return {0,{}}
+	end
+
+	-- 追加额外字段
+	for i = 1, #ARGV do
+		fields[#fields + 1] = ARGV[i]
+	end
+
+	values  = redis.call("HMGET", key, unpack(fields))
+	local result = {}
+	for i = 1, #fields do
+		result[#result + 1] = fields[i]
+		result[#result + 1] = values [i]
+	end
+	return {dver,result}
+`)
+
+// 清除脏标记
+// KEYS[1]：相关的key
+// ARGV[1]：dirty version
+// 返回值：
+// 0：数据不存在或版本不一致，未清除
+// 1：清除成功
+var dirtyDataDoneScript = goredis.NewScript(`
+	local key = KEYS[1]
+	local expectVersion = tonumber(ARGV[1]) or 0
+
+	local currentVersion = tonumber(redis.call("HGET", key, "_dver_")) or 0
+	if currentVersion ~= expectVersion then
+		return 0
+	end
+
+	redis.call("HDEL", key, "_dirty_")
+	return 1
+`)
+
 // row /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 读取数据
-// key：生成的key key不存在返回值为空
-// 参数：第一个是有效期 其他：field field ..
-// 返回值：err=nil时 1:空 数据为空   2:value value .. 和上面 field 对应，不存在对应的Value填充nil
+// KEYS[1]：生成的key
+// ARGV[1]：有效期
+// ARGV[2...]：获取的字段 field field ..
+// 返回值：
+// - redis.Nil: 数据为空
+// - {value value ..} 和上面 field 对应，不存在对应的Value填充nil
 var rowGetScript = goredis.NewScript(`
 	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
 	if rst == 0 then
@@ -48,309 +261,150 @@ var rowGetScript = goredis.NewScript(`
 	return redis.call('HMGET', KEYS[1], select(2,unpack(ARGV)))
 `)
 
-// row 新增数据，直接保存
-// key：生成的key
-// 参数：第一个是有效期 其他: field value field value ..
-// 返回值：err=nil时 OK
+// row 新增数据，如果Redis存在则不覆盖
+// KEYS[1]：生成的key
+// ARGV[1]：有效期
+// ARGV[2...]：获取的字段 field value field value ..
+// 返回值：
+// - redis.Nil: 数据已存在，不覆盖
+// - OK
 var rowAddScript = goredis.NewScript(`
-	redis.call('HMSET', KEYS[1], select(2,unpack(ARGV)))
-	redis.call('EXPIRE', KEYS[1], ARGV[1])
+	local key = KEYS[1]
+	local rst = redis.call('EXPIRE', key, ARGV[1])
+	if rst ~= 0 then
+		return -- 数据已存在，不覆盖
+	end
+	redis.call('HMSET', key, select(2,unpack(ARGV)))
 	return 'OK'
 `)
 
-// row 修改数据 没有返回值
-// key：生成的key，key不存在返回值为空
-// 参数：第一个是有效期 第二个参数无效 其他: field op value field op value ..
-// 返回值 err=nil时 1：空：数据为空  2：OK
-var rowModifyScript = goredis.NewScript(`
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
+// row 修改数据
+// KEYS[1]：生成的key
+// ARGV[1]：有效期
+// ARGV[2]：1-写入脏标记 其他-不写入脏标记
+// ARGV[3...]：修改的字段 field op value field op value ..
+// op: get del,set,incr,fincr
+var rowModifyCommon = `
+	local key = KEYS[1]
+	local rst = redis.call('EXPIRE', key, ARGV[1])
 	if rst == 0 then
 		return
 	end
-	if #ARGV == 1 then -- 只有一个过期时间
-		return 'OK'
+
+	local writeDirty = ARGV[2] == "1"
+	local dirty, dirty2
+	local dver
+	if writeDirty then
+		local values = redis.call("HMGET", key, "_dirty_", "_dver_")
+		dirty = values[1] or ""
+		dver = tonumber(values[2]) or 0
+		dirty2 = ',' .. dirty .. ',' -- 首尾有添加了逗号，仅用于查找, 调用方保证不会传入重复 field，因此无需更新 dirty2
 	end
+
+	local dirtyChanged = false
+	local dverChanged = false
 	local setkv = {}
 	for i = 3, #ARGV, 3 do
-		if ARGV[i+1] == "del" then
-			redis.call('HDEL', KEYS[1], ARGV[i])
-		elseif ARGV[i+1] == "set" then
-			setkv[#setkv+1] = ARGV[i]
-			setkv[#setkv+1] = ARGV[i+2]
-		elseif ARGV[i+1] == "incr" then
-			redis.call('HINCRBY', KEYS[1], ARGV[i], ARGV[i+2])
-		elseif ARGV[i+1] == "fincr" then
-			redis.call('HINCRBYFLOAT', KEYS[1], ARGV[i], ARGV[i+2])
+		local field = ARGV[i]
+		local op = ARGV[i + 1]
+		local value = ARGV[i + 2]
+
+		local changed = false
+		if op == "del" then
+			redis.call("HDEL", key, field)
+			changed = true
+		elseif op == "set" then
+			setkv[#setkv+1] = field
+			setkv[#setkv+1] = value
+			changed = true
+		elseif op == "incr" then
+			redis.call("HINCRBY", key, field, value)
+			changed = true
+		elseif op == "fincr" then
+			redis.call("HINCRBYFLOAT", key, field, value)
+			changed = true
+		end
+
+		if changed and writeDirty then
+			-- 脏标记，记录修改的字段
+			local token = "," .. field .. ","
+			if not string.find(dirty2, token, 1, true) then
+				if #dirty == 0 then
+					dirty = field
+				else
+					dirty = dirty .. "," .. field
+				end
+				dirtyChanged = true
+			end
+			dverChanged = true
 		end
 	end
-	if #setkv > 0 then
-		redis.call('HMSET', KEYS[1], unpack(setkv))
+
+	if dirtyChanged then
+		setkv[#setkv+1] = '_dirty_'
+		setkv[#setkv+1] = dirty
 	end
+	if dverChanged then
+		setkv[#setkv+1] = '_dver_'
+		setkv[#setkv+1] = dver + 1
+	end
+	if #setkv > 0 then
+		redis.call('HSET', key, unpack(setkv))
+	end
+`
+
+// 返回值：
+// - redis.Nil:数据为空
+// - OK
+var rowModifyScript = goredis.NewScript(rowModifyCommon + `
 	return 'OK'
 `)
 
-// row 修改数据 有返回值
-// key：生成的key，key不存在返回值为空
-// 参数：第一个是有效期 第二个参数空 其他: field op value field op value ..
-// 返回值：err=nil时 1：空：没加载数据 2：value value .. 和上面field对应
-var rowModifyGetScript = goredis.NewScript(`
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
+// 返回值
+// - redis.Nil:数据为空
+// - {value value ..} 和参数field对应
+var rowModifyGetScript = goredis.NewScript(rowModifyCommon + `
 	local fields = {}
-	local setkv = {}
 	for i = 3, #ARGV, 3 do
 		fields[#fields+1] = ARGV[i]
-		if ARGV[i+1] == "del" then
-			redis.call('HDEL', KEYS[1], ARGV[i])
-		elseif ARGV[i+1] == "set" then
-			setkv[#setkv+1] = ARGV[i]
-			setkv[#setkv+1] = ARGV[i+2]
-		elseif ARGV[i+1] == "incr" then
-			redis.call('HINCRBY', KEYS[1], ARGV[i], ARGV[i+2])
-		elseif ARGV[i+1] == "fincr" then
-			redis.call('HINCRBYFLOAT', KEYS[1], ARGV[i], ARGV[i+2])
-		end
-	end
-	if #setkv > 0 then
-		redis.call('HMSET', KEYS[1], unpack(setkv))
 	end
 	if #fields == 0 then
 		return {}
 	end
-	-- 返回最新的值
-	return redis.call('HMGET', KEYS[1], unpack(fields))
+	return redis.call('HMGET', key, unpack(fields))
 `)
 
-// rows /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// rows 读取数据
-// key：索引key
-// 参数：第一个是有效期 其他：field field ..
-// 返回值：err=nil时 1:空 数据为空  2:{value value ..} {value value ..} .. {}的个数为结果数量 每个{value value}的和上面的field对应，不存在对应的value填充nil
-var rowsGetAllScript = goredis.NewScript(`
-	local keyValuesStrs = redis.call('SMEMBERS', KEYS[1])
-	if #keyValuesStrs == 0 then
-		return
-	end
-	-- 判断key是否存在
-	local dataKeys = {}
-	for i = 1, #keyValuesStrs do
-		dataKeys[i] = KEYS[1] .. "_" .. keyValuesStrs[i]
-		local rst = redis.call('EXPIRE', dataKeys[i], ARGV[1])
-		if rst == 0 then
-			return -- 数据不一致了 返回空 重新读
-		end
-	end
-	redis.call('EXPIRE', KEYS[1], ARGV[1])
-	-- 读取key
-	local resp = {}
-	for i = 1, #dataKeys do
-		resp[i] = redis.call('HMGET', dataKeys[i], select(2,unpack(ARGV)))
-	end
-	return resp
-`)
-
-// rows 读取多条数据
-// key：索引key
-// 参数：第一个是有效期 num keyValuesStr keyValuesStr ..  其他：field field ..
-// 返回值：err=nil时 1:空 数据为空  2:{value value ..} {value value ..} .. {}的个数为结果数量 每个{value value}的和上面的keyValuesStr对应，不存在对应的Value填充nil
-// 任何一个keyValuesStr对应的datakey不存在返回值为空
-var rowsGetsScript = goredis.NewScript(`
-	-- 先判断索引key是否存在
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
-	local num = tonumber(ARGV[2])
-	-- 判断索引中和对应的key是否存在
-	local dataKeys = {}
-	for i = 1, num do
-		local keyValuesStr = ARGV[2+i]
-		if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
-			return
-		end
-		dataKeys[i] = KEYS[1] .. "_" .. keyValuesStr
-		local rst = redis.call('EXPIRE', dataKeys[i], ARGV[1])
-		if rst == 0 then
-			return -- 数据不一致了 返回空 重新读
-		end
-	end
-	-- 读取key
-	local resp = {}
-	for i = 1, #dataKeys do
-		resp[i] = redis.call('HMGET', dataKeys[i], select(2+num+1,unpack(ARGV)))
-	end
-	return resp
-`)
-
-// rows 读取数据
-// key：索引key
-// 参数：第一个是有效期 第二个为keyValuesStr 其他：field field .. 要获取的字段
-// 返回值 err=nil时 1：空：没加载数据 2：value value .. 和上面field对应
-var rowsGetScript = goredis.NewScript(`
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
-	-- 判断索引中和对应的key是否存在
-	local keyValuesStr = ARGV[2]
-	if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
-		return
-	end
-	local dataKey = KEYS[1] .. "_" .. keyValuesStr
-	local rst = redis.call('EXPIRE', dataKey, ARGV[1])
-	if rst == 0 then
-		return -- 数据不一致了 返回空 重新读
-	end
-	-- 读取key
-	return redis.call('HMGET', dataKey, select(3,unpack(ARGV)))
-`)
-
-// rows 新增数据
-// key：索引key
-// 参数：第一个是有效期 其他为数据组：keyValuesStr num field value field value ..  keyValuesStr num  field value field value ..
-// 返回值 err=nil时 OK
-var rowsAddScript = goredis.NewScript(`
-	local keyValuesStrs = {}
-	local pos = 2
-	while pos < #ARGV do
-		local keyValuesStr = ARGV[pos]
-		pos = pos + 1
-		local num = tonumber(ARGV[pos])
-		pos = pos + 1
-
-		local dataKey = KEYS[1] .. "_" .. keyValuesStr
-		keyValuesStrs[#keyValuesStrs+1] = keyValuesStr
-		if num > 0 then
-			local kv = {}
-			for i = 1, num do
-				kv[#kv+1] = ARGV[pos]
-				pos = pos + 1
-			end
-			redis.call('HMSET', dataKey, unpack(kv))
-			redis.call('EXPIRE', dataKey, ARGV[1])
-		end
-	end
-
-	-- 保存到索引key
-	redis.call('SADD', KEYS[1], unpack(keyValuesStrs))
-	redis.call('EXPIRE', KEYS[1], ARGV[1])
-	return 'OK'
-`)
-
-// rows 读取数据
-// key：索引key
-// 参数：第一个是有效期 第二个为keyValuesStr
-// 返回值 err=nil时 1：空：没加载数据 2:0或者1 1存在
-var rowsExistScript = goredis.NewScript(`
-	-- 先判断索引key是否存在
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
-	local keyValuesStr = ARGV[2]
-	if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
-		return 0
-	end
-	return 1
-`)
-
-// rows 删除数据
-// key：索引key
-// 参数：keyValuesStr keyValuesStr ...
-// 返回值：err=nil时 OK
-var rowsDelsScript = goredis.NewScript(`
-	-- 删除索引key中的数据
-	local count = redis.call('SREM', KEYS[1], unpack(ARGV))
-	-- 删除索引key
-	local dataKeys = {}
-	for i = 1, #ARGV do
-		dataKeys[i] = KEYS[1] .. "_" .. ARGV[i]
-	end
-	redis.call('DEL', unpack(dataKeys))
-	return count
-`)
-
-// rows 删除全部数据
-// key：索引key
-// 返回值：err=nil时 删除数据的个数
-var rowsDelAllScript = goredis.NewScript(`
-	local keyValuesStrs = redis.call('SMEMBERS', KEYS[1])
-	if #keyValuesStrs == 0 then
-		return 0
-	end
-	local dataKeys = {KEYS[1]}
-	for i = 1, #keyValuesStrs do
-		dataKeys[i+1] = KEYS[1] .. "_" .. keyValuesStrs[i]
-	end
-	redis.call('DEL', unpack(dataKeys))
-	return #dataKeys - 1
-`)
-
-// rows 设置数据 没有返回值
-// key：索引key
-// 参数：第一个是有效期 第二个为keyValuesStr 其他: field op value field op value ..
-// 返回值：err=nil时 1：空：数据为空  2：OK
-var rowsModifyScript = goredis.NewScript(`
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
-	-- 判断索引中和对应的key是否存在
-	local keyValuesStr = ARGV[2]
-	if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
-		return
-	end
-	local dataKey = KEYS[1] .. "_" .. keyValuesStr
-	local rst = redis.call('EXPIRE', dataKey, ARGV[1])
+// 修改json数组字段，支持多个字段同时修改
+// KEYS[1]：生成的key
+// ARGV[1]：有效期
+// ARGV[2]：1-写入脏标记 其他-不写入脏标记
+// ARGV[3]：1-去重 其他-不去重
+// ARGV[4...]：其他: field op num value..  field op num value..
+// - redis.Nil:数据为空
+// - {value value ..} {value value ..} ... 返回修改的值列表和参数field对应
+var rowJsonArrayModifyScript = goredis.NewScript(goredis.LuaJsonScript + `
+	local key = KEYS[1]
+	local rst = redis.call('EXPIRE', key, ARGV[1])
 	if rst == 0 then
 		return -- 数据不一致了 返回空 重新读
 	end
 
+	local writeDirty = ARGV[2] == "1"
+	local dirty, dirty2
+	local dver
+	if writeDirty then
+		local values = redis.call("HMGET", key, "_dirty_", "_dver_")
+		dirty = values[1] or ""
+		dver = tonumber(values[2]) or 0
+		dirty2 = ',' .. dirty .. ',' -- 首尾有添加了逗号，仅用于查找, 调用方保证不会传入重复 field，因此无需更新 dirty2
+	end
+
+	local duplicate = ARGV[3] == "1"
+
+	local dirtyChanged = false
+	local dverChanged = false
 	local setkv = {}
-	for i = 3, #ARGV, 3 do
-		if ARGV[i+1] == "del" then
-			redis.call('HDEL', dataKey, ARGV[i])
-		elseif ARGV[i+1] == "set" then
-			setkv[#setkv+1] = ARGV[i]
-			setkv[#setkv+1] = ARGV[i+2]
-		elseif ARGV[i+1] == "incr" then
-			redis.call('HINCRBY', dataKey, ARGV[i], ARGV[i+2])
-		elseif ARGV[i+1] == "fincr" then
-			redis.call('HINCRBYFLOAT', dataKey, ARGV[i], ARGV[i+2])
-		end
-	end
-	if #setkv > 0 then
-		redis.call('HMSET', dataKey, unpack(setkv))
-	end
-	return 'OK'
-`)
-
-// rows 设置数据 没有返回值
-// key：索引key
-// 参数：第一个是有效期 第二个为keyValuesStr 第三个值表示是否去重（0or1） 其他: field op num value..  field op num value..
-// 返回值：err=nil时 1：空：数据为空  2：返回修改的值列表 和传入的对称
-var rowsJsonArrayModifyScript = goredis.NewScript(luaJsonScript + `
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
-	-- 判断索引中和对应的key是否存在
-	local keyValuesStr = ARGV[2]
-	if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
-		return
-	end
-	local dataKey = KEYS[1] .. "_" .. keyValuesStr
-	local rst = redis.call('EXPIRE', dataKey, ARGV[1])
-	if rst == 0 then
-		return -- 数据不一致了 返回空 重新读
-	end
-
-	local duplicate = tonumber(ARGV[3])
-
-	local setkv = {}
-	local rst = {} -- 返回修改的值列表
+	rst = {} -- 返回修改的值列表
 	local pos = 4
 	while pos < #ARGV do
 		local field = ARGV[pos]
@@ -360,7 +414,7 @@ var rowsJsonArrayModifyScript = goredis.NewScript(luaJsonScript + `
 		local num = tonumber(ARGV[pos])
 		pos = pos + 1
 
-		local v = redis.call('HGET', dataKey, field)
+		local v = redis.call('HGET', key, field)
 		if not v then
 			v = "[]"
 		end
@@ -372,7 +426,7 @@ var rowsJsonArrayModifyScript = goredis.NewScript(luaJsonScript + `
 			for i = 1, num do
 				local item = ARGV[pos]
 				pos = pos + 1
-				if duplicate == 0 then -- 不去重 直接添加
+				if not duplicate then -- 不去重 直接添加
 					jsonv[#jsonv + 1] = item
 					change[#change+1] = item
 				else
@@ -397,7 +451,7 @@ var rowsJsonArrayModifyScript = goredis.NewScript(luaJsonScript + `
 					if jsonv[i] == item then
 						table.remove(jsonv, i)
 						change[#change+1] = item
-						if duplicate == 0 then
+						if not duplicate then
 							break
 						end
 					end
@@ -408,79 +462,33 @@ var rowsJsonArrayModifyScript = goredis.NewScript(luaJsonScript + `
 		setkv[#setkv+1] = field
 		setkv[#setkv+1] = json.encode(jsonv)
 		rst[#rst+1] = change
-	end
-	if #setkv > 0 then
-		redis.call('HMSET', dataKey, unpack(setkv))
-	end
-	return rst
-`)
 
-// rows 修改数据 有返回值
-// key：索引key
-// 参数：第一个是有效期 第二个为keyValuesStr 其他: field op value field op value ..
-// 返回值：err=nil时 1：空：没加载数据 2：value value .. 和上面field对应
-var rowsModifyGetScript = goredis.NewScript(`
-	local rst = redis.call('EXPIRE', KEYS[1], ARGV[1])
-	if rst == 0 then
-		return
-	end
-	-- 判断索引中和对应的key是否存在
-	local keyValuesStr = ARGV[2]
-	if redis.call("SISMEMBER", KEYS[1], keyValuesStr) == 0 then
-		return
-	end
-	local dataKey = KEYS[1] .. "_" .. keyValuesStr
-	local rst = redis.call('EXPIRE', dataKey, ARGV[1])
-	if rst == 0 then
-		return -- 数据不一致了 返回空 重新读
-	end
-
-	local fields = {}
-	local setkv = {}
-	for i = 3, #ARGV, 3 do
-		fields[#fields+1] = ARGV[i]
-		if ARGV[i+1] == "del" then
-			redis.call('HDEL', dataKey, ARGV[i])
-		elseif ARGV[i+1] == "set" then
-			setkv[#setkv+1] = ARGV[i]
-			setkv[#setkv+1] = ARGV[i+2]
-		elseif ARGV[i+1] == "incr" then
-			redis.call('HINCRBY', dataKey, ARGV[i], ARGV[i+2])
-		elseif ARGV[i+1] == "fincr" then
-			redis.call('HINCRBYFLOAT', dataKey, ARGV[i], ARGV[i+2])
+		if writeDirty then
+			-- 脏标记，记录修改的字段
+			local token = "," .. field .. ","
+			if not string.find(dirty2, token, 1, true) then
+				if #dirty == 0 then
+					dirty = field
+				else
+					dirty = dirty .. "," .. field
+				end
+				dirtyChanged = true
+			end
+			dverChanged = true
 		end
 	end
+
+	if dirtyChanged then
+		setkv[#setkv+1] = '_dirty_'
+		setkv[#setkv+1] = dirty
+	end
+	if dverChanged then
+		setkv[#setkv+1] = '_dver_'
+		setkv[#setkv+1] = dver + 1
+	end
+
 	if #setkv > 0 then
-		redis.call('HMSET', dataKey, unpack(setkv))
+		redis.call('HMSET', key, unpack(setkv))
 	end
-	if #fields == 0 then
-		return {}
-	end
-	-- 返回最新的值
-	return redis.call('HMGET', dataKey, unpack(fields))
-`)
-
-// column /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// column 新增数据，直接保存
-// key：生成的key
-// 参数：第一个是有效期 其他：field value field value
-// 返回值：err=nil时 OK
-var columnAddScript = goredis.NewScript(`
-	redis.call('HMSET', KEYS[1], select(2,unpack(ARGV)))
-	redis.call('EXPIRE', KEYS[1], ARGV[1])
-	return 'OK'
-`)
-
-// column 新增数据，直接保存
-// key：生成的key
-// 参数：第一个是有效期 其他：field value
-// 返回值：err=nil时 OK  空不存在
-var columnSetScript = goredis.NewScript(`
-	local exists = redis.call('HEXISTS', key, ARGV[2])
-	if exists == 0 then
-		return
-	end
-	redis.call('HMSET', KEYS[1], ARGV[2], ARGV[3])
-	redis.call('EXPIRE', KEYS[1], ARGV[1])
-	return 'OK'
+	return rst
 `)

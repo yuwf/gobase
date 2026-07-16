@@ -14,7 +14,9 @@ import (
 )
 
 type ReplyResper interface {
-	respType() reflect.Type
+	RespI() interface{}
+	RespType() reflect.Type
+	RegHook(hook func(ctx context.Context))
 	create(md *MsgDispatch, ctx context.Context, mr Msger, reqid, respid string, msg interface{}, t interface{}, checkMsgDone chan int)
 }
 
@@ -34,7 +36,7 @@ type ReplyResp[Resp any] struct {
 	reply int32     // 是否回复了 原子操作
 
 	// 回复钩子函数，在Reply()时调用，正常是只有一个线程处理消息，所以这里不需要锁
-	replyHook []func(ctx context.Context, reply *ReplyResp[Resp])
+	replyHook []func(ctx context.Context)
 }
 
 func (reply *ReplyResp[Resp]) Reply() {
@@ -46,7 +48,10 @@ func (reply *ReplyResp[Resp]) Reply() {
 	func() {
 		defer utils.HandlePanic()
 		for _, hook := range reply.replyHook {
-			hook(reply.ctx, reply)
+			if hook == nil {
+				continue
+			}
+			hook(reply.ctx)
 		}
 	}()
 
@@ -68,11 +73,15 @@ func (reply *ReplyResp[Resp]) Reply() {
 }
 
 // 注册回复钩子函数
-func (reply *ReplyResp[Resp]) RegHook(hook func(ctx context.Context, reply *ReplyResp[Resp])) {
+func (reply *ReplyResp[Resp]) RegHook(hook func(ctx context.Context)) {
 	reply.replyHook = append(reply.replyHook, hook)
 }
 
-func (reply *ReplyResp[Resp]) respType() reflect.Type {
+func (reply *ReplyResp[Resp]) RespI() interface{} {
+	return reply.Resp
+}
+
+func (reply *ReplyResp[Resp]) RespType() reflect.Type {
 	return reflect.TypeOf((*Resp)(nil)).Elem()
 }
 

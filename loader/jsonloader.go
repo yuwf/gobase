@@ -35,11 +35,7 @@ func (l *JsonLoader[T]) Get() *T {
 			if ok {
 				creater.Create()
 			}
-			// 调用对象的Normalize函数
-			normalizer, ok := any(conf).(Normalizer)
-			if ok {
-				normalizer.Normalize()
-			}
+			// 默认对象的创建 不调用Normalize函数
 			l.conf = conf
 		}
 		return l.conf
@@ -100,7 +96,7 @@ func (l *JsonLoader[T]) Load(src []byte, path string) error {
 		normalizer.Normalize()
 	}
 
-	old := l.Get()
+	old := l.conf
 	// 替换值
 	l.Lock()
 	l.conf = conf
@@ -166,7 +162,7 @@ func (l *JsonLoader[T]) LoadFile(path string) error {
 		normalizer.Normalize()
 	}
 
-	old := l.Get()
+	old := l.conf
 	// 替换值
 	l.Lock()
 	l.conf = conf
@@ -246,7 +242,7 @@ func (l *JsonLoader[T]) LoadBy(t *T) error {
 		normalizer.Normalize()
 	}
 
-	old := l.Get()
+	old := l.conf
 	// 替换值
 	l.Lock()
 	l.conf = conf

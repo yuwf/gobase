@@ -266,7 +266,7 @@ func (tb *TcpBackend[ServiceInfo]) BroadMsgByTagAndHash(ctx context.Context, tag
 }
 
 // 服务器发现 更新逻辑
-func (tb *TcpBackend[ServiceInfo]) UpdateServices(confs []*ServiceConfig) {
+func (tb *TcpBackend[ServiceInfo]) UpdateServices(ctx context.Context, confs []*ServiceConfig) {
 	// 标准化配置
 	for _, conf := range confs {
 		conf.normalize()
@@ -306,7 +306,7 @@ func (tb *TcpBackend[ServiceInfo]) UpdateServices(confs []*ServiceConfig) {
 			tb.groupMutex.Unlock()
 		}
 		// 更新组
-		count, addCount, modifyCount, removeCount := group.update(confs)
+		count, addCount, modifyCount, removeCount := group.update(ctx, confs)
 		// 更新版本号
 		if addCount > 0 || modifyCount > 0 || removeCount > 0 {
 			tb.addServiceVersion(serviceName)

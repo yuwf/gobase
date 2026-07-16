@@ -129,7 +129,7 @@ func PostJson[ServiceInfo any, T any](hb *HttpBackend[ServiceInfo], ctx context.
 }
 
 // 服务器发现 更新逻辑
-func (hb *HttpBackend[ServiceInfo]) updateServices(confs []*ServiceConfig) {
+func (hb *HttpBackend[ServiceInfo]) updateServices(ctx context.Context, confs []*ServiceConfig) {
 	// 标准化配置
 	for _, conf := range confs {
 		conf.normalize()
@@ -169,7 +169,7 @@ func (hb *HttpBackend[ServiceInfo]) updateServices(confs []*ServiceConfig) {
 			hb.groupMutex.Unlock()
 		}
 		// 更新组
-		count, addCount, modifyCount, removeCount := group.update(confs, hb.event)
+		count, addCount, modifyCount, removeCount := group.update(ctx, confs, hb.event)
 		// 更新版本号
 		if addCount > 0 || modifyCount > 0 || removeCount > 0 {
 			hb.addServiceVersion(serviceName)

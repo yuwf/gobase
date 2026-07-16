@@ -244,6 +244,40 @@ func (m *MySQL) Exec(ctx context.Context, query string, args ...interface{}) (sq
 	return resp, mysqlCmd.Err
 }
 
+func (m *MySQL) Query(ctx context.Context, query string, args ...interface{}) (*sqlx.Rows, error) {
+	mysqlCmd := &MySQLCommond{
+		Cmd:   getCmd(query, "Query"),
+		Query: query,
+		Args:  args,
+	}
+
+	entry := time.Now()
+	var resp *sqlx.Rows
+	resp, mysqlCmd.Err = m.db.QueryxContext(ctx, query, args...)
+	mysqlCmd.Elapsed = time.Since(entry)
+
+	if mysqlCmd.Err != nil {
+		utils.LogCtx(log.Error(), ctx).Err(mysqlCmd.Err).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
+			Str("query", query).Interface("args", args).
+			Msg("MySQL " + mysqlCmd.Cmd + " Fail")
+	} else {
+		logOut := !utils.CtxHasNolog(ctx)
+		if logOut && zerolog.DebugLevel >= log.Logger.GetLevel() {
+			utils.LogCtx(log.Debug(), ctx).Int32("elapsed", int32(mysqlCmd.Elapsed/time.Millisecond)).
+				Str("query", query).Interface("args", args).
+				Msg("MySQL " + mysqlCmd.Cmd + " Success")
+		}
+	}
+	// 回调
+	func() {
+		defer utils.HandlePanic()
+		for _, f := range m.hook {
+			f(ctx, mysqlCmd)
+		}
+	}()
+	return resp, mysqlCmd.Err
+}
+
 func (m *MySQL) Update(ctx context.Context, query string, args ...interface{}) (int64, error) {
 	mysqlCmd := &MySQLCommond{
 		Cmd:   getCmd(query, "Update"),

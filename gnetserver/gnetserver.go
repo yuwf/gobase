@@ -166,11 +166,14 @@ func (s *GNetServer[ClientId, ClientInfo]) GetClient(id ClientId) *GNetClient[Cl
 	return nil
 }
 
-func (s *GNetServer[ClientId, ClientInfo]) RemoveClient(id ClientId) *GNetClient[ClientInfo] {
+func (s *GNetServer[ClientId, ClientInfo]) RemoveClient(id ClientId, removeConn bool) *GNetClient[ClientInfo] {
 	client, ok := s.clientMap.Load(id)
 	if ok {
 		s.clientMap.Delete(id)
 		gc := client.(*gClient[ClientId, ClientInfo]).gc
+		if removeConn {
+			s.connMap.Delete(gc.conn)
+		}
 
 		// 回调hook
 		func() {
@@ -258,11 +261,11 @@ func (s *GNetServer[ClientId, ClientInfo]) ClientCount() int {
 }
 
 // 队列中还未处理的消息
-func (s *GNetServer[ClientId, ClientInfo]) RecvSeqCount() map[string]int {
-	rst := map[string]int{}
+func (s *GNetServer[ClientId, ClientInfo]) RecvSeqCount() map[interface{}]int {
+	rst := map[interface{}]int{}
 	s.connMap.Range(func(key, value interface{}) bool {
 		gc := value.(*gClient[ClientId, ClientInfo]).gc
-		rst[gc.ConnName()] = gc.RecvSeqCount()
+		rst[gc] = gc.RecvSeqCount()
 		return true
 	})
 	return rst
@@ -345,8 +348,8 @@ func (s *GNetServer[ClientId, ClientInfo]) OnOpened(c gnet.Conn) (out []byte, ac
 	}
 	s.connMap.Store(c, client)
 	if s.event != nil {
-		gc.seq.Submit(func() {
-			ctx := utils.CtxSetTrace(gc.ctx, 0, "Connected")
+		ctx := utils.CtxSetTrace(gc.ctx, 0, "Connected")
+		gc.seq.Submit(ctx, func() {
 			s.event.OnConnected(ctx, gc)
 		})
 	}
@@ -378,8 +381,8 @@ func (s *GNetServer[ClientId, ClientInfo]) OnClosed(c gnet.Conn, err error) (act
 		s.connMap.Delete(c)
 		_, delClient := s.clientMap.LoadAndDelete(client.(*gClient[ClientId, ClientInfo]).id)
 		if s.event != nil {
-			gc.seq.Submit(func() {
-				ctx := utils.CtxSetTrace(gc.ctx, 0, "Closed")
+			ctx := utils.CtxSetTrace(gc.ctx, 0, "Closed")
+			gc.seq.Submit(ctx, func() {
 				s.event.OnDisConnect(ctx, gc)
 			})
 		}
@@ -458,7 +461,7 @@ func (s *GNetServer[ClientId, ClientInfo]) Tick() (delay time.Duration, action g
 			gclient := value.(*gClient[ClientId, ClientInfo])
 			gc := gclient.gc
 			ctx := utils.CtxSetTrace(gc.ctx, 0, "Tick")
-			gc.seq.Submit(func() {
+			gc.seq.Submit(ctx, func() {
 				s.event.OnTick(ctx, gc)
 			})
 			return true

@@ -57,12 +57,12 @@ func checkSendAlert(msg string) []*AlertAddr {
 		if conf.isIgnore {
 			continue
 		}
-		if conf.mulErrorTrie.HasPrefix(msg) {
+		if conf.mulErrorTrie.HasPrefixOrSuffix(msg) {
 			if LogAlertCheck != nil && LogAlertCheck(msg) {
 				addrs = append(addrs, conf.AlertAddr)
 			}
 		}
-		if conf.errorTrie.HasPrefix(msg) {
+		if conf.errorTrie.HasPrefixOrSuffix(msg) {
 			addrs = append(addrs, conf.AlertAddr)
 		}
 	}
@@ -102,7 +102,7 @@ func (h *logHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 	if level == zerolog.FatalLevel {
 		vo := reflect.ValueOf(e).Elem()
 		buf := vo.FieldByName("buf")
-		SendFeiShuAlert2(ParamConf.Get().defaultAddr, "Fatal %s\n%s}", msg, string(buf.Bytes()))
+		SendFeiShuAlert2(ParamConf.Get().defaultAddr, "%s\n%s}", msg, string(buf.Bytes()))
 	} else if level == zerolog.PanicLevel {
 		vo := reflect.ValueOf(e).Elem()
 		buf := vo.FieldByName("buf")
@@ -140,7 +140,7 @@ func (h *logHook) sendLastLogs() {
 			send = send + "\n\n" + h.lastLogs[index]
 		}
 	}
-	SendFeiShuAlert2(ParamConf.Get().defaultAddr, send)
+	SendFeiShuAlert2(ParamConf.Get().defaultAddr, "%s", send)
 }
 
 func (h *logHook) addAlertLog(addrs []*AlertAddr, e *zerolog.Event, msg string) {
@@ -180,7 +180,7 @@ func (h *logHook) addAlertLog(addrs []*AlertAddr, e *zerolog.Event, msg string) 
 	if a.msg == "Panic" {
 		SendFeiShuAlert2(addrs, "%s\n\n%s}", a.msg, a.info)
 	} else {
-		SendFeiShuAlert(addrs, "Error %s\n\n%s}", a.msg, a.info)
+		SendFeiShuAlert(addrs, "%s\n\n%s}", a.msg, a.info)
 	}
 
 	// 开启协程 检查该报警
@@ -191,7 +191,7 @@ func (h *logHook) addAlertLog(addrs []*AlertAddr, e *zerolog.Event, msg string) 
 			if count > 0 {
 				atomic.AddInt32(&a.count, -count)
 				a.totalCount += count
-				SendFeiShuAlert(addrs, "Error %s\n\nCount:%d\nTotalCount:%d\n\n%s}", a.msg, count, a.totalCount, a.info)
+				SendFeiShuAlert(addrs, "%s\n\nCount:%d\nTotalCount:%d\n\n%s}", a.msg, count, a.totalCount, a.info)
 			} else {
 				hook.samplingLock.Lock()
 				delete(hook.samplingLogs, a.pos)

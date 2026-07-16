@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"unsafe"
 )
 
 // 结构信息
@@ -33,7 +32,9 @@ func GetStructTypeByTypeTag(structtype reflect.Type, tagName string) (*StructTyp
 	fields := make([]reflect.StructField, 0, numField) // 结构中成员的变量地址
 	for i := 0; i < numField; i += 1 {
 		field := structtype.Field(i)
-
+		if field.PkgPath != "" {
+			continue // 非导出字段 反射时会被忽略
+		}
 		tag := field.Tag.Get(tagName)
 		if tag == "-" || tag == "" {
 			continue
@@ -82,9 +83,8 @@ func (s *StructType) FindIndexByTagFold(tag string) int {
 	return -1
 }
 
-// instance必须是对应结构的类型，考虑到性能需要这个外层保证
-func (s *StructType) InstanceElemsSlice(instance interface{}) []interface{} {
-	// 获取实例的 reflect.Type 和 reflect.Value
+func (s *StructType) InstanceElems(instance interface{}) []reflect.Value {
+	// 获取实例的 reflect.Value
 	val := reflect.ValueOf(instance)
 	if val.Kind() == reflect.Ptr {
 		val = val.Elem() // 如果是指针，获取指针指向的结构体值
@@ -93,23 +93,9 @@ func (s *StructType) InstanceElemsSlice(instance interface{}) []interface{} {
 		return nil
 	}
 
-	result := make([]interface{}, 0, len(s.Fields))
-	ptr := uintptr(val.UnsafeAddr())
-	// 遍历每个字段，基于偏移量提取字段值 使用 unsafe.Pointer 来读取字段值
+	result := make([]reflect.Value, 0, len(s.Fields))
 	for _, field := range s.Fields {
-		result = append(result, reflect.NewAt(field.Type, unsafe.Pointer(ptr+field.Offset)).Elem().Interface())
-	}
-	return result
-}
-
-// instance必须是对应结构指针类型unsafe.Pointer，考虑到性能需要这个外层保证
-// 经过测试验证，性能比Elems没有快多少，尽可能ElemsInterface 或者 GetStructInfoByStructType().ElemsSlice
-func (s *StructType) InstanceElemsSliceUnSafe(instance unsafe.Pointer) []interface{} {
-	ptr := uintptr(instance)
-	result := make([]interface{}, 0, len(s.Fields))
-	// 遍历每个字段，基于偏移量提取字段值 使用 unsafe.Pointer 来读取字段值
-	for _, field := range s.Fields {
-		result = append(result, reflect.NewAt(field.Type, unsafe.Pointer(ptr+field.Offset)).Elem().Interface())
+		result = append(result, val.FieldByIndex(field.Index))
 	}
 	return result
 }

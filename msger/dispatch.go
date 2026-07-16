@@ -59,7 +59,7 @@ func (md *MsgDispatch) SendResp(fun interface{}) error {
 		log.Error().Err(err).Str("type", funType.String()).Msg("MsgDispatch SendResp error")
 		return err
 	}
-	funName, _ := getFuncName(funValue)
+	funName, _ := utils.GetFuncNameByValue(funValue)
 
 	// 必须有五个参数
 	paramNum := funType.NumIn()
@@ -107,6 +107,8 @@ func (md *MsgDispatch) SendResp(fun interface{}) error {
 // (ctx context.Context, m *Msg, msg *具体消息, t *Termianl)
 // (ctx context.Context, req *具体消息, resp *具体消息, t *Termianl)
 // (ctx context.Context, m *Msg, req *具体消息, resp *具体消息, t *Termianl)
+// (ctx context.Context, req *具体消息, resp *ReplyResp[具体消息], t *Termianl)
+// (ctx context.Context, m *MSg, req *具体消息, resp *ReplyResp[具体消息], t *Termianl)
 func (md *MsgDispatch) Reg(v interface{}, regMsgID func(msgType reflect.Type) string) {
 	vType := reflect.TypeOf(v)
 	if vType.Kind() != reflect.Pointer || vType.Elem().Kind() != reflect.Struct {
@@ -131,28 +133,29 @@ func (md *MsgDispatch) Reg(v interface{}, regMsgID func(msgType reflect.Type) st
 		if funType.In(0).String() != "context.Context" {
 			continue
 		}
-		// 倒数第二个参数是具体消息类型指针
-		if funType.In(paramNum-2).Kind() != reflect.Ptr || funType.In(paramNum-2).Elem().Kind() != reflect.Struct {
-			continue
-		}
 		// 最后一个参数是*Cr
 		if funType.In(paramNum-1) != md.tType {
 			continue
 		}
+
 		funName := vType.Method(i).Name // 名字获取的方式和RegMsg不太一样
 		funNameShort := funName
 		var handler *MsgHandler
 		if paramNum == 3 {
-			handler = &MsgHandler{
-				RegType:      RegType_Msg3,
-				FunValue:     funValue,
-				FunName:      funName,
-				FunNameShort: funNameShort,
-				MsgType:      funType.In(1).Elem(),
+			if funType.In(1).Kind() == reflect.Ptr && funType.In(1).Elem().Kind() == reflect.Struct {
+				handler = &MsgHandler{
+					RegType:      RegType_Msg3,
+					FunValue:     funValue,
+					FunName:      funName,
+					FunNameShort: funNameShort,
+					MsgType:      funType.In(1).Elem(),
+				}
 			}
 		} else if paramNum == 4 {
 			// 如果第二个参数是Mr
-			if funType.In(1) == md.mType {
+			if funType.In(1) == md.mType &&
+				funType.In(2).Kind() == reflect.Ptr && funType.In(2).Elem().Kind() == reflect.Struct {
+
 				handler = &MsgHandler{
 					RegType:      RegType_Msg4,
 					FunValue:     funValue,
@@ -160,7 +163,33 @@ func (md *MsgDispatch) Reg(v interface{}, regMsgID func(msgType reflect.Type) st
 					FunNameShort: funNameShort,
 					MsgType:      funType.In(2).Elem(),
 				}
-			} else if funType.In(1).Kind() == reflect.Ptr && funType.In(1).Elem().Kind() == reflect.Struct {
+
+			} else if funType.In(1).Kind() == reflect.Ptr && funType.In(1).Elem().Kind() == reflect.Struct &&
+				strings.HasPrefix(funType.In(2).String(), "*msger.ReplyResp") {
+
+				reply := reflect.New(funType.In(2).Elem()).Interface()
+				creater := reply.(ReplyResper)
+				if creater == nil {
+					continue
+				}
+				// 模板元素
+				replyRespType := creater.RespType()
+				if replyRespType.Kind() != reflect.Struct {
+					continue
+				}
+				handler = &MsgHandler{
+					RegType:      RegType_ReqReply4,
+					FunValue:     funValue,
+					FunName:      funName,
+					FunNameShort: funNameShort,
+					MsgType:      funType.In(1).Elem(),
+					RespType:     replyRespType,
+					ReplyType:    funType.In(2).Elem(),
+				}
+
+			} else if funType.In(1).Kind() == reflect.Ptr && funType.In(1).Elem().Kind() == reflect.Struct &&
+				funType.In(2).Kind() == reflect.Ptr && funType.In(2).Elem().Kind() == reflect.Struct {
+
 				handler = &MsgHandler{
 					RegType:      RegType_ReqResp4,
 					FunValue:     funValue,
@@ -169,6 +198,7 @@ func (md *MsgDispatch) Reg(v interface{}, regMsgID func(msgType reflect.Type) st
 					MsgType:      funType.In(1).Elem(),
 					RespType:     funType.In(2).Elem(),
 				}
+
 			} else {
 				continue
 			}
@@ -181,13 +211,37 @@ func (md *MsgDispatch) Reg(v interface{}, regMsgID func(msgType reflect.Type) st
 			if funType.In(2).Kind() != reflect.Ptr || funType.In(2).Elem().Kind() != reflect.Struct {
 				continue
 			}
-			handler = &MsgHandler{
-				RegType:      RegType_ReqResp5,
-				FunValue:     funValue,
-				FunName:      funName,
-				FunNameShort: funNameShort,
-				MsgType:      funType.In(2).Elem(),
-				RespType:     funType.In(3).Elem(),
+			if strings.HasPrefix(funType.In(3).String(), "*msger.ReplyResp") {
+				reply := reflect.New(funType.In(3).Elem()).Interface()
+				creater := reply.(ReplyResper)
+				if creater == nil {
+					continue
+				}
+				// 模板元素
+				replyRespType := creater.RespType()
+				if replyRespType.Kind() != reflect.Struct {
+					continue
+				}
+				handler = &MsgHandler{
+					RegType:      RegType_ReqReply5,
+					FunValue:     funValue,
+					FunName:      funName,
+					FunNameShort: funNameShort,
+					MsgType:      funType.In(2).Elem(),
+					RespType:     replyRespType,
+					ReplyType:    funType.In(3).Elem(),
+				}
+			} else if funType.In(3).Kind() == reflect.Ptr && funType.In(3).Elem().Kind() == reflect.Struct {
+				handler = &MsgHandler{
+					RegType:      RegType_ReqResp5,
+					FunValue:     funValue,
+					FunName:      funName,
+					FunNameShort: funNameShort,
+					MsgType:      funType.In(2).Elem(),
+					RespType:     funType.In(3).Elem(),
+				}
+			} else {
+				continue
 			}
 		} else {
 			continue
@@ -225,7 +279,7 @@ func (md *MsgDispatch) RegMsg(msgid string, fun interface{}) error {
 		log.Error().Err(err).Str("type", funType.String()).Msg("MsgDispatch RegMsg error")
 		return err
 	}
-	funName, funNameShort := getFuncName(funValue)
+	funName, funNameShort := utils.GetFuncNameByValue(funValue)
 
 	// 必须有三个或者四个参数
 	paramNum := funType.NumIn()
@@ -313,7 +367,7 @@ func (md *MsgDispatch) RegReqResp(reqid, respid string, fun interface{}) error {
 		log.Error().Err(err).Str("type", funType.String()).Msg("MsgDispatch RegReqResp error")
 		return err
 	}
-	funName, funNameShort := getFuncName(funValue)
+	funName, funNameShort := utils.GetFuncNameByValue(funValue)
 
 	// 必须有四个参数
 	paramNum := funType.NumIn()
@@ -415,7 +469,7 @@ func (md *MsgDispatch) RegReqReply(reqid, respid string, fun interface{}) error 
 		log.Error().Err(err).Str("type", funType.String()).Msg("MsgDispatch RegReqReply error")
 		return err
 	}
-	funName, funNameShort := getFuncName(funValue)
+	funName, funNameShort := utils.GetFuncNameByValue(funValue)
 
 	// 必须有四个参数
 	paramNum := funType.NumIn()
@@ -458,7 +512,7 @@ func (md *MsgDispatch) RegReqReply(reqid, respid string, fun interface{}) error 
 		return err
 	}
 	// 模板元素
-	replyRespType := creater.respType()
+	replyRespType := creater.RespType()
 	if replyRespType.Kind() != reflect.Struct {
 		err := errors.New("the " + ordinalName[paramNum-2] + " param elem must be Struct")
 		log.Error().Err(err).Str("Func", funName).Str("type", funType.In(paramNum-2).String()).Msg("MsgDispatch RegReqResp error")
@@ -480,7 +534,8 @@ func (md *MsgDispatch) RegReqReply(reqid, respid string, fun interface{}) error 
 			FunName:      funName,
 			FunNameShort: funNameShort,
 			MsgType:      funType.In(1).Elem(),
-			RespType:     funType.In(2).Elem(),
+			RespType:     replyRespType,
+			ReplyType:    funType.In(2).Elem(),
 		}
 	} else {
 		handler = &MsgHandler{
@@ -489,7 +544,8 @@ func (md *MsgDispatch) RegReqReply(reqid, respid string, fun interface{}) error 
 			FunName:      funName,
 			FunNameShort: funNameShort,
 			MsgType:      funType.In(2).Elem(),
-			RespType:     funType.In(3).Elem(),
+			RespType:     replyRespType,
+			ReplyType:    funType.In(3).Elem(),
 		}
 	}
 
@@ -561,8 +617,9 @@ func (md *MsgDispatch) WaitAllMsgDone(timeout time.Duration) {
 }
 
 // 消息分发
+// async 是否异步处理
 // logPrefix 日志前缀, 为空时默认值为"MsgDispatch"
-func (md *MsgDispatch) Dispatch(ctx context.Context, mr RecvMsger, t interface{}, logPrefix string) (bool, error) {
+func (md *MsgDispatch) Dispatch(ctx context.Context, mr RecvMsger, t interface{}, async bool, logPrefix string) (bool, error) {
 	if len(logPrefix) == 0 {
 		logPrefix = "MsgDispatch"
 	}
@@ -587,7 +644,14 @@ func (md *MsgDispatch) Dispatch(ctx context.Context, mr RecvMsger, t interface{}
 		msg := reflect.New(handler.MsgType).Interface()
 		err := mr.BodyUnMarshal(msg)
 		if err == nil {
-			md.handle(ctx, handler, mr, msgid, msg, t, logPrefix)
+			if async {
+				// 异步处理
+				utils.Submit(func() {
+					md.handle(ctx, handler, mr, msgid, msg, t, logPrefix)
+				})
+			} else {
+				md.handle(ctx, handler, mr, msgid, msg, t, logPrefix)
+			}
 		} else {
 			md.log(ctx, nil, mr, t, int(zerolog.ErrorLevel), logPrefix+" error, "+err.Error())
 		}
@@ -677,7 +741,7 @@ func (md *MsgDispatch) callFunc(ctx context.Context, handler *MsgHandler, mr Msg
 		return resp
 
 	case RegType_ReqReply4, RegType_ReqReply5:
-		reply := reflect.New(handler.RespType).Interface()
+		reply := reflect.New(handler.ReplyType).Interface()
 		// 调用 create(ctx, md)
 		reply.(ReplyResper).create(md, ctx, mr, msgid, handler.RespId, msg, t, checkMsgDone)
 		if handler.RegType == RegType_ReqReply4 {

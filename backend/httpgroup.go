@@ -3,6 +3,7 @@ package backend
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"sync"
@@ -126,7 +127,7 @@ func (g *HttpGroup[ServiceInfo]) GetServiceByTagAndHash(tag, hash string, status
 }
 
 // 更新组，返回剩余个数、新增个数、修改个数、删除个数
-func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEvent[ServiceInfo]) (int, int, int, int) {
+func (g *HttpGroup[ServiceInfo]) update(ctx context.Context, confs ServiceIdConfMap, handler HttpEvent[ServiceInfo]) (int, int, int, int) {
 	var remove []*HttpService[ServiceInfo]
 	var add []*HttpService[ServiceInfo]
 	var modify []*HttpService[ServiceInfo]
@@ -136,7 +137,7 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 	for serviceId, service := range g.services {
 		_, ok := confs[serviceId]
 		if !ok {
-			log.Info().Str("ServiceName", service.conf.ServiceName).
+			utils.LogCtx(log.Info(), ctx).Str("ServiceName", service.conf.ServiceName).
 				Str("ServiceId", service.conf.ServiceId).
 				Str("RegistryAddr", service.conf.ServiceAddr).
 				Int("RegistryPort", service.conf.ServicePort).
@@ -154,7 +155,7 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 		if ok {
 			// 判断是否修改了，如果需改了关闭之前的重新创建
 			if service.conf.ServiceAddr != conf.ServiceAddr || service.conf.ServicePort != conf.ServicePort {
-				log.Info().Str("ServiceName", service.conf.ServiceName).
+				utils.LogCtx(log.Info(), ctx).Str("ServiceName", service.conf.ServiceName).
 					Str("ServiceId", service.conf.ServiceId).
 					Str("RegistryAddr", service.conf.ServiceAddr).
 					Int("RegistryPort", service.conf.ServicePort).
@@ -178,7 +179,7 @@ func (g *HttpGroup[ServiceInfo]) update(confs ServiceIdConfMap, handler HttpEven
 			}
 		} else {
 			// 新增
-			log.Info().Str("ServiceName", conf.ServiceName).
+			utils.LogCtx(log.Info(), ctx).Str("ServiceName", conf.ServiceName).
 				Str("ServiceId", conf.ServiceId).
 				Str("RegistryAddr", conf.ServiceAddr).
 				Int("RegistryPort", conf.ServicePort).

@@ -125,12 +125,12 @@ func (h *TcpHandler) GoRedisFilter(confs []*goredis.RegistryInfo) []*ServiceConf
 	// 【目前根据业务 目前ServiceName是存储在meta中的serviceName】
 	tcp := []*ServiceConfig{}
 	for _, conf := range confs {
-		if conf.RegistryScheme == "tcp" {
+		if conf.Scheme == "tcp" {
 			c := &ServiceConfig{
-				ServiceName: conf.RegistryName,
-				ServiceId:   conf.RegistryID,
-				ServiceAddr: conf.RegistryAddr,
-				ServicePort: conf.RegistryPort,
+				ServiceName: conf.Name,
+				ServiceId:   conf.ID,
+				ServiceAddr: conf.Addr,
+				ServicePort: conf.Port,
 				// Metadata:    conf.Metadata, redis没有Metadata
 			}
 			tcp = append(tcp, c)

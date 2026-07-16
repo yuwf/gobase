@@ -3,6 +3,7 @@ package utils
 // https://github.com/yuwf/gobase
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -119,7 +120,7 @@ func NtpTime() (t time.Time) {
 }
 
 func ntpSort(geti int) {
-	ntpSortSeq.Submit(func() {
+	ntpSortSeq.Submit(context.Background(), func() {
 		ntpLock.Lock() // 写锁排序
 		defer ntpLock.Unlock()
 

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +19,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type CacheOptions struct {
+	// 生成key时的hasgtag tag必须在c.condFields存在
+	HashTagField string `json:"hashTagField"`
+
+	// 自增字段配置
+	IncrementField string `json:"incrementField"` // mysql中自增字段tag名 区分大小写
+	TableCount     int    `json:"tableCount"`     // 拆表的个数 默认0 不用拆表，自增字段会根据拆表信息来生成不同的自增id
+	TableIndex     int    `json:"tableIndex"`     // 第几个拆表，从0开始
+
+	// 设置key前后缀时， 设置时不需要添加 _ 下划线，程序判断不为空时自动添加前后下划线
+	KeyPrefix string `json:"keyPrefix"` // key的前缀 各个缓存模型有自己的默认值
+	KeySuffix string `json:"keySuffix"` // key的后缀 一般用来版本控制 如v1 v2 ...
+
+	// 缓存过期时间 单位秒 不设置默认为36h
+	Expire int `json:"expire"`
+
+	AsyncToMysql  bool `json:"asyncToMysql"`  // 异步保存到mysql 默认false
+	AsyncMaxCount int  `json:"asyncMaxCount"` // 异步保存到mysql的最大并发数 默认10
+	AsyncTimeout  int  `json:"asyncTimeout"`  // 异步保存到mysql的超时时间 默认60秒
+
+	QueryCond TableConds `json:"queryCond"` // 查找数据总过滤条件
+}
+
 // 基础类
 // 配置类接口需要初始化时设置好，运行时不可再修改
 // 内部redis和mysql同步数据时有分布式锁保护，如果外层有业务锁可以配置不需要内部的锁
@@ -30,41 +52,39 @@ type Cache struct {
 	redis           *goredis.Redis
 	mysql           *mysql.MySQL
 	tableName       string   // 表名
-	tableCount      int      // 拆表的个数 默认0 不用拆表
-	tableIndex      int      // 第几个拆表，从0开始 如果tableCount>0 tableName+tableIndex 才是真正的表名
 	condFields      []string // 固定的查询字段 一定要有索引
 	condFieldsIndex []int    // condFields对应的索引
 	condFieldsLog   string   // log时专用
 
-	// CacheRows使用
-	keyFields      []string // 查询结果中唯一的字段tag，用来做key，区分大小写
-	keyFieldsIndex []int    // dataKeyField在tableInfo中的索引
-	keyFieldsLog   string   // log时专用
+	// options配置
+	hashTagField    string
+	hashTagFieldIdx int // hashTagField在tableInfo中的索引
 
-	// 其他配置参数
-	// 生成key时的hasgtag
-	hashTagField    string // 如果表结构条件中有字段名等于该值，就用查询你条件中这个字段的值设置redis中hashtag
-	hashTagFieldIdx int    // hashTagField在tableInfo中的索引
+	// 自增字段配置
+	incrementField      string
+	tableCount          int
+	tableIndex          int
+	incrementFieldIndex int   // 自增key在tableInfo中的索引
+	incrementMaxInit    int64 // 初始化时读取的表的最大自增值，如果出现了自增冲突，重读取下
 
-	// 新增数据的自增ID，自增时通过redis来做的，redis根据incrementKey通过HINCRBY命令获取增长ID，其中hash的field就是incrementTable
-	incrementReids      *goredis.Redis // 存储自增的Reids对象 默认值和redis为同一个对象
-	incrementField      string         // mysql中自增字段tag名 区分大小写
-	incrementFieldIndex int            // 自增key在tableInfo中的索引
-
-	// 缓存过期时间 单位秒 不设置默认为36h
 	expire int
 
-	// 设置key前后缀时， 设置时不需要添加 _ 下划线，程序判断不为空时自动添加前后下划线
-	keyPrefix string // key的前缀 各个缓存模型有自己的默认值
-	keySuffix string // key的后缀 一般用来版本控制 如v1 v2 ...
+	keyPrefix string
+	keySuffix string
 
 	queryCond TableConds // 查找数据总过滤条件
 
-	lock         bool // 同步数据锁保护
-	toMysqlAsync bool // 异步保存到mysql
+	asyncToMysql       bool   // 异步保存到mysql
+	asyncMaxCount      int    // 异步保存到mysql的最大并发数 默认10
+	asyncTimeout       int    // 异步保存到mysql的超时时间 默认60秒
+	dirtyKey           string // 脏数据key
+	dirtyKeyProcessing string // 脏数据正在处理列表key
+	dirtyKeyLastCheck  string // 脏数据上次检查时间key
+
+	msgHeadLog string // log时专用 日志头 样式 "CacheRow TableName"
 }
 
-func NewCache[T any](redis *goredis.Redis, mysql *mysql.MySQL, tableName string, tableCount, tableIndex int, condFields []string) (*Cache, error) {
+func NewCache[T any](redis *goredis.Redis, mysql *mysql.MySQL, tableName string, condFields []string, opts *CacheOptions) (*Cache, error) {
 	table, err := GetTableStruct[T]()
 	if err != nil {
 		return nil, err
@@ -97,21 +117,83 @@ func NewCache[T any](redis *goredis.Redis, mysql *mysql.MySQL, tableName string,
 		condFields:      condFields_,
 		condFieldsIndex: condFieldsIndex,
 		condFieldsLog:   "[" + strings.Join(condFields_, ",") + "]",
-		expire:          Expire,
-		lock:            true,
-		toMysqlAsync:    true,
+		hashTagField:    opts.HashTagField,
+		incrementField:  opts.IncrementField,
+		tableCount:      opts.TableCount,
+		tableIndex:      opts.TableIndex,
+		expire:          opts.Expire,
+		keyPrefix:       opts.KeyPrefix,
+		keySuffix:       opts.KeySuffix,
+		queryCond:       opts.QueryCond,
+		asyncToMysql:    opts.AsyncToMysql,
+		asyncMaxCount:   opts.AsyncMaxCount,
+		asyncTimeout:    opts.AsyncTimeout,
 	}
-	if tableCount > 1 {
-		if tableIndex >= 0 {
-			c.tableIndex = tableIndex % tableCount
+
+	// 验证opts是否合理
+
+	// hashTagField必须在condFields中
+	if c.hashTagField != "" {
+		c.hashTagFieldIdx = utils.IndexOf(condFields_, c.hashTagField)
+		if c.hashTagFieldIdx == -1 {
+			return nil, fmt.Errorf("tag:%s not find in %s", c.hashTagField, c.condFieldsLog)
+		}
+	}
+	// tableCount校验
+	if c.tableCount > 1 {
+		if c.tableIndex >= 0 {
+			c.tableIndex = c.tableIndex % c.tableCount
 		} else {
 			c.tableIndex = 0
 		}
-		c.tableCount = tableCount
 	} else {
 		c.tableIndex = 0
 		c.tableCount = 0
 	}
+
+	// 自增字段必须存在 且类型是int或者uint
+	if len(c.incrementField) != 0 {
+		c.incrementFieldIndex = c.FindIndexByTag(c.incrementField)
+		if c.incrementFieldIndex == -1 {
+			return nil, fmt.Errorf("tag:%s not find in %s", c.incrementField, c.T.String())
+		}
+		switch c.Fields[c.incrementFieldIndex].Type.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			break
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			break
+		default:
+			return nil, fmt.Errorf("tag:%s not int or uint", c.incrementField)
+		}
+	}
+
+	if c.expire == 0 {
+		c.expire = Expire
+	}
+
+	if c.asyncMaxCount <= 0 {
+		c.asyncMaxCount = 10
+	}
+	if c.asyncTimeout <= 0 {
+		c.asyncTimeout = 60
+	}
+	// 脏数据列表的key
+	if len(c.keyPrefix) > 0 {
+		c.dirtyKey += c.keyPrefix + "_"
+	}
+	c.dirtyKey += "{" + c.tableName + "}_dirty" // 添加上相同的hashkey
+	c.dirtyKeyProcessing = c.dirtyKey + "_processing"
+	c.dirtyKeyLastCheck = c.dirtyKey + "_lastcheck"
+	if len(c.keySuffix) > 0 {
+		c.dirtyKey += "_" + c.keySuffix
+		c.dirtyKeyProcessing += "_" + c.keySuffix
+		c.dirtyKeyLastCheck += "_" + c.keySuffix
+	}
+
+	if c.asyncToMysql {
+		addAsyncCache(c)
+	}
+
 	return c, nil
 }
 
@@ -123,71 +205,22 @@ func (c *Cache) MySQL() *mysql.MySQL {
 	return c.mysql
 }
 
-// 配置redishashtag，tag必须在c.condFields存在
-func (c *Cache) ConfigHashTag(hashTagField string) error {
-	at := utils.IndexOf(c.condFields, hashTagField)
-	if at == -1 {
-		return fmt.Errorf("tag:%s not find in %s", hashTagField, c.condFieldsLog)
-	}
-	c.hashTagField = hashTagField
-	c.hashTagFieldIdx = at
-	return nil
-}
-
-// 总过滤条件
-func (c *Cache) ConfigQueryCond(cond TableConds) error {
-	c.queryCond = cond
-	return nil
-}
-
-// 配置自增参数
-func (c *Cache) ConfigIncrement(incrementReids *goredis.Redis, incrementField string) error {
-	if incrementReids == nil {
-		return errors.New("incrementReids is nil")
-	}
-	// 自增字段必须存在 且类型是int或者uint
-	idx := c.FindIndexByTag(incrementField)
-	if idx == -1 {
-		return fmt.Errorf("tag:%s not find in %s", incrementField, c.T.String())
-	}
-	switch c.Fields[idx].Type.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		break
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		break
-	default:
-		return fmt.Errorf("tag:%s not int or uint", incrementField)
-	}
-
-	c.incrementReids = incrementReids
-	c.incrementField = incrementField
-	c.incrementFieldIndex = idx
-	return nil
-}
-
-func (c *Cache) ConfigToMysqlAsync(async bool) error {
-	c.toMysqlAsync = async
-	return nil
-}
-
-// 配置生成key的前缀
-func (c *Cache) ConfigKeyPrefix(prefix, suffix string) error {
-	c.keyPrefix = prefix
-	c.keySuffix = suffix
-	return nil
-}
-
-func (c *Cache) ConfigExpire(expire int) error {
-	c.expire = expire
-	return nil
-}
-
 func (c *Cache) TableName() string {
-	if c.tableCount == 0 {
-		return c.tableName
-	} else {
-		return c.tableName + strconv.Itoa(c.tableIndex)
+	return c.tableName
+}
+
+// 删除脏数据列表，删除后未需要异步同步的数据无法同步到mysql
+func (c *Cache) DelDirtyKey(ctx context.Context) (_err_ error) {
+	defer c.logContext(&ctx, &_err_, func(l *zerolog.Event) {
+		l.Err(_err_).Msgf("%s DelCache", c.msgHeadLog)
+	})()
+
+	keys := []string{c.dirtyKey, c.dirtyKeyProcessing, c.dirtyKeyLastCheck}
+	cmd := c.redis.Del(ctx, keys...) // 删缓存
+	if cmd.Err() != nil {
+		return cmd.Err()
 	}
+	return nil
 }
 
 func (c *Cache) logContext(ctx *context.Context, _err_ *error, fun func(l *zerolog.Event), ignore ...error) func() {
@@ -215,7 +248,7 @@ func (c *Cache) checkFiledValue(at int, v interface{}) error {
 		return err
 	}
 	actualType := reflect.TypeOf(v)
-	if !(elemType == actualType || (elemType.Kind() == reflect.Pointer && elemType.Elem() == actualType)) {
+	if !(elemType == actualType || (elemType.Kind() == reflect.Pointer && elemType.Elem() == actualType) || (actualType.Kind() == reflect.Pointer && actualType.Elem() == elemType)) {
 		err := fmt.Errorf("value type is invalid at tag:%s(%s), should be %s", c.Tags[at], actualType.String(), elemType.String())
 		return err
 	}
@@ -224,7 +257,7 @@ func (c *Cache) checkFiledValue(at int, v interface{}) error {
 
 func (c *Cache) checkFiledType(at int, actualType reflect.Type) error {
 	elemType := c.Fields[at].Type
-	if !(elemType == actualType || (elemType.Kind() == reflect.Pointer && elemType.Elem() == actualType)) {
+	if !(elemType == actualType || (elemType.Kind() == reflect.Pointer && elemType.Elem() == actualType) || (actualType.Kind() == reflect.Pointer && actualType.Elem() == elemType)) {
 		err := fmt.Errorf("value type is invalid at tag:%s(%s), should be %s", c.Tags[at], actualType.String(), elemType.String())
 		return err
 	}
@@ -247,58 +280,8 @@ func (c *Cache) checkCondValues(condValues []interface{}) error {
 	return nil
 }
 
-// 检查keyValues是否合法
-func (c *Cache) checkKeyValues(keyValues []interface{}) error {
-	if len(keyValues) != len(c.keyFields) {
-		return errors.New("keyValues size not match keyFields")
-	}
-	for i, v := range keyValues {
-		// v必须有效 且类型要和T类型对应的字段类型一致
-		at := c.keyFieldsIndex[i]
-		err := c.checkFiledValue(at, v)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// 检查字段和value是否和结构一致
-// baseTypeCheck是否检查value为基础类型
-func (c *Cache) checkFieldValues(condFieldValues map[string]interface{}) ([]string, []interface{}, error) {
-	condFields := make([]string, 0, len(condFieldValues))
-	condValues := make([]interface{}, 0, len(condFieldValues))
-	for tag, v := range condFieldValues {
-		condFields = append(condFields, tag)
-		condValues = append(condValues, v)
-	}
-
-	for i := 0; i < len(condFields); i++ {
-		tag := condFields[i]
-		// 字段名是否存在
-		at := c.FindIndexByTag(tag)
-		if at == -1 {
-			err := fmt.Errorf("tag:%s not find in %s", tag, c.T.String())
-			return condFields, condValues, err
-		}
-		// 类型是否一样
-		v := condValues[i]
-		elemType := c.Fields[at].Type
-		if v == nil {
-			err := fmt.Errorf("value type is nil at tag:%s, should be %s", tag, elemType.String())
-			return condFields, condValues, err
-		}
-		actualType := reflect.TypeOf(v)
-		if !(elemType == actualType || (elemType.Kind() == reflect.Pointer && elemType.Elem() == actualType)) {
-			err := fmt.Errorf("value type is invalid at tag:%s(%s), should be %s", tag, actualType.String(), elemType.String())
-			return condFields, condValues, err
-		}
-	}
-	return condFields, condValues, nil
-}
-
 func (c *Cache) checkJsonArrayFieldValues(fieldValues map[string][]string) error {
-	for tag, _ := range fieldValues {
+	for tag := range fieldValues {
 		// 字段名是否存在
 		at := c.FindIndexByTag(tag)
 		if at == -1 {
@@ -344,18 +327,6 @@ func (c *Cache) genCondValuesKey(condValues []interface{}) string {
 	return key.String()
 }
 
-// 生成keyValuesStr，不检查keyValues是否符合keyFields，需要调用的地方保证参数
-func (c *Cache) genKeyValuesStr(keyValues []interface{}) string {
-	var flag strings.Builder
-	for i, v := range keyValues {
-		if i > 0 {
-			flag.WriteByte(':')
-		}
-		flag.WriteString(c.fmtBaseType(v))
-	}
-	return flag.String()
-}
-
 // 判断condValues是否符合condFileds，并生成key
 func (c *Cache) checkCondValuesGenKey(condValues []interface{}) (string, error) {
 	err := c.checkCondValues(condValues)
@@ -365,101 +336,84 @@ func (c *Cache) checkCondValuesGenKey(condValues []interface{}) (string, error) 
 	return c.genCondValuesKey(condValues), nil
 }
 
-// 判断keyValues是否符合keyFileds,并生成keyValuesStr
-func (c *Cache) checkKeyValuesGenStr(keyValues []interface{}) (string, error) {
-	err := c.checkKeyValues(keyValues)
-	if err != nil {
-		return "", err
-	}
-	return c.genKeyValuesStr(keyValues), nil
-}
-
-// 判断从data中去的数据是否符合keyFileds,并生成keyValuesStr
-func (c *Cache) checkKeyValuesGenStrByMap(data map[string]interface{}) (string, []interface{}, error) {
-	var keyValues []interface{}
-	for _, f := range c.keyFields {
-		v, ok := data[f]
-		if !ok {
-			err := fmt.Errorf("not find %s field", f)
-			return "", nil, err
-		}
-		keyValues = append(keyValues, v)
-	}
-	err := c.checkKeyValues(keyValues)
-	if err != nil {
-		return "", nil, err
-	}
-	return c.genKeyValuesStr(keyValues), keyValues, nil
-}
-
 // 检查结构数据 是否为c.Tags的一部分
 // 可以是结构或者结构指针 data.tags名称需要和T一致，可以是T的一部分
 // 如果合理 返回data的结构信息
-func (c *Cache) checkStructData(data interface{}) (*utils.StructValue, error) {
+func (c *Cache) checkStructData(data interface{}) (*utils.StructValue, *ModifyData, error) {
 	dataInfo, err := utils.GetStructInfoByTag(data, DBTag)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// 结构中的字段必须都存在，且类型还要一致
-	for i, tag := range dataInfo.Tags {
-		at := c.FindIndexByTag(tag)
-		if at == -1 {
-			err := fmt.Errorf("tag:%s not find in %s", tag, c.T.String())
-			return nil, err
-		}
-		err := c.checkFiledType(at, dataInfo.Fields[i].Type)
-		if err != nil {
-			return nil, err
-		}
+	modifyData, err := c.checkMapData(dataInfo.TagElemsInterface())
+	if err != nil {
+		return nil, nil, err
 	}
-	return dataInfo, nil
+	return dataInfo, modifyData, nil
 }
 
 // 检查Map数据 是否为c.Tags的一部分
-func (c *Cache) checkMapData(data map[string]interface{}) error {
+func (c *Cache) checkMapData(data map[string]interface{}) (*ModifyData, error) {
 	// 结构中的字段必须都存在，且类型还要一致
-	for tag, v := range data {
-		at := c.FindIndexByTag(tag)
-		if at == -1 {
-			err := fmt.Errorf("tag:%s not find in %s", tag, c.T.String())
-			return err
+	modifyData := &ModifyData{
+		st:    c.StructType,
+		data:  make(map[string]interface{}, len(c.Tags)),
+		index: make([]int, 0, len(c.Tags)),
+		tags:  make([]string, 0, len(c.Tags)),
+	}
+	for i, tag := range c.Tags {
+		if v, ok := data[tag]; ok {
+			vt := reflect.TypeOf(v)
+			if v != nil { // 空set时表示删除
+				err := c.checkFiledType(i, vt)
+				if err != nil {
+					return nil, err
+				}
+			}
+			modifyData.data[tag] = v
+			modifyData.index = append(modifyData.index, i)
+			modifyData.tags = append(modifyData.tags, tag)
 		}
-		vt := reflect.TypeOf(v)
-		if v != nil { // 空set时表示删除
-			err := c.checkFiledType(at, vt)
-			if err != nil {
-				return err
+	}
+	if len(modifyData.data) != len(data) {
+		var notFoundTags []string
+		for tag := range data {
+			if _, ok := modifyData.data[tag]; !ok {
+				notFoundTags = append(notFoundTags, tag)
 			}
 		}
+		return nil, fmt.Errorf("tag:%s no tag found in %s", strings.Join(notFoundTags, ","), c.T.String())
 	}
-	return nil
+	return modifyData, nil
 }
 
-// mysql -> redis 的锁
-// 等待式加锁 返回的fun!=nil才表示加锁成功
-func (c *Cache) preLoadLock(ctx context.Context, key string) (func(), error) {
-	if !c.lock {
-		return func() {}, nil // 不需要锁，直接返回加锁成功
-	}
-
-	return c.redis.TryLockWait(utils.CtxSetNolog(ctx), key+"_lock_preLoads", time.Second*8)
-
-	// 若key已经存在了，加锁失败
-	// 这种不会存在加载的间隙，但会有两个问题 1：如果redis数据时错的 无法再次加载  2：针对CacheRows使用索引的方式，不能对索引加锁
-	// return c.redis.KeyLockWait(utils.CtxSetNolog(ctx), key, key+"_lock_preLoad", time.Second*8)
-}
-
-// redis -> mysql 的锁
+// redis -> mysql 的锁，同时时使用
 func (c *Cache) saveLock(ctx context.Context, key string) (func(), error) {
-	if !c.lock {
-		return func() {}, nil // 不需要锁，直接返回加锁成功
-	}
-
 	return c.redis.Lock(utils.CtxSetNolog(ctx), key+"_lock_save", time.Second*8)
 }
 
+// 获取自增值
+func (c *Cache) getIncrement(ctx context.Context) (int64, error) {
+	if c.incrementMaxInit == 0 {
+		// 从mysql中读取最大自增值，保存到Redis中
+		var maxIncrement int64
+		err := c.mysql.Get(utils.CtxSetNolog(ctx), &maxIncrement, "SELECT IFNULL(MAX("+c.incrementField+"), 0) FROM "+c.tableName)
+		if err != nil {
+			return 0, err
+		}
+		c.incrementMaxInit = maxIncrement
+		c.redis.HSet(utils.CtxSetNolog(ctx), IncrementKey, c.tableName, maxIncrement)
+	}
+	// 获取自增id
+	var incrementId int64
+	err := c.redis.Script(utils.CtxSetNolog(ctx), incrScript, []string{IncrementKey}, c.tableName, c.tableCount, c.tableIndex).Bind(&incrementId)
+	if err != nil {
+		return 0, err
+	}
+	return incrementId, nil
+}
+
 // 往MySQL中添加一条数据，返回自增值，如果条件是=的，会设置为默认值
-func (c *Cache) addToMySQL(ctx context.Context, condValues []interface{}, data map[string]interface{}) (int64, error) {
+func (c *Cache) addToMySQL(ctx context.Context, condValues []interface{}, keyValues []interface{}, data map[string]interface{}) (int64, error) {
 	var incrementId int64
 	if len(c.incrementField) != 0 {
 		// 如果结构中有自增字段，优先使用
@@ -467,8 +421,8 @@ func (c *Cache) addToMySQL(ctx context.Context, condValues []interface{}, data m
 			incrementId = c.int64Value(v)
 		}
 		if incrementId == 0 {
-			// 获取自增id
-			err := c.incrementReids.DoScript2(utils.CtxSetNolog(ctx), incrScript, []string{IncrementKey}, c.TableName(), c.tableCount, c.tableIndex).Bind(&incrementId)
+			var err error
+			incrementId, err = c.getIncrement(ctx)
 			if err != nil {
 				return 0, err
 			}
@@ -503,7 +457,7 @@ func (c *Cache) addToMySQL(ctx context.Context, condValues []interface{}, data m
 
 	var sqlStr strings.Builder
 	sqlStr.WriteString("INSERT INTO ")
-	sqlStr.WriteString(c.TableName())
+	sqlStr.WriteString(c.tableName)
 	sqlStr.WriteString(" (")
 	for i, tag := range fields {
 		if i > 0 {
@@ -518,21 +472,14 @@ func (c *Cache) addToMySQL(ctx context.Context, condValues []interface{}, data m
 	_, err := c.mysql.Exec(context.WithValue(ctx, mysql.CtxKey_NoDuplicate, 1), sqlStr.String(), args...)
 
 	if err != nil {
-		// 自增ID冲突了 尝试获取最大的ID， 重新写入下
+		// 自增ID冲突了 重新获取下最大的ID
 		if len(c.incrementField) != 0 && utils.IsMatch("*Error 1062**Duplicate*PRIMARY*", err.Error()) {
-			var maxIncrement int64
-			err2 := c.mysql.Get(utils.CtxSetNolog(ctx), &maxIncrement, "SELECT MAX("+c.incrementField+") FROM "+c.TableName())
-			if err2 == nil {
-				incrementId = maxIncrement + 1000
-				if c.tableCount > 0 {
-					mod := incrementId % int64(c.tableCount)
-					if mod != int64(c.tableIndex) {
-						incrementId = incrementId - mod + int64(c.tableIndex)
-					}
-				}
+			c.incrementMaxInit = 0 // 这里要还原初始值
+			var err error
+			incrementId, err = c.getIncrement(ctx)
+			if err == nil {
 				_, err := c.mysql.Exec(ctx, sqlStr.String(), args...)
 				if err == nil {
-					c.incrementReids.Do(utils.CtxSetNolog(ctx), "HSET", IncrementKey, c.TableName(), incrementId) // 保存下最大的key
 					return incrementId, nil
 				}
 			}
@@ -546,7 +493,7 @@ func (c *Cache) addToMySQL(ctx context.Context, condValues []interface{}, data m
 func (c *Cache) delToMySQL(ctx context.Context, cond TableConds) error {
 	var sqlStr strings.Builder
 	sqlStr.WriteString("DELETE FROM ")
-	sqlStr.WriteString(c.TableName())
+	sqlStr.WriteString(c.tableName)
 
 	cond = append(cond, c.queryCond...)
 	if len(cond) > 0 {
@@ -575,7 +522,7 @@ func (c *Cache) getFromMySQL(ctx context.Context, T reflect.Type, fields []strin
 		sqlStr.WriteString(tag)
 	}
 	sqlStr.WriteString(" FROM ")
-	sqlStr.WriteString(c.TableName())
+	sqlStr.WriteString(c.tableName)
 
 	cond = append(cond, c.queryCond...)
 	if len(cond) > 0 {
@@ -608,7 +555,7 @@ func (c *Cache) getsFromMySQL(ctx context.Context, T reflect.Type, fields []stri
 		sqlStr.WriteString(tag)
 	}
 	sqlStr.WriteString(" FROM ")
-	sqlStr.WriteString(c.TableName())
+	sqlStr.WriteString(c.tableName)
 
 	cond = append(cond, c.queryCond...)
 	if len(cond) > 0 {
@@ -629,10 +576,55 @@ func (c *Cache) getsFromMySQL(ctx context.Context, T reflect.Type, fields []stri
 	return t.Elem().Interface(), nil
 }
 
-func (c *Cache) saveToMySQL(ctx context.Context, cond TableConds, data map[string]interface{}, key string, call func(err error)) error {
+// 根据条件获取查询值
+func (c *Cache) getCondValuesFromMySQL(ctx context.Context, cond TableConds) ([][]interface{}, error) {
+	var sqlStr strings.Builder
+	sqlStr.WriteString("SELECT ")
+
+	for i, tag := range c.condFields {
+		if i > 0 {
+			sqlStr.WriteString(",")
+		}
+		sqlStr.WriteString(tag)
+	}
+	sqlStr.WriteString(" FROM ")
+	sqlStr.WriteString(c.tableName)
+
+	cond = append(cond, c.queryCond...)
+	if len(cond) > 0 {
+		sqlStr.WriteString(" WHERE ")
+	}
+	args := cond.fmtCond(&sqlStr)
+
+	rows, err := c.mysql.Query(ctx, sqlStr.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+
+	rst := make([][]interface{}, 0)
+	for rows.Next() {
+		ptrs := make([]interface{}, len(c.condFields))
+		// 为这一行创建扫描目标
+		for i := range c.condFields {
+			ptrs[i] = reflect.New(c.Fields[c.condFieldsIndex[i]].Type).Interface()
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		// 取出这一行的值
+		row := make([]interface{}, len(c.condFields))
+		for i := range ptrs {
+			row[i] = reflect.ValueOf(ptrs[i]).Elem().Interface()
+		}
+		rst = append(rst, row)
+	}
+	return rst, nil
+}
+
+func (c *Cache) saveToMySQL(ctx context.Context, cond TableConds, data map[string]interface{}) error {
 	var sqlStr strings.Builder
 	sqlStr.WriteString("UPDATE ")
-	sqlStr.WriteString(c.TableName())
+	sqlStr.WriteString(c.tableName)
 	sqlStr.WriteString(" SET ")
 
 	args := make([]interface{}, 0, len(cond)+len(data))
@@ -660,9 +652,6 @@ func (c *Cache) saveToMySQL(ctx context.Context, cond TableConds, data map[strin
 		}
 	}
 	if num == 0 {
-		if call != nil {
-			call(nil)
-		}
 		return nil // 没啥可更新的
 	}
 	sqlStr.WriteString(" WHERE ")
@@ -676,34 +665,20 @@ func (c *Cache) saveToMySQL(ctx context.Context, cond TableConds, data map[strin
 			}
 		}
 		sqlStr.WriteString(v.field)
-		sqlStr.WriteString(v.op + "?")
-		args = append(args, v.value)
+		sqlStr.WriteString(v.op)
+		args = append(args, v.values...)
 	}
 
-	if c.toMysqlAsync {
-		utils.Submit(func() {
-			// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
-			_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
-			if call != nil {
-				call(err)
-			}
-		})
-		return nil
-	} else {
-		// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
-		_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
-		if call != nil {
-			call(err)
-		}
-		return err
-	}
+	// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
+	_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
+	return err
 }
 
 // mysql的JSON_SEARCH 不支持数字类型的查找，这里明确添加的类型必须是string
-func (c *Cache) jsonArrayToMySQL(ctx context.Context, cond TableConds, add, del map[string][]string, key string, call func(err error)) error {
+func (c *Cache) jsonArrayToMySQL(ctx context.Context, cond TableConds, add, del map[string][]string) error {
 	var sqlStr strings.Builder
 	sqlStr.WriteString("UPDATE ")
-	sqlStr.WriteString(c.TableName())
+	sqlStr.WriteString(c.tableName)
 	sqlStr.WriteString(" SET ")
 
 	args := make([]interface{}, 0, 0)
@@ -757,9 +732,6 @@ func (c *Cache) jsonArrayToMySQL(ctx context.Context, cond TableConds, add, del 
 	}
 
 	if num == 0 {
-		if call != nil {
-			call(nil)
-		}
 		return nil // 没啥可更新的
 	}
 	sqlStr.WriteString(" WHERE ")
@@ -773,27 +745,13 @@ func (c *Cache) jsonArrayToMySQL(ctx context.Context, cond TableConds, add, del 
 			}
 		}
 		sqlStr.WriteString(v.field)
-		sqlStr.WriteString(v.op + "?")
-		args = append(args, v.value)
+		sqlStr.WriteString(v.op)
+		args = append(args, v.values...)
 	}
 
-	if c.toMysqlAsync {
-		utils.Submit(func() {
-			// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
-			_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
-			if call != nil {
-				call(err)
-			}
-		})
-		return nil
-	} else {
-		// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
-		_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
-		if call != nil {
-			call(err)
-		}
-		return err
-	}
+	// 不能判断返回影响的行数，如果更新的值相等，影响的行数也是0
+	_, err := c.mysql.Update(ctx, sqlStr.String(), args...)
+	return err
 }
 
 func (c *Cache) saveIgnoreTag(tag string) bool {
@@ -803,42 +761,59 @@ func (c *Cache) saveIgnoreTag(tag string) bool {
 	if utils.Contains(c.condFields, tag) {
 		return true // 忽略条件字段
 	}
-	if utils.Contains(c.keyFields, tag) {
-		return true // 忽略条件字段
-	}
 	return false
 }
 
-// params参数放到过期时间后面
-func (c *Cache) redisSetParam(param string, data map[string]interface{}) []interface{} {
-	redisParams := make([]interface{}, 0, 2+len(c.Tags)*3)
+// 适配rowGetScript的参数
+func (c *Cache) redisGetParam() []interface{} {
+	redisParams := make([]interface{}, 0, 1+len(c.Tags))
 	redisParams = append(redisParams, c.expire)
-	redisParams = append(redisParams, param)
+	redisParams = append(redisParams, c.RedisTagsInterface()...)
+	return redisParams
+}
+
+// 适配rowModifyScript的参数
+// numIncr 表示是否是数值类型是否使用增量
+func (c *Cache) redisModifyParam(data map[string]interface{}, numIncr bool, keyValuesStr string) []interface{} {
+	redisParams := make([]interface{}, 0, 3+len(data)*3)
+	redisParams = append(redisParams, c.expire)
+	redisParams = append(redisParams, utils.If(c.asyncToMysql, 1, 0))
+	redisParams = append(redisParams, keyValuesStr)
 	for tag, v := range data {
 		if c.saveIgnoreTag(tag) {
 			continue
 		}
-		redisParams = append(redisParams, c.GetRedisTagByTag(tag)) // 真实填充的是redistag
-		vfmt := goredis.ValueFmt(reflect.ValueOf(v))
-		if vfmt == nil {
-			redisParams = append(redisParams, "del") // 空数据 删除字段
-			redisParams = append(redisParams, nil)
-			continue
+		tagIndex := utils.IndexOf(c.Tags, tag)
+		redisParams = append(redisParams, c.RedisTags[tagIndex]) // 真实填充的是redistag
+		vfmt := goredis.ValueToRedisArg(reflect.ValueOf(v))
+		op := utils.If(vfmt == nil, "del", "set") // 空数据 删除字段
+		if numIncr {
+			// 数值类型增量操作，如果vfmt是nil，就只读取，不修改
+			switch c.Fields[tagIndex].Type.Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				fallthrough
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+				op = utils.If(vfmt == nil, "get", "incr")
+			case reflect.Float32, reflect.Float64:
+				op = utils.If(vfmt == nil, "get", "fincr")
+			}
 		}
-		redisParams = append(redisParams, "set")
+		redisParams = append(redisParams, op)
 		redisParams = append(redisParams, vfmt)
 	}
 	return redisParams
 }
 
-// params参数放到过期时间后面
-// tags 表示填充data时 按tags来填充
-func (c *Cache) redisSetGetParam(param string, tags []string, data map[string]interface{}, numIncr bool) []interface{} {
-	redisParams := make([]interface{}, 0, 2+len(c.Tags)*3)
+// 适配rowModifyGetScript的参数
+// tags 在data中不存在是只读取，存在是修改后读取
+// numIncr 表示是否是数值类型是否使用增量
+func (c *Cache) redisModifyGetParam(tags []string, data map[string]interface{}, numIncr bool) []interface{} {
+	redisParams := make([]interface{}, 0, 2+len(tags)*3)
 	redisParams = append(redisParams, c.expire)
-	redisParams = append(redisParams, param)
+	redisParams = append(redisParams, utils.If(c.asyncToMysql, 1, 0))
 	for _, tag := range tags {
-		redisParams = append(redisParams, c.GetRedisTagByTag(tag)) // 真实填充的是redistag
+		tagIndex := utils.IndexOf(c.Tags, tag)
+		redisParams = append(redisParams, c.RedisTags[tagIndex]) // 真实填充的是redistag
 		if c.saveIgnoreTag(tag) {
 			redisParams = append(redisParams, "get") // 忽略的字段 只读取
 			redisParams = append(redisParams, nil)
@@ -850,36 +825,37 @@ func (c *Cache) redisSetGetParam(param string, tags []string, data map[string]in
 			redisParams = append(redisParams, nil)
 			continue
 		}
-		vfmt := goredis.ValueFmt(reflect.ValueOf(v))
-		if vfmt == nil {
-			redisParams = append(redisParams, "del") // 空数据 删除字段
-			redisParams = append(redisParams, nil)
-			continue
-		}
+		vfmt := goredis.ValueToRedisArg(reflect.ValueOf(v))
+		op := utils.If(vfmt == nil, "del", "set") // 空数据 删除字段
 		if numIncr {
-			switch reflect.ValueOf(vfmt).Kind() {
+			// 数值类型增量操作，如果vfmt是nil，就只读取，不修改
+			switch c.Fields[tagIndex].Type.Kind() {
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 				fallthrough
 			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-				redisParams = append(redisParams, "incr") // 数值都是增量
+				op = utils.If(vfmt == nil, "get", "incr")
 			case reflect.Float32, reflect.Float64:
-				redisParams = append(redisParams, "fincr") // 数值都是增量
-			default:
-				redisParams = append(redisParams, "set") // 其他都是直接设置
+				op = utils.If(vfmt == nil, "get", "fincr")
 			}
-		} else {
-			redisParams = append(redisParams, "set")
 		}
+		redisParams = append(redisParams, op)
 		redisParams = append(redisParams, vfmt)
 	}
 	return redisParams
 }
 
-// params参数放到过期时间后面
-func (c *Cache) redisJsonArrayParam(param string, add, del map[string][]string, duplicate bool) ([]string, []string, []interface{}) {
-	redisParams := make([]interface{}, 0, 2+len(c.Tags)*3)
+// 适配rowJsonArrayModifyScript的参数
+func (c *Cache) redisJsonArrayParam(add, del map[string][]string, duplicate bool) ([]string, []string, []interface{}) {
+	num := 0
+	for _, values := range add {
+		num += 3 + len(values)
+	}
+	for _, values := range del {
+		num += 3 + len(values)
+	}
+	redisParams := make([]interface{}, 0, 3+num)
 	redisParams = append(redisParams, c.expire)
-	redisParams = append(redisParams, param)
+	redisParams = append(redisParams, utils.If(c.asyncToMysql, 1, 0))
 	redisParams = append(redisParams, utils.If(duplicate, 1, 0))
 	addFields := []string{}
 	delFields := []string{}

@@ -1,12 +1,14 @@
 package consul
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/yuwf/gobase/loader"
 	_ "github.com/yuwf/gobase/log"
+	"github.com/yuwf/gobase/utils"
 
 	"github.com/rs/zerolog/log"
 )
@@ -99,10 +101,10 @@ func BenchmarkWatcherServices(b *testing.B) {
 	if err != nil {
 		return
 	}
-	DefaultClient().WatchServices("test-tag", func(infos []*RegistryInfo) {
+	DefaultClient().WatchServices("test-tag", func(ctx context.Context, infos []*RegistryInfo) {
 		log.Info().Msg("service change")
 		for i, r := range infos {
-			log.Info().Interface("service", r).Msgf("infos %d", i)
+			utils.LogCtx(log.Info(), ctx).Interface("service", r).Msgf("infos %d", i)
 		}
 	})
 	select {}
@@ -113,13 +115,13 @@ func BenchmarkWatcherServices2(b *testing.B) {
 	if err != nil {
 		return
 	}
-	DefaultClient().WatchServices2("test-tag", func(addInfos, delInfos []*RegistryInfo) {
+	DefaultClient().WatchServices2("test-tag", func(ctx context.Context, addInfos, delInfos []*RegistryInfo) {
 		log.Info().Msg("service change")
 		for i, r := range addInfos {
-			log.Info().Interface("service", r).Msgf("addInfos %d", i)
+			utils.LogCtx(log.Info(), ctx).Interface("service", r).Msgf("addInfos %d", i)
 		}
 		for i, r := range delInfos {
-			log.Info().Interface("service", r).Msgf("delInfos %d", i)
+			utils.LogCtx(log.Info(), ctx).Interface("service", r).Msgf("delInfos %d", i)
 		}
 	})
 	select {}
@@ -130,10 +132,10 @@ func BenchmarkWatcherServiceServices(b *testing.B) {
 	if err != nil {
 		return
 	}
-	DefaultClient().WatchServiceServices("test-name", "test-tag", func(infos []*RegistryInfo) {
+	DefaultClient().WatchServiceServices("test-name", "test-tag", func(ctx context.Context, infos []*RegistryInfo) {
 		log.Info().Msg("service change")
 		for i, r := range infos {
-			log.Info().Interface("service", r).Msgf("infos %d", i)
+			utils.LogCtx(log.Info(), ctx).Interface("service", r).Msgf("infos %d", i)
 		}
 	})
 	select {}
@@ -144,13 +146,13 @@ func BenchmarkWatcherServiceServices2(b *testing.B) {
 	if err != nil {
 		return
 	}
-	DefaultClient().WatchServiceServices2("test-name", "test-tag", func(addInfos, delInfos []*RegistryInfo) {
+	DefaultClient().WatchServiceServices2("test-name", "test-tag", func(ctx context.Context, addInfos, delInfos []*RegistryInfo) {
 		log.Info().Msg("service change")
 		for i, r := range addInfos {
-			log.Info().Interface("service", r).Msgf("addInfos %d", i)
+			utils.LogCtx(log.Info(), ctx).Interface("service", r).Msgf("addInfos %d", i)
 		}
 		for i, r := range delInfos {
-			log.Info().Interface("service", r).Msgf("delInfos %d", i)
+			utils.LogCtx(log.Info(), ctx).Interface("service", r).Msgf("delInfos %d", i)
 		}
 	})
 	select {}

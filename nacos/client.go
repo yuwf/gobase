@@ -121,6 +121,10 @@ func (c *Client) LoadConfig(dataId, group string, loader loader.Loader) error {
 	if err != nil {
 		return err
 	}
+	// nacos上配置不存在时，返回空字符串，需要判断
+	if content == "" {
+		return errors.New("config empty or not exist")
+	}
 	err = loader.Load(utils.StringToBytes(content), c.GetConfigKey(dataId, group, c.clientConfig.NamespaceId))
 	if err != nil {
 		return err

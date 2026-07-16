@@ -5,6 +5,7 @@ package log
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -22,15 +23,6 @@ type filewrite struct {
 }
 
 var logwrite = &filewrite{}
-
-func init() {
-	logwrite.path = os.Getenv("LOG_PATH")
-	if len(logwrite.path) == 0 {
-		logwrite.path = "./"
-	} else if logwrite.path[len(logwrite.path)-1] != '/' {
-		logwrite.path += "/"
-	}
-}
 
 // 空锁
 type nulllock struct {
@@ -75,7 +67,20 @@ func (f *filewrite) close() {
 }
 
 func (f *filewrite) createFile() {
-	tmp, err := os.OpenFile(f.fileName(), os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
+	// 目录不存在先创建
+	absPath, err := filepath.Abs(f.fileName())
+	if err != nil {
+		fmt.Println("createFile err:", err)
+		return
+	}
+	dir := filepath.Dir(absPath)
+	err = os.MkdirAll(dir, 0755)
+	if err != nil {
+		fmt.Println("createFile err:", err)
+		return
+	}
+
+	tmp, err := os.OpenFile(absPath, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
 	if err == nil {
 		oldfile := f.file
 		if oldfile != nil {

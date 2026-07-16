@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yuwf/gobase/goredis"
 	"github.com/yuwf/gobase/utils"
 )
 
@@ -62,6 +61,15 @@ func (t *TableStruct) GetRedisTagByTag(tag string) interface{} {
 		}
 	}
 	return ""
+}
+
+func (t *TableStruct) GetTagIndexByRedisTag(tag string) int {
+	for i, f := range t.RedisTags {
+		if f == tag {
+			return i
+		}
+	}
+	return -1
 }
 
 func (t *TableStruct) IsBaseType(tp reflect.Type) bool {
@@ -152,27 +160,56 @@ func (t *TableStruct) int64Value(fieldValue interface{}) int64 {
 
 // 为了使Map有序和更好的接受返回值，该modify相关的函数设定的结构
 type ModifyData struct {
-	data   map[string]interface{} // 原始值
-	tags   []string               // key field 要修改的tag
-	values []interface{}          // 写入的值   要修改的值
-	rsts   []reflect.Value        // 用于接受返回的值，创建的方式不一，写了多个构造函数
+	st    *utils.StructType      // cache的结构信息
+	data  map[string]interface{} // 原始值
+	tags  []string               // 要修改的tag，和index一致，按c.Tags的顺序填充
+	index []int                  // tag在c.Tags中的索引
+
+	// 根据需要调用相关的Rst函数
+	rstTags   []string        // 用于接受返回的tag
+	rstIndex  []int           // tag在c.Tags中的索引
+	rstValues []reflect.Value // 用于接受返回的值
 }
 
-func (m *ModifyData) RstsFrom(src *utils.StructValue) {
+// tags是c.Tags的一部分，外层保证
+func (m *ModifyData) RstMake(tags []string) {
+	m.rstTags = tags
+	m.rstIndex = make([]int, len(tags))
+	m.rstValues = make([]reflect.Value, len(tags))
+	for i, tag := range tags {
+		at := utils.IndexOf(m.st.Tags, tag)
+		m.rstIndex[i] = at
+		m.rstValues[i] = reflect.New(m.st.Fields[at].Type).Elem()
+	}
+}
+
+// t的是c.T类型或者是其子集，外层保证
+func (m *ModifyData) RstMakeByT(t interface{}, st *utils.StructType) {
+	destInfo, _ := utils.GetStructInfoByStructType(t, st)
+	m.rstTags = destInfo.Tags
+	m.rstIndex = make([]int, len(destInfo.Tags))
+	m.rstValues = make([]reflect.Value, len(destInfo.Tags))
+	for i, tag := range destInfo.Tags {
+		m.rstIndex[i] = utils.IndexOf(m.st.Tags, tag)
+		m.rstValues[i] = destInfo.Elemts[i]
+	}
+}
+
+func (m *ModifyData) RstFill(src *utils.StructValue) {
 	for i, v := range src.Elemts {
-		if at := utils.IndexOf(m.tags, src.Tags[i]); at != -1 {
-			if !v.IsValid() || !v.CanInterface() {
-				continue
+		if at := utils.IndexOf(m.rstTags, src.Tags[i]); at != -1 {
+			if !m.rstValues[at].CanSet() {
+				continue // 理论上不应该
 			}
-			goredis.InterfaceToValue(v.Interface(), m.rsts[at])
+			m.rstValues[at].Set(v)
 		}
 	}
 }
 
-func (m *ModifyData) TagsRstsMap() map[string]interface{} {
-	result := make(map[string]interface{})
-	for i := 0; i < len(m.rsts); i++ {
-		result[m.tags[i]] = m.rsts[i].Interface()
+func (m *ModifyData) RstToMap() map[string]interface{} {
+	result := make(map[string]interface{}, len(m.rstTags))
+	for i := 0; i < len(m.rstTags); i++ {
+		result[m.rstTags[i]] = m.rstValues[i].Interface()
 	}
 	return result
 }
